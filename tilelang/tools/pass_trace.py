@@ -57,11 +57,19 @@ Toolbar buttons:
 """
 
 from __future__ import annotations
+import ast
 import os
 import dis
 import difflib
 import functools
-from dataclasses import dataclass
+import inspect
+from dataclasses import dataclass, field
+
+
+# Pass execution status
+STATUS_COMPLETED = "completed"
+STATUS_FAILED    = "failed"
+STATUS_SKIPPED   = "skipped"
 
 
 @dataclass
@@ -76,6 +84,8 @@ class PassRecord:
     changed: bool
     add_lines: int = 0
     del_lines: int = 0
+    status: str = STATUS_COMPLETED
+    error_msg: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +99,23 @@ _current_phase: str | None = None  # Active phase name during execution
 _pass_index: int = 0  # Auto-incrementing pass counter within a phase
 _phase_call_count: int = 0  # Tracks which phase is executing (1=first, 2=second, ...)
 _num_phases: int = 0  # Total number of phases discovered at patch time
+_current_pass_index: int = -1  # Index of the currently executing pass in _records
+_failed_pass_info: tuple | None = None  # (before_text, error_msg) when a pass fails
+_records_offset: int = 0  # Start index in _records for the current phase
+_auto_flush: bool = False  # When True, write HTML after each pass (survives segfaults)
+
+
+def _flush_html():
+    """Write the current HTML report incrementally.
+
+    Called after each successful pass when _auto_flush is True.  This ensures
+    the HTML report survives process-level crashes (e.g. SIGSEGV) that bypass
+    Python's exception handling.
+    """
+    if not _records or not _dump_dir:
+        return
+    html_path = os.path.join(_dump_dir, "ir_trace.html")
+    generate_html(_records, html_path)
 
 
 # ---------------------------------------------------------------------------
@@ -244,8 +271,13 @@ def _traced_pass_call(self, mod):
     Replaces tvm.ir.transform.Pass.__call__ at runtime.  When no phase
     context is active (normal compilation without dump), it simply
     delegates to the original __call__ with zero overhead.
+
+    When a phase has pre-registered pass records (via _wrap_phase), this
+    function updates the existing record in-place rather than appending.
+    If the pass throws, the record is marked as FAILED and the error is
+    captured for the HTML report.
     """
-    global _pass_index
+    global _pass_index, _current_pass_index, _failed_pass_info
 
     if not _current_phase or not _is_dump_enabled_for_phase(_current_phase):
         return _original_pass_call(self, mod)
@@ -253,7 +285,26 @@ def _traced_pass_call(self, mod):
     _ensure_dump_dir()
     before_text = str(mod)
 
-    result = _original_pass_call(self, mod)
+    # Track which record index this pass corresponds to (pre-registered)
+    _current_pass_index = _pass_index
+    _pass_index += 1
+    _failed_pass_info = None
+
+    # Actual index in _records (phase offset + pass index within phase)
+    _rec_idx = _records_offset + _current_pass_index
+
+    try:
+        result = _original_pass_call(self, mod)
+    except Exception as e:
+        # Pass failed — mark the pre-registered record
+        _failed_pass_info = (before_text, str(e))
+        if 0 <= _rec_idx < len(_records):
+            rec = _records[_rec_idx]
+            rec.status = STATUS_FAILED
+            rec.before_text = before_text
+            rec.error_msg = str(e)
+        _current_pass_index = -1
+        raise
 
     after_text = str(result)
     changed = before_text != after_text
@@ -272,23 +323,44 @@ def _traced_pass_call(self, mod):
                 add_count += j2 - j1
                 del_count += i2 - i1
 
-    record = PassRecord(
-        phase=_current_phase,
-        name=pass_name,
-        index=_pass_index,
-        before_text=before_text,
-        after_text=after_text,
-        changed=changed,
-        add_lines=add_count,
-        del_lines=del_count,
-    )
-    _records.append(record)
-    _pass_index += 1
+    # Update pre-registered record (from _wrap_phase) if it exists
+    if 0 <= _rec_idx < len(_records):
+        rec = _records[_rec_idx]
+        rec.before_text = before_text
+        rec.after_text = after_text
+        rec.changed = changed
+        rec.add_lines = add_count
+        rec.del_lines = del_count
+        rec.status = STATUS_COMPLETED
+        _save_raw_files(rec)
+        tag = "CHANGED" if changed else "NO-OP"
+        print(f"  [pass_trace] {_current_phase}/{rec.index:02d}_{rec.name}: {tag}")
+    else:
+        # Fallback: no pre-registration (shouldn't normally happen)
+        record = PassRecord(
+            phase=_current_phase,
+            name=pass_name,
+            index=_current_pass_index,
+            before_text=before_text,
+            after_text=after_text,
+            changed=changed,
+            add_lines=add_count,
+            del_lines=del_count,
+            status=STATUS_COMPLETED,
+        )
+        _records.append(record)
+        _save_raw_files(record)
+        tag = "CHANGED" if changed else "NO-OP"
+        print(f"  [pass_trace] {_current_phase}/{record.index:02d}_{pass_name}: {tag}")
 
-    _save_raw_files(record)
+    _current_pass_index = -1  # Completed, no longer "in-flight"
 
-    tag = "CHANGED" if changed else "NO-OP"
-    print(f"  [pass_trace] {_current_phase}/{record.index:02d}_{pass_name}: {tag}")
+    # Incremental flush: write HTML after each pass so it survives segfaults
+    if _auto_flush:
+        try:
+            _flush_html()
+        except Exception:
+            pass  # Best-effort; don't let HTML errors break compilation
 
     return result
 
@@ -302,14 +374,19 @@ def _wrap_phase(original_func, phase_index, total_phases):
     - phase_index: 1-based position among all phases (1=first, 2=second, ...)
     - total_phases: total number of phases in the compilation pipeline
 
-    Does NOT modify the pass list — the original phase function runs
-    unchanged.  Per-pass capture is handled by _traced_pass_call.
+    Before execution, discovers all pass names via AST parsing and pre-registers
+    them as 'skipped'.  As each pass completes, _traced_pass_call updates the
+    record to 'completed'.  If a pass throws, the record is marked 'failed' and
+    remaining passes stay 'skipped'.  HTML report is generated regardless.
     """
     phase_name = f"phase{phase_index}_{original_func.__name__}"
 
+    # Discover passes via AST (done once at wrap time, not per-call)
+    pass_names = _discover_passes(original_func)
+
     @functools.wraps(original_func)
     def wrapper(*args, **kwargs):
-        global _current_phase, _pass_index, _phase_call_count
+        global _current_phase, _pass_index, _phase_call_count, _current_pass_index, _failed_pass_info, _records_offset, _auto_flush
 
         _phase_call_count += 1
 
@@ -319,9 +396,52 @@ def _wrap_phase(original_func, phase_index, total_phases):
 
         _current_phase = phase_name
         _pass_index = 0
+        _current_pass_index = -1
+        _failed_pass_info = None
 
-        result = original_func(*args, **kwargs)
+        should_dump = _is_dump_enabled_for_phase(phase_name)
 
+        # Record where this phase's records start in _records
+        _records_offset = len(_records)
+
+        # Pre-register all discovered passes as "skipped"
+        if should_dump and pass_names:
+            _ensure_dump_dir()
+            for i, name in enumerate(pass_names):
+                _records.append(PassRecord(
+                    phase=phase_name,
+                    name=name,
+                    index=i,
+                    before_text="",
+                    after_text="",
+                    changed=False,
+                    status=STATUS_SKIPPED,
+                ))
+
+        # Enable auto-flush: write HTML after each pass to survive segfaults
+        _auto_flush = should_dump
+
+        try:
+            result = original_func(*args, **kwargs)
+        except Exception as e:
+            _auto_flush = False
+            _current_phase = None
+            print(f"  [pass_trace] EXCEPTION in {phase_name}: {e}")
+
+            # Generate HTML even on failure (pass08=failed, pass09+=skipped)
+            if _records and _dump_dir:
+                try:
+                    html_path = os.path.join(_dump_dir, "ir_trace.html")
+                    generate_html(_records, html_path)
+                    print(f"  [pass_trace] HTML report (with failures) written to: {html_path}")
+                except Exception as html_err:
+                    print(f"  [pass_trace] WARNING: failed to generate HTML report: {html_err}")
+                    import traceback
+                    traceback.print_exc()
+
+            raise
+
+        _auto_flush = False
         _current_phase = None
 
         # Last phase: generate HTML report
@@ -405,10 +525,33 @@ body {
     margin-right: 8px;
     font-weight: 600;
     font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: 2px solid transparent;
+    user-select: none;
+}
+.summary-bar .badge:hover { filter: brightness(0.92); }
+.summary-bar .badge.active { border-color: #1e293b; box-shadow: 0 0 0 1px #1e293b; }
+.summary-bar .badge.dimmed { opacity: 0.35; }
 }
 .badge-total   { background: #e2e8f0; color: #475569; }
 .badge-changed { background: #dcfce7; color: #166534; }
 .badge-noop    { background: #f1f5f9; color: #94a3b8; }
+.badge-failed  {
+    background: #dc2626; color: #fff;
+    font-weight: 700; font-size: 12px;
+    padding: 3px 12px;
+    animation: badgePulse 1.5s ease-in-out infinite;
+}
+.badge-skipped {
+    background: #f59e0b; color: #fff;
+    font-weight: 700; font-size: 12px;
+    padding: 3px 12px;
+}
+@keyframes badgePulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
+    50% { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0); }
+}
 
 /* ---- Main layout ---- */
 .main {
@@ -521,12 +664,13 @@ body {
     cursor: pointer;
     color: #334155;
     text-decoration: none;
-    transition: background 0.1s;
+    transition: background 0.1s, opacity 0.15s;
     gap: 7px;
     font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
 }
 .pass-link:hover { background: #f1f5f9; }
 .pass-link.active { background: #eff6ff; color: #2563eb; }
+.pass-link.filtered-out { display: none; }
 
 .pass-dot {
     width: 8px;
@@ -536,6 +680,21 @@ body {
 }
 .pass-dot.changed { background: #22c55e; }
 .pass-dot.noop    { background: #d1d5db; }
+.pass-dot.failed {
+    background: #dc2626;
+    width: 10px; height: 10px;
+    box-shadow: 0 0 0 2px #fecaca, 0 0 6px rgba(220,38,38,0.5);
+    animation: dotPulse 1.5s ease-in-out infinite;
+}
+.pass-dot.skipped {
+    background: transparent;
+    border: 2px solid #f59e0b;
+    width: 10px; height: 10px;
+}
+@keyframes dotPulse {
+    0%, 100% { box-shadow: 0 0 0 2px #fecaca, 0 0 6px rgba(220,38,38,0.5); }
+    50% { box-shadow: 0 0 0 4px #fecaca, 0 0 10px rgba(220,38,38,0.3); }
+}
 
 .pass-label {
     overflow: hidden;
@@ -577,6 +736,15 @@ body {
     margin-bottom: 16px;
 }
 .pass-section.active { display: block; }
+.pass-section.failed-section {
+    border-left: 4px solid #dc2626;
+    background: #fffbfb;
+}
+.pass-section.skipped-section {
+    border-left: 4px solid #f59e0b;
+    background: #fffdf5;
+    opacity: 0.85;
+}
 
 .pass-section.collapsed > *:not(.pass-header) { display: none; }
 
@@ -618,6 +786,39 @@ body {
 }
 .status-changed { background: #dcfce7; color: #166534; }
 .status-noop    { background: #f1f5f9; color: #94a3b8; }
+.status-failed {
+    background: #dc2626; color: #fff;
+    font-size: 12px; padding: 3px 14px;
+    border-radius: 10px;
+    animation: badgePulse 1.5s ease-in-out infinite;
+}
+.status-skipped {
+    background: #f59e0b; color: #fff;
+    font-size: 12px; padding: 3px 14px;
+    border-radius: 10px;
+}
+
+.error-box {
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-left: 4px solid #ef4444;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 14px;
+    font-size: 13px;
+    color: #991b1b;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    line-height: 1.5;
+    word-break: break-word;
+}
+.error-box .error-label {
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+    color: #dc2626;
+}
 
 .noop-msg {
     color: #94a3b8;
@@ -902,6 +1103,61 @@ body {
 """
 
 _JS = """
+/* ---- Badge filter state ---- */
+var _activeFilter = null;  // null = show all, or 'changed'/'noop'/'failed'/'skipped'
+
+function filterByBadge(badgeEl) {
+    var filter = badgeEl.getAttribute('data-filter');
+    var bar = badgeEl.closest('.summary-bar');
+    var allBadges = bar.querySelectorAll('.badge');
+
+    // Toggle: clicking same filter again clears it
+    if (_activeFilter === filter || filter === 'all') {
+        _activeFilter = null;
+    } else {
+        _activeFilter = filter;
+    }
+
+    // Update badge visual states
+    allBadges.forEach(function(b) {
+        b.classList.remove('active', 'dimmed');
+        if (_activeFilter) {
+            if (b.getAttribute('data-filter') === _activeFilter) {
+                b.classList.add('active');
+            } else if (b.getAttribute('data-filter') !== 'all') {
+                b.classList.add('dimmed');
+            }
+        }
+    });
+
+    // Find the visible sidebar (the one for the active phase tab)
+    var sidebar = document.querySelector('.sidebar:not([style*="display: none"])');
+    if (!sidebar) sidebar = document.querySelector('.sidebar');
+    if (!sidebar) return;
+
+    var links = sidebar.querySelectorAll('.pass-link');
+    var firstVisible = null;
+
+    links.forEach(function(link) {
+        var status = link.getAttribute('data-status');
+        if (!_activeFilter || status === _activeFilter) {
+            link.classList.remove('filtered-out');
+            if (!firstVisible) firstVisible = link;
+        } else {
+            link.classList.add('filtered-out');
+        }
+    });
+
+    // Auto-select the first visible pass if current selection is hidden
+    if (firstVisible) {
+        var activeLink = sidebar.querySelector('.pass-link.active');
+        if (!activeLink || activeLink.classList.contains('filtered-out')) {
+            var sid = firstVisible.getAttribute('data-target');
+            showPass(firstVisible, sid);
+        }
+    }
+}
+
 /* ---- P4: Alignment mode global state ---- */
 var _alignMode = null;      // null | 'left' | 'right'
 var _pendingLeft = null;    // left td element selected
@@ -1667,25 +1923,47 @@ def generate_html(records: list[PassRecord], output_path: str):
         pretty_phase = phase_name.replace("_", " ").replace("phase1", "Phase 1:").replace("phase2", "Phase 2:")
 
         n_total = len(phase_records)
+        n_completed = sum(1 for r in phase_records if r.status == STATUS_COMPLETED)
         n_changed = sum(1 for r in phase_records if r.changed)
-        n_noop = n_total - n_changed
+        n_failed = sum(1 for r in phase_records if r.status == STATUS_FAILED)
+        n_skipped = sum(1 for r in phase_records if r.status == STATUS_SKIPPED)
+        n_noop = n_completed - n_changed
 
         # Tab
         phase_tabs_html.append(f'<div class="phase-tab{active_cls}" onclick="showPhase(this, \'{phase_name}\')">{pretty_phase}</div>')
 
         # Summary bar
+        failed_badge = ""
+        skipped_badge = ""
+        if n_failed:
+            failed_badge = f'<span class="badge badge-failed" data-filter="failed" onclick="filterByBadge(this)">✘ {n_failed} failed</span>'
+        if n_skipped:
+            skipped_badge = f'<span class="badge badge-skipped" data-filter="skipped" onclick="filterByBadge(this)">— {n_skipped} skipped</span>'
         summaries_html.append(
             f'<div class="summary-bar" id="sm-{phase_name}"{active_style}>'
-            f'<span class="badge badge-total">{n_total} passes</span>'
-            f'<span class="badge badge-changed">{n_changed} changed</span>'
-            f'<span class="badge badge-noop">{n_noop} no-op</span>'
+            f'<span class="badge badge-total" data-filter="all" onclick="filterByBadge(this)">{n_total} passes</span>'
+            f'<span class="badge badge-changed" data-filter="changed" onclick="filterByBadge(this)">{n_changed} changed</span>'
+            f'<span class="badge badge-noop" data-filter="noop" onclick="filterByBadge(this)">{n_noop} no-op</span>'
+            f"{failed_badge}"
+            f"{skipped_badge}"
             f"</div>"
         )
 
         # Sidebar
         links = []
         for rec in phase_records:
-            dot_cls = "changed" if rec.changed else "noop"
+            if rec.status == STATUS_FAILED:
+                dot_cls = "failed"
+                status_attr = "failed"
+            elif rec.status == STATUS_SKIPPED:
+                dot_cls = "skipped"
+                status_attr = "skipped"
+            elif rec.changed:
+                dot_cls = "changed"
+                status_attr = "changed"
+            else:
+                dot_cls = "noop"
+                status_attr = "noop"
             sid = f"sec-{rec.phase}-{rec.index}"
             stats_html = ""
             if rec.changed:
@@ -1695,8 +1973,13 @@ def generate_html(records: list[PassRecord], output_path: str):
                     f'<span class="st-del">−{rec.del_lines}</span>'
                     f"</span>"
                 )
+            elif rec.status == STATUS_FAILED:
+                stats_html = '<span class="pass-stats"><span class="st-del">ERROR</span></span>'
+            elif rec.status == STATUS_SKIPPED:
+                stats_html = '<span class="pass-stats" style="color:#94a3b8">—</span>'
             links.append(
                 f'<a class="pass-link" data-phase="{rec.phase}" data-target="{sid}" '
+                f'data-status="{status_attr}" '
                 f"onclick=\"showPass(this, '{sid}')\">"
                 f'<span class="pass-idx">{rec.index:02d}</span>'
                 f'<span class="pass-dot {dot_cls}"></span>'
@@ -1714,7 +1997,56 @@ def generate_html(records: list[PassRecord], output_path: str):
         for rec in phase_records:
             sid = f"sec-{rec.phase}-{rec.index}"
 
-            if rec.changed:
+            if rec.status == STATUS_FAILED:
+                # Failed pass: show error message + before IR (if available)
+                error_html = (
+                    f'<div class="error-box">'
+                    f'<div class="error-label">Exception</div>'
+                    f'{_esc(rec.error_msg)}'
+                    f'</div>'
+                )
+                if rec.before_text:
+                    _ir_lines = rec.before_text.splitlines()
+                    _ln_width = len(str(len(_ir_lines)))
+                    _ir_with_ln = "".join(
+                        f'<span class="ir-line"><span class="ir-ln" onclick="toggleIrLine(this)">{str(i + 1).rjust(_ln_width)}</span>{_esc(line)}</span>'
+                        for i, line in enumerate(_ir_lines)
+                    )
+                    before_content = (
+                        '<p class="noop-msg">IR before this pass (execution failed):</p>'
+                        '<button class="ir-toggle" onclick="toggleIr(this)">&#9654; Show before IR</button>'
+                        f'<div class="ir-block"><pre>{_ir_with_ln}</pre></div>'
+                    )
+                else:
+                    before_content = ""
+                status_html = '<span class="status status-failed">✘ FAILED</span>'
+                _safe_before = rec.before_text.replace("</script>", r"<\/script>") if rec.before_text else ""
+                sections_html.append(
+                    f'<div class="pass-section failed-section" id="{sid}">'
+                    f'<div class="pass-header">'
+                    f"<h2>{rec.index:02d}. {rec.name}</h2>"
+                    f"{status_html}"
+                    f"</div>"
+                    f"{error_html}"
+                    f"{before_content}"
+                    f'<script type="text/plain" class="ir-data-before">{_safe_before}</script>'
+                    f"</div>"
+                )
+
+            elif rec.status == STATUS_SKIPPED:
+                # Skipped pass: show placeholder
+                status_html = '<span class="status status-skipped">— SKIPPED</span>'
+                sections_html.append(
+                    f'<div class="pass-section skipped-section" id="{sid}">'
+                    f'<div class="pass-header">'
+                    f"<h2>{rec.index:02d}. {rec.name}</h2>"
+                    f"{status_html}"
+                    f"</div>"
+                    f'<p class="noop-msg">This pass did not run (a previous pass failed).</p>'
+                    f"</div>"
+                )
+
+            elif rec.changed:
                 # Generate GitHub-style side-by-side diff table with
                 # collapsible context lines + expand toolbar
                 diff_html = _make_diff_html(rec.before_text, rec.after_text, context=3)
@@ -2013,6 +2345,61 @@ def _discover_phases(lower_mod, lower_func):
     return phases
 
 
+def _discover_passes(phase_func) -> list[str]:
+    """Extract pass names from a phase function's source code via AST parsing.
+
+    Looks for patterns like ``mod = xxx.transform.PassName(...)(mod)`` and
+    extracts ``PassName`` in source order.  This enables pre-registering
+    all passes as 'skipped' before execution, so the HTML report can show
+    failed/skipped passes even when the phase crashes mid-way.
+
+    Returns a list of pass display names (e.g. ``["Simplify", "InjectTmpBuffer"]``).
+    """
+    try:
+        source = inspect.getsource(phase_func)
+    except (OSError, TypeError):
+        return []
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    passes = []
+
+    class _PassVisitor(ast.NodeVisitor):
+        """Walk the AST and collect pass constructor names.
+
+        Matches call patterns like ``tilelang.transform.SomePass(...)`` or
+        ``tir.transform.Simplify(...)`` — i.e. any attribute chain that
+        contains a ``transform`` segment.  The final attribute is the pass name.
+        """
+
+        def visit_Call(self, node):
+            func = node.func
+            # Pattern: Attribute(value=..., attr=PassName)
+            # where value chain contains a 'transform' segment
+            if isinstance(func, ast.Attribute):
+                names = []
+                cur = func
+                while isinstance(cur, ast.Attribute):
+                    names.append(cur.attr)
+                    cur = cur.value
+                if isinstance(cur, ast.Name):
+                    names.append(cur.id)
+                names.reverse()
+                if "transform" in names and len(names) > names.index("transform") + 1:
+                    pass_name = names[names.index("transform") + 1]
+                    # Pass classes are CamelCase (start with uppercase);
+                    # filter out helpers like get_pass_context
+                    if pass_name and pass_name[0].isupper():
+                        passes.append(pass_name)
+            self.generic_visit(node)
+
+    _PassVisitor().visit(tree)
+    return passes
+
+
 def patch():
     """Activate IR pass tracing via monkey-patching.
 
@@ -2057,8 +2444,12 @@ def reset():
     Note: does NOT reset _phase_call_count — that tracks compilation boundaries
     and is managed by the phase wrappers.
     """
-    global _records, _dump_dir, _current_phase, _pass_index
+    global _records, _dump_dir, _current_phase, _pass_index, _current_pass_index, _failed_pass_info, _records_offset, _auto_flush
     _records = []
     _dump_dir = None
     _current_phase = None
     _pass_index = 0
+    _current_pass_index = -1
+    _failed_pass_info = None
+    _records_offset = 0
+    _auto_flush = False
