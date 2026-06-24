@@ -110,3 +110,11 @@ from .transform import PassConfigKey  # noqa: F401
 from .engine import lower, register_cuda_postproc, register_hip_postproc  # noqa: F401
 
 from .math import *  # noqa: F403
+
+import os as _os
+
+if _os.environ.get("TILELANG_LOWER_TRACE", "") not in ("", "0", "off", "false"):
+    from .tools.lower_trace import patch as _lower_trace_patch
+
+    _lower_trace_patch()
+del _os
