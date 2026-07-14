@@ -79,6 +79,7 @@ private:
     std::string pipeline;
     std::string operation;
     std::set<std::string> pipe_barriers;
+    std::set<std::string> event_pairs;
     int64_t physical_address;
     bool is_back_edge = false;
   };
@@ -597,7 +598,12 @@ private:
     std::string event_type =
         GetEventType(prev_access.pipeline, curr_access.pipeline);
     if (!event_type.empty()) {
-      return "EventPair_" + event_type;
+      std::string event_sync = "EventPair_" + event_type;
+      if (prev_access.event_pairs.find(event_sync) !=
+          prev_access.event_pairs.end()) {
+        return "";
+      }
+      return event_sync;
     }
     return "";
   }
@@ -835,6 +841,16 @@ private:
                 std::string pipeline = sync_type.substr(12);
                 if (access.pipeline == pipeline) {
                   access.pipe_barriers.insert(sync_type);
+                }
+              } else if (sync_type.find("EventPair_") == 0) {
+                std::string event_type = sync_type.substr(10);
+                size_t pos = event_type.find('_');
+                if (pos != std::string::npos) {
+                  std::string src_pipeline =
+                      "PIPE_" + event_type.substr(0, pos);
+                  if (access.pipeline == src_pipeline) {
+                    access.event_pairs.insert(sync_type);
+                  }
                 }
               }
             }
