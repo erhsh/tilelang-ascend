@@ -237,8 +237,6 @@ private:
     if (op->else_case.defined()) {
       else_case = VisitStmt(op->else_case.value());
     }
-    auto else_history = current_access_history_;
-    auto else_write_history = current_write_history_;
 
     current_access_history_ = saved_history;
     current_write_history_ = saved_write_history;
@@ -248,43 +246,12 @@ private:
     for (const auto &kv : then_write_history) {
       current_write_history_[kv.first] = kv.second;
     }
-    if (op->else_case.defined()) {
-      for (const auto &kv : else_history) {
-        current_access_history_[kv.first] = kv.second;
-      }
-      for (const auto &kv : else_write_history) {
-        current_write_history_[kv.first] = kv.second;
-      }
-    }
-
-    if (!is_revisit_pass_ && op->else_case.defined()) {
-      bool has_conflict = false;
-      for (const auto &kv : then_history) {
-        auto it = else_history.find(kv.first);
-        if (it != else_history.end() &&
-            it->second.pipeline != kv.second.pipeline) {
-          has_conflict = true;
-          break;
-        }
-      }
-      if (has_conflict) {
-        std::vector<Stmt> stmts;
-        stmts.push_back(IfThenElse(op->condition, then_case, else_case));
-        InsertSynchronization("PipeBarrier_ALL", stmts);
-        current_access_history_.clear();
-        current_write_history_.clear();
-        return SeqStmt(stmts);
-      }
-    }
-
     return IfThenElse(op->condition, then_case, else_case);
   }
 
   Stmt VisitStmt_(const ForNode *op) override {
     if (is_revisit_pass_) {
-      Stmt new_body = VisitStmt(op->body);
-      return For(op->loop_var, op->min, op->extent, op->kind, new_body,
-                 op->thread_binding, op->annotations);
+      return GetRef<Stmt>(op);
     }
 
     auto saved_history = current_access_history_;

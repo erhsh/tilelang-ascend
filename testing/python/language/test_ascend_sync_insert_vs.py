@@ -24,18 +24,17 @@ Covers:
     15. Loop back-edge S->V cross-iteration
     16. If/else history isolation (different buffers per branch)
     17. If/else same buffer same pipeline (no PipeBarrier_ALL)
-    18. If/else cross-branch conflict (different pipelines -> PipeBarrier_ALL)
-    19. Dedup multiple V deps in single statement
-    20. Consecutive V->V across statements (each needs own barrier)
-    21. Event-pair dedup (multiple S->V deps in single statement)
-    22. Mixed dedup (barrier + event in one statement)
-    23. Event ID rotation (1..7 round-robin)
-    24. Event ID wraparound (mod 8, IDs reused)
-    25. Set/Wait flag ID pairing
-    26. Alias detection via physical address overlap
-    27. V->S EventPair (scalar read from V-written UB)
-    28. MTE2->S EventPair (scalar read from MTE2-written UB)
-    29. MTE3->S EventPair (scalar read from MTE3-read UB)
+    18. Dedup multiple V deps in single statement
+    19. Consecutive V->V across statements (each needs own barrier)
+    20. Event-pair dedup (multiple S->V deps in single statement)
+    21. Mixed dedup (barrier + event in one statement)
+    22. Event ID rotation (1..7 round-robin)
+    23. Event ID wraparound (mod 8, IDs reused)
+    24. Set/Wait flag ID pairing
+    25. Alias detection via physical address overlap
+    26. V->S EventPair (scalar read from V-written UB)
+    27. MTE2->S EventPair (scalar read from MTE2-written UB)
+    28. MTE3->S EventPair (scalar read from MTE3-read UB)
 
   L2 - Anomaly tests:
     1. Read-only no sync
@@ -829,35 +828,6 @@ def test_if_else_same_buffer_same_pipeline(target):
 
     _assert_has_sync(src, target, "barrier_v")
     _assert_no_sync(src, target, "barrier_all")
-
-
-@TARGETS_WITH_PTO
-def test_if_else_cross_branch_barrier_all(target):
-    """If/else with same buffer, V in then vs MTE2 in else -> PipeBarrier_ALL.
-
-    When both branches access the same buffer but with different pipelines,
-    the pass inserts PipeBarrier_ALL after the if/else and clears history.
-    """
-
-    @T.prim_func
-    def main(
-        A: T.Tensor((2, 64), "float32"),  # type: ignore
-        B: T.Tensor((64,), "float32"),  # type: ignore
-        sel: T.Tensor((1,), "int32"),  # type: ignore
-    ):
-        with T.Kernel(1, is_npu=True) as (cid, vid):
-            a_ub = T.alloc_ub((64,), "float32")
-            s = sel[0]
-            if s > 0:
-                T.copy(A[0, :], a_ub)
-                T.tile.exp(a_ub, a_ub)
-            else:
-                T.copy(A[1, :], a_ub)
-            T.copy(a_ub, B[:])
-
-    src, _ = _compile_and_get_source(main, PASS_VS_ONLY, target=target, out_idx=[1])
-
-    _assert_has_sync(src, target, "barrier_all")
 
 
 @TARGETS_WITH_PTO
