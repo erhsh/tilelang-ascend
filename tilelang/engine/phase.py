@@ -47,6 +47,7 @@ def allow_vectorize(pass_ctx: PassContext | None = None) -> bool:
 
 
 def LowerAndLegalize(mod: IRModule, target: Target) -> IRModule:
+    mod = tilelang.transform.AscendValidateScheduleHints()(mod)
     # Workspace sizing must see the same UB scopes as VidReduction.
     mod = tilelang.transform.AscendInferBufferScope()(mod)
     # allocate the tmp buffer for vector api
@@ -98,6 +99,7 @@ def OptimizeForTarget(mod: IRModule, target: Target, platform: str) -> IRModule:
     from tilelang.utils.target import check_npu_availability
 
     pass_ctx = tilelang.transform.get_pass_context()
+    mod = tilelang.transform.AscendLowerScheduleHints(target, platform)(mod)
     managed_vector_mask = target.model in {"ascendc", "auto"} and platform in {"A2", "A3"}
     mod = tir.transform.PlanAndUpdateBufferAllocationLocation()(mod)
     mod = tilelang.transform.CrossCorePipeline()(mod)

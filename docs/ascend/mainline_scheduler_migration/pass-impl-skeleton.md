@@ -44,3 +44,26 @@ S3 循环接口、S4 planner 接管及后续同步生成仍不在本步实施。
 `s2_check_task_ir.py`、`s2_check_capabilities.py`，复用既有薄 runner。
 本轮同时交付永久测试，覆盖独立 verifier 拒绝损坏解、受控错误状态、分析只读性、
 能力边界和 legacy 隔离。完成后更新迁移记录，单独提交推送 S2 并等待审核。
+
+## S3 实施骨架：循环接口与安全标记
+
+确认依据：用户已明确要求开始 S3，沿用迁移计划的单步交付、A3 验收和审核规则。
+
+- Parallel 保留 coalesced_width 逐维行为，只在外层增加新的非保留 metadata。
+  Pipelined 在既有参数后追加 annotations，保持 native 8/9 参数调用兼容。
+- Persistent 保留第 4 位置 group_size，追加 num_stages=0 与 annotations，native
+  4/6 参数兼容。非整除最后一维采用 padding 域与完整有效 tile guard；内部 wave/
+  index 算术提升 int64。positive stages 仅无 guard 的单个完整 wave 可透传，其余明确
+  要求使用 0，避免在 S5 前开启未验证的 wave 流水。
+- `schedule_hint.py` 使用旧 TVM attr builder，Task 只接受当前单调用 Vector 白名单，
+  Stage 只支持 0；未支持 cost、offset、多调用/控制流和旧 stage/order 混用明确拒绝。
+- `AscendValidateScheduleHints()` 位于 LowerAndLegalize 首部，防止非法嵌套先被
+  Parallel lowering 或简化抹掉；`AscendLowerScheduleHints(target, platform)` 位于
+  OptimizeForTarget 首部，在 planner 和 CombineCV 前消费已验证的单调用标记。
+  无 hint 时返回原 PrimFunc，不改变原有默认配置和后端行为。
+- late consumer 为 Task 保留祖先的 allocation/scope/loop/guard 环境，并复用
+  `AnalyzeAscendSchedule` 的审计规则，不因未标记区域的合法 GEMM/raw code 增加拒绝。
+  S2 分析实际消费 Task/Stage，保留显式任务 group 与 stage 0，而非忽略未知 Attr。
+- 验证覆盖旧调用/FFI、真实生成 IR 的域解释与 exact-once、绕过 builder 的非法标记，
+  以及已有 Persistent GEMM/Vector 控制方式下的 A3 数值与重复调用。统一重建匹配源码的
+  native 库后才正式运行；三个独立入口交付后更新计划、提交推送并等待审核，不进 S4。

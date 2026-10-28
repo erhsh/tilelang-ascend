@@ -49,6 +49,16 @@ def PipelinePlanning():
     return _ffi_api.PipelinePlanning()  # type: ignore
 
 
+def AscendValidateScheduleHints():
+    """Check Task/Stage structure before frontend legalization can erase it."""
+    return _ffi_api.AscendValidateScheduleHints()  # type: ignore
+
+
+def AscendLowerScheduleHints(target: tvm.target.Target, platform: str):
+    """Audit single-call A3 task effects, then consume serial stage-zero hints."""
+    return _ffi_api.AscendLowerScheduleHints(target, platform)  # type: ignore
+
+
 def AnalyzeAscendSchedule(func: tvm.tir.PrimFunc, platform: str = "A3") -> tvm.ir.Map:
     """Inspect audited lowered calls without changing IR or invoking a scheduler.
 

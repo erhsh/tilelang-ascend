@@ -6,7 +6,8 @@
 随后再迁移 owner/epoch、版本管理及新的同步协议。每个阶段独立验收。
 
 分阶段交付、验证脚本与人工审核见 [migration-plan.md](migration-plan.md)。
-未注明已实现的接口和 Pass 仍为设计提案；S1 审计见第 11 节，S2 合同与交付见第 12 节。
+未注明已实现的接口和 Pass 仍为设计提案；S1 审计见第 11 节，S2 合同见第 12 节，
+S3 的循环与标记实现边界见第 13 节。
 
 用户已明确当前及后续只要求 A3 测试和验收。本文的 A2/A3 目标范围保留既有后端
 兼容性，不要求新增 A2 专属测试，也不把 A2 历史未运行当作步骤验收缺口。
@@ -712,3 +713,70 @@ S1 runner 的退出码、JUnit/JSON、缺依赖与超时约定，S2 报告显式
 原生入口在新 C++ 重建完成后核对源码身份和实际库加载路径。缺依赖、未知结果、
 受控超时、损坏候选解和未执行必跑用例均不能冒充 PASS。
 本步没有新的 NPU 执行路径，S2 结果不得被描述为新调度器的 A3 设备验收。
+
+## 13. S3：兼容循环接口与受限 Task/Stage
+
+### 13.1 参数与注解合同
+
+`Parallel(*extents, coalesced_width=None, annotations=None)` 保留既有逐维
+coalesced_width，只把新增 metadata 放在最外层。map 与参数给出相同 width 可用，
+冲突时拒绝。`Pipelined` 的八个既有参数不变，在末尾追加 keyword-only annotations；
+native 注册接受旧 8 参数与新 9 参数。原有 stage/order/sync/group/cross_interval
+的生成方式、num_stages=0 和原有负值的禁用行为不变。
+
+`Persistent(domain, wave_size, index, group_size=8, num_stages=0, *, annotations=None)`
+保持第四位置参数的意义，native 接受旧 4 参数和新 6 参数。所有 annotations 均复制后
+合并，不修改调用者 map。Python 和 native 都拒绝保留字段注入：canonical pipeline
+控制（tl_pipeline_order/stage/sync/group、tl_cross_interval）、software_pipeline_*、
+Task/Stage、enable_offset，以及当前
+不支持的 parallel_loop_layout；普通 metadata 不获得额外调度语义。
+
+### 13.2 Persistent 的实际调度域
+
+末维非整除 group_size 时先 padding 调度域，再同时检查还原后的有效坐标与末尾
+partial wave。guard 不只保护最后一个 wave，还排除中间 group 的 padding 空洞。
+保留静态正参数、index 范围和 partial-single-wave 的已有保护；负 num_stages 拒绝。
+
+domain 乘积、group/worker/wave 运算先提升至 int64，ceildiv 使用商加非零余数，
+避免先做加法溢出；对外坐标显式转回原 domain dtype。静态超出 int64 的乘积、
+最终索引及 uint64 域明确拒绝。符号值的正数、运行时 index 范围及 int64 可表示性
+仍由调用者保证，不声称支持动态零域或任意大整数。
+
+正 num_stages 仅接受可证明恰好一个完整 wave、末维 group 整除、无需 guard 的
+情况。partial、非整除、多 wave 或无法证明上述条件的符号输入明确要求先使用 0；带 guard 的
+wave 流水及跨迭代多版本继续归 S5。单个完整 wave 的注解和设备测试不证明这些能力。
+
+域测试解释 Simplify 后实际生成的 For/If/Let/BufferStore，而非重算一遍调度公式；
+逐个 core 检查全部有效 tile 恰好一次、无越界。静态大域 `[65536, 65536]` 单独检查
+生成 IR 的位宽、extent 和首尾坐标，避免枚举数十亿个 tile。
+
+### 13.3 标记的前端、验证和消费
+
+`Task(latency=None, ii=None)` 与 `Stage(0)` 使用当前 TVM attr builder。非空 cost
+override、非零 Stage、bool stage 和 PerCoreTask 尚未开放；公开循环接口拒绝
+enable_offset，Stage(0) 也不得与手造 IR 的该注解混用。
+Task 首片只包含一个 S2 白名单内的 f16/f32 Vector call：单行完整对齐 GM↔UB、
+managed fill 或 add。复合 helper、多个 call、内部循环/条件、嵌套 Task、Cube 和
+手写同步明确拒绝；祖先 guard 可保留。Stage 包住完整 Task，不能位于 Task/Parallel
+内部，也不能与旧 stage/order 数组或外层正 num_stages 混用。
+
+`AscendValidateScheduleHints()` 放在 LowerAndLegalize 首部，在简化和 Parallel
+lowering 前检查结构。它只对有标记的函数记录 pending 事实；后续改写即使删掉
+dead marker，仍必须经过后端门禁。`AscendLowerScheduleHints(target, platform)`
+放在 OptimizeForTarget 首部，仅在 A3 AscendC/auto 消费标记，然后清除 pending 事实。
+原本无标记且无 pending 的 PrimFunc 原样返回，不扩大 legacy 后端拒绝范围，
+不加载 solver。
+
+late consumer 为每个 Task 保留祖先 allocation、scope、loop、guard 和 Let 环境，
+排除未标记兄弟语句，再调用共用的 `AnalyzeAscendSchedule`；不复制第二套资源分类。
+未标记的合法 GEMM/raw 区域不会因此被审计拒绝。通过审计后擦除标记，继续使用旧
+planner、injector 与同步器。受支持 Vector fixture 的标记版和原版在 ascendc/auto
+生成完全相同的 kernel_source。显式 S2 分析则保留 explicit_task 和 stage=0 元数据，
+不含标记时保持原有记录 schema。
+
+### 13.4 验证入口
+
+交付 `s3_check_loop_ir.py`、`s3_check_persistent_domain.py` 和 `s3_run_loop_npu.py`。
+native 入口先校验源码 manifest 与实际库/Python 加载身份；设备入口复用 S1 的隔离
+worker、真实 Bisheng 编译计数、输出 sentinel 和逐次 golden。S1 用例集和验收控制
+保留，共享 runner 的抽取不改变其设备用例。实际结果与复现命令见迁移计划第 9 节。

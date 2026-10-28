@@ -582,7 +582,7 @@ def test_layout_annotation(M, N, K, block_M, block_N, block_K, a_layout, b_layou
 # =============================================================================
 def persistent_gemm(
     M, N, K, block_M, block_N, block_K, core_num, dtype="float16", accum_dtype="float",
-    launch_core_num=None,
+    launch_core_num=None, group_size=8, num_stages=0,
 ):
     """Persistent-scheduled GEMM (implicit L1 -> L0 copy via gemm_v0).
 
@@ -605,7 +605,10 @@ def persistent_gemm(
             C_L0 = T.alloc_L0C((block_M, block_N), accum_dtype)
 
             with T.Scope("C"):
-                for bx, by in T.Persistent([T.ceildiv(M, block_M), T.ceildiv(N, block_N)], core_num, cid):
+                for bx, by in T.Persistent(
+                    [T.ceildiv(M, block_M), T.ceildiv(N, block_N)], core_num, cid,
+                    group_size=group_size, num_stages=num_stages,
+                ):
                     loop_k = T.ceildiv(K, block_K)
                     for k in T.serial(loop_k):
                         T.copy(A[bx * block_M, k * block_K], A_L1)
@@ -620,16 +623,21 @@ def persistent_gemm(
 
 def run_test_persistent_gemm(
     M, N, K, block_M, block_N, block_K, core_num, dtype, accum_dtype, target,
-    repeat=1, seed=0, launch_core_num=None,
+    repeat=1, seed=0, launch_core_num=None, group_size=8, num_stages=0,
 ):
+    func = persistent_gemm(
+        M, N, K, block_M, block_N, block_K, core_num, dtype, accum_dtype,
+        launch_core_num=launch_core_num, group_size=group_size, num_stages=num_stages,
+    )
+    func = tilelang.compile(func, out_idx=[], pass_configs=CUBE_PASS_CONFIGS, target=target)
+    check_persistent_gemm(func, M, N, K, dtype, repeat=repeat, seed=seed)
+
+
+def check_persistent_gemm(func, M, N, K, dtype, repeat=1, seed=0):
+    """Reuse the numerical golden for static or positive symbolic launch bindings."""
     from ascend_repeat import repeat_launch
 
     torch.manual_seed(seed)
-    func = persistent_gemm(
-        M, N, K, block_M, block_N, block_K, core_num, dtype, accum_dtype,
-        launch_core_num=launch_core_num,
-    )
-    func = tilelang.compile(func, out_idx=[], pass_configs=CUBE_PASS_CONFIGS, target=target)
     td = _torch_dtype(dtype)
     a = torch.randn(M, K, dtype=td).npu()
     b = torch.randn(K, N, dtype=td).npu()

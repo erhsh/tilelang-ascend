@@ -55,15 +55,16 @@ Vector 指令选择、mask 合法化、Persistent 参数/partial-wave 保护及 
 | --- | --- | --- | --- | --- |
 | S0 | 迁移计划与技术参考入仓 | 文档已完成 | 文档静态检查通过 | 用户已确认，并明确授权 S1 |
 | S1 | fork 基线审计与前置合同 | 审计、局部修复及三个入口已交付 | 主机通过；历史 A2/A3 native 各 105 项通过；A3 14 项各 100 轮通过 | 用户已明确授权 S2；A2 不再阻塞验收 |
-| S2 | 能力、任务图与 solver 合同（M0） | 显式分析、能力模型、solver/verifier 和三个入口已交付 | solver 105、capability 42、native 171 及 runner 31 项通过；无新增设备执行路径 | 待用户审核 |
-| S3 | Parallel/Pipelined/Persistent 接口与安全性 | 未开始 | 未验证 | 未提交 |
+| S2 | 能力、任务图与 solver 合同（M0） | 显式分析、能力模型、solver/verifier 和三个入口已交付 | solver 105、capability 42、native 171 及 runner 31 项通过；无新增设备执行路径 | 用户已明确授权 S3 |
+| S3 | Parallel/Pipelined/Persistent 接口与安全性 | 循环接口、域保护、受限 Task/Stage 和三个入口已交付 | native 117 + 29、兼容回归 170、runner 44 项通过；A3 9 项、1000 次 launch/golden 通过 | 待用户审核 |
 | S4 | 单核约束规划与同步协议验证（M1） | 未开始 | 未验证 | 未提交 |
 | S5 | 跨迭代流水与多缓冲（M2） | 未开始 | 未验证 | 未提交 |
 | S6 | owner/epoch、别名与生命周期（M3） | 未开始 | 未验证 | 未提交 |
 | S7 | A2/A3 新同步生成器（M4） | 未开始 | 未验证 | 未提交 |
 | S8 | 完整自动调度与混合 C/V 接管（M5） | 未开始 | 未验证 | 未提交 |
 
-当前停止点：S2 已交付，提交推送后停止等待审核；S3 尚未获得执行授权。
+当前停止点：S3 实现与 A3 验证已完成，本步提交推送后停止等待审核。
+S4 尚未获得执行授权。
 实施状态与验证状态分列：“已实现”不等于“native/NPU 验收通过”。
 
 ## 4. 分步交付与验收
@@ -426,7 +427,7 @@ Git 历史，推送结果在最终交付报告列出。不创建 PR、不合并�
   首片严格区分受审计的可调度组、保守分析结果与未知 effects 的明确拒绝。
 - 新增独立 A3 capability profile，以及纯数字 straight/modulo solver 与不依赖 Z3
   的结果 verifier。整数协议不等于已生成正确的多版本、流水或同步代码；S3/S4 及
-  后续执行接管未开始。具体边界见技术参考第 12 节及实现骨架。
+  后续执行接管不属于 S2。具体边界见技术参考第 12 节及实现骨架。
 - Z3 只作为 `ascend-scheduler` 可选 extra；legacy 导入不探测 Z3。当前测试依赖安装
   在 `/tmp/ascend-migration-s2/venv`，未修改全局 Python 环境。
 
@@ -495,4 +496,85 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /tmp/ascend-migration-s2/venv/bin/python -m pyt
 clang-format 检查均通过；`git diff --check` 通过。格式记录为
 `format-report.json` / `format-report.md`，产物不入库。
 本步只提交推送 S2，提交详情查看分支 Git 历史，推送结果由最终报告列出；
-等待用户审核，不进入 S3。
+S2 交付后已收到用户明确的 S3 执行指令，按本计划继续单步实施。
+
+## 9. S3 实际交付与验证记录
+
+### 9.1 范围与有效决策
+
+- 实施起点为 S2 提交 `a56a4d13`，固定源码基线和主仓参考不变；按用户要求只做
+  A3 验收，不新增 A2 专属测试。保留旧循环调用和 native FFI 参数兼容。
+- Parallel/Pipelined/Persistent 增加 annotations，新增 metadata 只挂外层，保留
+  原有 coalesced_width 行为；Python/native 双层拒绝保留调度字段注入。
+- Persistent 支持末维非整除 group 的 padding 与有效 tile guard，内部索引算术
+  提升至 int64；静态溢出明确诊断，符号正值的运行时范围仍是调用者合同。
+- Persistent 的 num_stages 默认 0；正值只允许可证明无 guard 的单个完整 wave。
+  多 wave、partial、非整除或无法证明上述条件的符号输入拒绝正值；wave 流水仍归 S5。
+- Task 只允许一个 S2 已审计的 Vector call，Stage 只允许 0。早期检查结构、后期
+  复用 S2 分析审计并消费；不开放 cost override、多调用/内部条件/Cube/手写同步、
+  非零 Stage 或旧 stage/order 混用。不含标记的函数维持 legacy 路径。
+- 实现位置、精确边界和未来扩展见技术参考第 13 节及公开语言说明。
+
+### 9.2 独立入口与原生结果
+
+```bash
+source set_env.sh
+export TL_ASCEND_MIGRATION_BUILD_MANIFEST=/tmp/ascend-migration-s3/native-build.json
+
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s3_check_loop_ir.py --platform a3 --output /tmp/ascend-migration-s3/loop-ir.json
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s3_check_persistent_domain.py --platform a3 --output /tmp/ascend-migration-s3/domain.json
+python scripts/ascend_migration/s3_run_loop_npu.py --platform a3 --device 0 --seed 0 --repeat 100 --timeout 120 --output /tmp/ascend-migration-s3/s3-a3.json
+```
+
+manifest 必须由当前源码显式构建生成，不能复用 S2 manifest；创建方法沿用技术参考
+第 11.5 节。入口不自动安装依赖或编译库。当前 native 使用既有隔离 venv，设备使用
+原 Python 3.12.9、torch/torch_npu 2.12.0、CANN 9.1.0。
+
+| 检查 | 实际结果 | 证据（相对 `/tmp/ascend-migration-s3/`） |
+| --- | --- | --- |
+| 循环与 Task/Stage IR | PASS，117 项：循环 74、标记 43；0 fail/skip | `loop-ir.json` |
+| 实际 Persistent 域 | PASS，29 项：静态/符号正值、解释器故障注入及非法参数 | `domain.json` |
+| S1/S2 native 兼容回归 | PASS，170 项，0 fail/skip/遗漏必跑项 | `s2-regression-a3.json` |
+| runner 主机回归 | PASS，44 项：S1 20、S2 11、S3 13 | `runner-tests.xml` |
+| A3 NPU | PASS，9/9 项；9 次真实冷编译、1000 次 launch/golden，0 fail/skip | `s3-a3.json` |
+
+兼容回归比 S2 的 171 项少一项，是旧非整除 group 拒绝用例现已合法，改由 S3 的
+真实域 exact-once 与数值验证覆盖；没有通过 skip 隐藏旧失败。大域溢出测试只检查
+实际 IR 的位宽和首尾坐标，不枚举全部 tile。
+
+最终 native source SHA256：
+`daa2899ad727495a13162ad3083f7f6f37e9319204ad80d226e002acb430b940`，
+155 个构建输入；manifest 为 `native-build.json`，构建日志为
+`build-pending-final.log`。继续使用固定 TVM 提交及已补丁临时副本；验证报告记录
+S2 HEAD 上的 dirty 工作区、源码哈希和实际库路径。报告中的提交号不是最终 S3
+提交号，匹配依据是已核验的源码/库身份。
+
+早期测试输出与中间构建仅作诊断；最终两个 native 入口及兼容回归均在上述冻结
+manifest 下运行。另有针对 pending 后端门禁的回归：显式简化删除 dead marker 后
+仍拒绝 PTO/A5；这证明跨改写的守恒，不把它表述为已复现标准 pipeline 绕过。
+
+设备为实际 A3 `Ascend910_9362`、逻辑 device 0。六个静态 Persistent 域覆盖完整/少于
+core/多 wave、内部 padding 和尾 wave，以及单 core：`[2,4]/8/g2`、`[2,2]/8/g2`、
+`[3,3]/4/g8`、`[1,5]/8/g2`、`[3,10]/8/g4`、`[1,5]/1/g2`，各 100 轮。
+符号 M 的同一已编译 kernel 以 M=128/384 两个正值绑定各运行 100 轮。
+另有无 guard 单满 wave 的 num_stages=1 与消费 Task/Stage(0) 的 Vector add，
+各 100 轮；全部逐次重置输出 sentinel 并比较 golden。前置 smoke 9/9 也通过，
+但以完整 `s3-a3.json` 的 1000 次为本步设备证据，不把 smoke 次数叠加。
+
+最终设备 artifacts 为 `s3-a3-artifacts-0k0wmop1`；每项保存真实编译 argv、有序
+flags、resolved pass_configs、生成源码/产物 hash、工具链和实际加载身份。
+所选 Bisheng 为 `/home/developer/Ascend/cann-9.1.0/bin/bisheng`，实际工具链
+clang 15.0.5，compiler SHA256 为
+`7ffc97205a0582ce00a9ec163530696bf3971b24669c43c1c02cc9c7b56f541f`。
+各 worker 独立目录且 kernel 内存/磁盘缓存禁用；独立 host wrapper 缓存不充当
+设备编译证据。所有设备 case 均匹配上述最终 source/库 manifest。
+
+本步 Python lint、新 Python 的 100 列格式检查、四个修改/新增 C++/header 的
+clang-format 检查，以及 `git diff --check` 均通过；文档相对链接和围栏检查通过。
+记录为 `format-report.json` / `format-report.md`，日志、JSON、JUnit 和二进制不提交。
+
+### 9.3 审核边界
+
+S3 提交包含循环、验证/消费、测试、三个入口与文档；不接入 S4 constraint 策略，
+不宣称跨 wave 流水、owner/epoch 或新同步器已实现。上述设备测试与格式检查已完成，
+只提交推送本步到既定分支，然后等待用户审核和明确的 S4 指令。

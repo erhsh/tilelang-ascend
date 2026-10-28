@@ -11,6 +11,7 @@
 
 #include "./common/ascend_pipeline_structure.h"
 #include "./common/ascend_resource.h"
+#include "./common/ascend_schedule_hints.h"
 
 namespace tvm {
 namespace tl {
@@ -148,6 +149,8 @@ struct Group {
   bool complex{false};
   bool exact{true};
   int parent{-1};
+  bool explicit_task{false};
+  bool stage_zero{false};
 };
 
 class ScheduleGraphBuilder {
@@ -173,6 +176,9 @@ public:
   }
 
   Record Build() {
+    ICHECK(!HasAscendScheduleHints(function_->body) || platform_ == "A3")
+        << "Task/Stage analysis is supported only for A3 in S3";
+    ValidateAscendScheduleHintStructure(function_);
     Walk(function_->body, -1);
     Array<ObjectRef> task_records, storage_records, group_records, dependencies;
     for (const Task &task : tasks_)
@@ -190,17 +196,23 @@ public:
     }
     for (size_t i = 0; i < groups_.size(); ++i) {
       const Group &group = groups_[i];
-      group_records.push_back(
-          Record{{"id", Integer(i)},
-                 {"statement", group.statement},
-                 {"task_ids", group.members},
-                 {"loop_ids", group.loops},
-                 {"source_path", group.path},
-                 {"parent_group_id", Integer(group.parent)},
-                 {"requires_sequential_iterations", Bool(!group.loops.empty())},
-                 {"schedulable",
-                  Bool(!group.complex && group.exact &&
-                       group.members.size() == 1 && group.loops.empty())}});
+      Record record{
+          {"id", Integer(i)},
+          {"statement", group.statement},
+          {"task_ids", group.members},
+          {"loop_ids", group.loops},
+          {"source_path", group.path},
+          {"parent_group_id", Integer(group.parent)},
+          {"requires_sequential_iterations", Bool(!group.loops.empty())},
+          {"schedulable",
+           Bool(!group.complex && group.exact && group.members.size() == 1 &&
+                group.loops.empty())}};
+      if (group.explicit_task) {
+        record.Set("explicit_task", Bool(true));
+        if (group.stage_zero)
+          record.Set("stage", Integer(0));
+      }
+      group_records.push_back(record);
     }
     for (size_t i = 0; i < tasks_.size(); ++i) {
       for (size_t j = i + 1; j < tasks_.size(); ++j) {
@@ -350,6 +362,33 @@ private:
       Walk(realize->block->body, group);
       guard_ = saved;
     } else if (const auto *attr = statement.as<AttrStmtNode>()) {
+      if (attr->attr_key == kAscendStageHint) {
+        int parent = group_parent_;
+        if (group >= 0)
+          group_parent_ = group;
+        stage_zero_ = true;
+        Walk(attr->body, -1);
+        stage_zero_ = false;
+        group_parent_ = parent;
+        return;
+      }
+      if (attr->attr_key == kAscendTaskHint) {
+        int parent = group_parent_;
+        if (group < 0 || !groups_[group].statement.same_as(statement)) {
+          if (group >= 0)
+            group_parent_ = group;
+          group = NewGroup(statement);
+        }
+        groups_[group].explicit_task = true;
+        groups_[group].stage_zero = stage_zero_;
+        ++task_hint_depth_;
+        Walk(attr->body, group);
+        --task_hint_depth_;
+        ICHECK_EQ(groups_[group].members.size(), 1U)
+            << "T.Task requires exactly one audited hardware call in S3";
+        group_parent_ = parent;
+        return;
+      }
       int saved = core_;
       if (attr->attr_key == "resource_scope") {
         const auto *value = attr->value.as<IntImmNode>();
@@ -368,8 +407,8 @@ private:
       // an injector statement unit. Preserve that container as a parent group
       // and expose its child statements. Inside loops, never split the unit.
       int parent = group_parent_;
-      if (attr->attr_key == "resource_scope" && loop_stack_.empty() &&
-          group >= 0) {
+      if (!task_hint_depth_ && attr->attr_key == "resource_scope" &&
+          loop_stack_.empty() && group >= 0) {
         group_parent_ = group;
         Walk(attr->body, -1);
       } else {
@@ -646,6 +685,8 @@ private:
   bool noalias_{false};
   int core_{-1};
   int group_parent_{-1};
+  int task_hint_depth_{0};
+  bool stage_zero_{false};
   PrimExpr guard_;
   arith::Analyzer analyzer_;
   std::unordered_map<const VarNode *, int> storage_ids_;
@@ -661,10 +702,13 @@ private:
 
 } // namespace
 
+Map<String, ObjectRef> AnalyzeAscendSchedule(tir::PrimFunc function,
+                                             String platform) {
+  return ScheduleGraphBuilder(function, platform).Build();
+}
+
 TVM_REGISTER_GLOBAL("tl.transform.AnalyzeAscendSchedule")
-    .set_body_typed([](tir::PrimFunc function, String platform) {
-      return ScheduleGraphBuilder(function, platform).Build();
-    });
+    .set_body_typed(AnalyzeAscendSchedule);
 
 } // namespace tl
 } // namespace tvm
