@@ -96,3 +96,42 @@ The compiler checks marker structure before frontend rewrites, then validates an
 consumes supported markers after lowering operations and before scheduling or
 C/V splitting. The explicit read-only schedule analysis retains task/group and
 stage metadata. Kernels without markers retain their previous behavior.
+
+## Opt-in A3 constraint planning
+
+The default pipeline planner remains `legacy`. Select the first constraint
+subset explicitly and enable the existing synchronization and memory planner:
+
+```python
+pass_configs = {
+    tilelang.PassConfigKey.TL_ASCEND_PIPELINE_PLANNER: "constraint",
+    tilelang.PassConfigKey.TL_ASCEND_AUTO_SYNC: True,
+    tilelang.PassConfigKey.TL_ASCEND_MEMORY_PLANNING: True,
+    tilelang.PassConfigKey.TL_ASCEND_AUTO_SYNC_VS: False,
+    tilelang.PassConfigKey.TL_ASCEND_AUTO_CV_SYNC: False,
+}
+```
+
+This subset requires A3 AscendC/auto, static serial loops, and at least one
+`T.Pipelined(..., num_stages=1)` candidate. It supports audited float16/float32
+full, aligned GM/UB copies and Vector fill/add. Use a separate full short tile
+for a static aligned tail; dynamic padding DMA is outside this subset.
+Manual flag/barrier calls, mixed Cube/Vector, raw code, explicit UB address
+placement, explicit stage/order arrays and multiple stages or buffer versions
+are rejected. UB allocations must be static float16/float32 and fit the native
+memory budget, including row padding.
+
+GM aliases remain conservative. When the caller guarantees distinct input and
+output storage, declare `T.func_attr({"tir.noalias": True})` in the PrimFunc.
+Without that contract, a loop can require cross-iteration GM dependencies that
+the existing synchronization does not cover; such a kernel is rejected.
+
+The planner orders operations within one iteration and preserves the source
+loop iteration order. The existing injector and synchronization passes still generate
+the executable code; a final verifier checks logical dependencies, physical
+storage reuse and event lifetimes. Unsupported or unproved cases report an
+error. This option requires the optional `ascend-scheduler` solver dependency
+when used; legacy does not load it. The strategy participates in the existing
+compilation cache key.
+Verification expands at most 4096 hardware task instances and 65536 control
+visits per trace; larger traces report a limit error.

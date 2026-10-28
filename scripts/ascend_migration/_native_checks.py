@@ -1,4 +1,4 @@
-"""Thin shared identity/preflight/reporting for S3's two native-only entries."""
+"""Shared identity, preflight and reporting for native-only migration checks."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from _common import ROOT, base_report, finish, run_process, run_pytest
 from _native_build import verify_manifest
 
 
-def parser(description: str) -> argparse.ArgumentParser:
+def parser(description: str, *, step: str = "S3") -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=description)
     result.add_argument("--platform", choices=("a3",), required=True)
     result.add_argument("--timeout", type=float, default=120)
@@ -25,15 +25,15 @@ def parser(description: str) -> argparse.ArgumentParser:
         default=Path(
             os.environ.get(
                 "TL_ASCEND_MIGRATION_BUILD_MANIFEST",
-                str(ROOT / "build/ascend_migration_s3_native_build.json"),
+                str(ROOT / f"build/ascend_migration_{step.lower()}_native_build.json"),
             )
         ),
     )
     return result
 
 
-def run(args, entry: str, nodes) -> int:
-    report = base_report(entry, args, step="S3")
+def run(args, entry: str, nodes, *, step: str = "S3", require_solver: bool = False) -> int:
+    report = base_report(entry, args, step=step)
     if sys.flags.optimize:
         return finish(args, report, "BLOCKED", "Native assertions require no -O/PYTHONOPTIMIZE")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
@@ -43,7 +43,8 @@ def run(args, entry: str, nodes) -> int:
     except (OSError, ValueError, KeyError, TypeError) as error:
         return finish(args, report, "BLOCKED", f"Native build identity: {error}")
     report["native_build"] = manifest
-    report["validation_layer"] = "native loop/interface IR and generated source; no NPU launch"
+    report["solver_required"] = require_solver
+    report["validation_layer"] = "native IR, interfaces and generated source; no NPU launch"
     report["required_nodes"] = list(nodes)
     env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
     tvm_python = Path(manifest["tvm_source_root"]) / "python"
@@ -58,7 +59,14 @@ def run(args, entry: str, nodes) -> int:
         tempfile.mkdtemp(prefix=f"{args.output.stem}-artifacts-", dir=args.output.resolve().parent)
     )
     report["artifacts"] = str(artifacts)
-    preflight = """import json
+    solver_preflight = (
+        "import z3\nsolver_version = z3.get_version_string()\n"
+        if require_solver
+        else "solver_version = None\n"
+    )
+    preflight = (
+        solver_preflight
+        + """import json
 from pathlib import Path
 import tilelang
 from tilelang import tvm
@@ -68,8 +76,10 @@ print('NATIVE_IDENTITY=' + json.dumps({
     'tilelang_library': str(Path(tilelang._LIB_PATH).resolve()),
     'tvm_library': str(Path(tvm._ffi.base._LIB._name).resolve()),
     'tvm_version': tvm.__version__,
+    'solver_version': solver_version,
 }))
 """
+    )
     try:
         checked = run_process(
             [sys.executable, "-c", preflight], artifacts, "preflight", env=env, timeout=args.timeout

@@ -175,7 +175,7 @@ public:
     }
   }
 
-  Record Build() {
+  Record Build(bool include_dependencies = true) {
     ICHECK(!HasAscendScheduleHints(function_->body) || platform_ == "A3")
         << "Task/Stage analysis is supported only for A3 in S3";
     ValidateAscendScheduleHintStructure(function_);
@@ -214,22 +214,23 @@ public:
       }
       group_records.push_back(record);
     }
-    for (size_t i = 0; i < tasks_.size(); ++i) {
-      for (size_t j = i + 1; j < tasks_.size(); ++j) {
-        AddMemoryEdges(i, j, tasks_[i].writes, tasks_[j].reads, "RAW",
-                       &dependencies);
-        AddMemoryEdges(i, j, tasks_[i].reads, tasks_[j].writes, "WAR",
-                       &dependencies);
-        AddMemoryEdges(i, j, tasks_[i].writes, tasks_[j].writes, "WAW",
-                       &dependencies);
-        if (Downcast<Integer>(tasks_[i].record["group_id"])->value ==
-            Downcast<Integer>(tasks_[j].record["group_id"])->value) {
-          dependencies.push_back(Record{{"src", Integer(i)},
-                                        {"dst", Integer(j)},
-                                        {"kind", String("GROUP_ORDER")}});
+    if (include_dependencies)
+      for (size_t i = 0; i < tasks_.size(); ++i) {
+        for (size_t j = i + 1; j < tasks_.size(); ++j) {
+          AddMemoryEdges(i, j, tasks_[i].writes, tasks_[j].reads, "RAW",
+                         &dependencies);
+          AddMemoryEdges(i, j, tasks_[i].reads, tasks_[j].writes, "WAR",
+                         &dependencies);
+          AddMemoryEdges(i, j, tasks_[i].writes, tasks_[j].writes, "WAW",
+                         &dependencies);
+          if (Downcast<Integer>(tasks_[i].record["group_id"])->value ==
+              Downcast<Integer>(tasks_[j].record["group_id"])->value) {
+            dependencies.push_back(Record{{"src", Integer(i)},
+                                          {"dst", Integer(j)},
+                                          {"kind", String("GROUP_ORDER")}});
+          }
         }
       }
-    }
     return {{"schema_version", Integer(1)},
             {"platform", platform_},
             {"dependency_scope", String("single_iteration")},
@@ -705,6 +706,11 @@ private:
 Map<String, ObjectRef> AnalyzeAscendSchedule(tir::PrimFunc function,
                                              String platform) {
   return ScheduleGraphBuilder(function, platform).Build();
+}
+
+Map<String, ObjectRef> AnalyzeAscendScheduleEffects(tir::PrimFunc function,
+                                                    String platform) {
+  return ScheduleGraphBuilder(function, platform).Build(false);
 }
 
 TVM_REGISTER_GLOBAL("tl.transform.AnalyzeAscendSchedule")

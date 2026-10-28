@@ -99,6 +99,9 @@ def OptimizeForTarget(mod: IRModule, target: Target, platform: str) -> IRModule:
     from tilelang.utils.target import check_npu_availability
 
     pass_ctx = tilelang.transform.get_pass_context()
+    planner = str(pass_ctx.config.get("tl.ascend_pipeline_planner", "legacy"))
+    if planner not in {"legacy", "constraint"}:
+        raise ValueError(f"Unknown Ascend pipeline planner strategy: {planner!r}")
     mod = tilelang.transform.AscendLowerScheduleHints(target, platform)(mod)
     managed_vector_mask = target.model in {"ascendc", "auto"} and platform in {"A2", "A3"}
     mod = tir.transform.PlanAndUpdateBufferAllocationLocation()(mod)
@@ -131,6 +134,8 @@ def OptimizeForTarget(mod: IRModule, target: Target, platform: str) -> IRModule:
         # rewrite pass has completed. No TIR-transforming pass may run after
         # mask legalization.
         mod = tir.transform.Simplify()(mod)
+    if planner == "constraint":
+        mod = tilelang.transform.AscendVerifyConstraintSync(target, platform)(mod)
     # CombineCV or explicit T.Scope annotations must assign every
     # resource-specific Ascend operation to C or V. Verify after automatic
     # synchronization has materialized its final hardware calls.

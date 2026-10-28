@@ -44,6 +44,9 @@ class PassConfigKey(str, Enum):
     TL_ASCEND_MEMORY_PLANNING = "tl.ascend_memory_planning"
     """Enable/disable TileLang AscendMemoryPlanning pass. Default: False"""
 
+    TL_ASCEND_PIPELINE_PLANNER = "tl.ascend_pipeline_planner"
+    """Select legacy (default) or the opt-in A3 single-stage constraint planner."""
+
     TL_ASCEND_AUTO_CV_COMBINE = "tl.ascend_auto_cv_combine"
     """Enable/disable TileLang CombineCV pass. Default: True.
 

@@ -8,6 +8,7 @@
 分阶段交付、验证脚本与人工审核见 [migration-plan.md](migration-plan.md)。
 未注明已实现的接口和 Pass 仍为设计提案；S1 审计见第 11 节，S2 合同见第 12 节，
 S3 的循环与标记实现边界见第 13 节。
+S4 的约束桥接与最终同步验证合同见第 14 节，实际验证状态以迁移计划为准。
 
 用户已明确当前及后续只要求 A3 测试和验收。本文的 A2/A3 目标范围保留既有后端
 兼容性，不要求新增 A2 专属测试，也不把 A2 历史未运行当作步骤验收缺口。
@@ -780,3 +781,98 @@ planner、injector 与同步器。受支持 Vector fixture 的标记版和原版
 native 入口先校验源码 manifest 与实际库/Python 加载身份；设备入口复用 S1 的隔离
 worker、真实 Bisheng 编译计数、输出 sentinel 和逐次 golden。S1 用例集和验收控制
 保留，共享 runner 的抽取不改变其设备用例。实际结果与复现命令见迁移计划第 9 节。
+
+## 14. S4：单 stage 约束桥接与最终同步证明
+
+### 14.1 显式配置与接入
+
+新增 `TL_ASCEND_PIPELINE_PLANNER = "tl.ascend_pipeline_planner"`，仅允许
+`"legacy"` / `"constraint"`，默认 legacy，不自动改用户的同步或内存配置。
+constraint 首片限制为 A3 AscendC/auto；A2 保留 legacy，未增加 A2 验收。
+
+```python
+pass_configs = {
+    tilelang.PassConfigKey.TL_ASCEND_PIPELINE_PLANNER: "constraint",
+    tilelang.PassConfigKey.TL_ASCEND_AUTO_SYNC: True,
+    tilelang.PassConfigKey.TL_ASCEND_MEMORY_PLANNING: True,
+    tilelang.PassConfigKey.TL_ASCEND_AUTO_SYNC_VS: False,
+    tilelang.PassConfigKey.TL_ASCEND_AUTO_CV_SYNC: False,
+}
+```
+
+`PipelinePlanning()` 保持无参接口，C++ pass_func 分发到原 legacy 类或受限 constraint
+实现；unknown strategy 明确报错。Python wrapper 在当前 PassContext 内构造时，只对
+constraint 懒注册 S2 数字 solver callback。legacy 不导入或探测 Z3。缺 solver、
+UNSAT/TIMEOUT/UNKNOWN 等状态不能回退成一个未经验证的顺序结果。
+正常编译链仍是一次 PipelinePlanning、一次旧 InjectSoftwarePipeline、一套旧同步。
+策略作为 pass_configs 的一部分进入已有缓存身份，不另造一套设备缓存。
+
+### 14.2 候选与旧 injector ABI
+
+只选择显式 `num_stages=1` 的静态 serial 循环，至少一个候选；原 loop var 限 signed
+int32/int64，半开终点和更新必须在实际 dtype 中可表示。普通/零 stage 的
+静态循环作为顺序容器。全内核只接受经 S2 审计的完整对齐 GM↔UB、Vector fill/add，
+拒绝混合 C/V、opaque/raw、标量 buffer effects、手写 flag/barrier 和用户提供的
+stage/order/async/sync/group 等冲突控制。多 stage/version 留给 S5。
+
+UB allocation 必须为静态 f16/f32。规划前按原生可用预算 196352 字节做保守总量检查，
+分析之前先对真实 UB 声明逐维做除法前置检查，再形成乘积，防止 TVM 常量乘法回绕。
+总量检查计入 Flatten2D 的行对齐；显式地址 placement 在此首片拒绝，避免把超量或碎片化
+请求送入旧 allocator。最终验证再次检查每个 UB 地址/大小及访问区间均落在该预算内。
+这沿用旧 allocator 的实际预算常量，不新增一份与原生实现分离的容量定义。
+
+候选 unit 采用共用的 `CollectAscendPipelineGroups` 顺序，且每个 unit 恰好一个
+受审计调用。循环变量保留为符号索引，构造单迭代保守 RAW/WAR/WAW；不把不精确
+区间当作无依赖，也不将循环变量替成零后猜测独立性。S2 的 single-iteration 图
+不等于已经证明循环回边，回边由最终验证另行检查。
+
+调用 S2 straight solver，以单位 latency/II 表达排序成本，不把它当作 A3 硬件时延。
+native 消费结果前检查 SAT、完整整数排列和候选的全部单迭代依赖；不消费 start_times，
+不另声称验证了硬件时延。标准 S2 callback 的数字结果另有其独立 verifier。发出
+`software_pipeline_stage=[0,...,0]`；order 数组为“原 unit → 执行 rank”，
+所以 solver 执行序 `[2,0,1]` 对应旧 ABI `[1,2,0]`。不发 async stage，不增加
+version 轴，不把任务移动到其他迭代；硬件既有的异步完成关系仍由旧同步和最终验证证明。
+
+### 14.3 跨改写的任务身份
+
+内部 `tl.ascend_s4_task` Attr 的 node 为 int64 unit ID，value 为 int32 1；
+`tl.ascend_s4_iter` 的 node 为 int64 loop ID，初始 value 为 int64 迭代表达式；
+允许后续合法整数缩位，最终以静态数值匹配原迭代身份。
+迭代表达式必须放在 value，当前 TVM Substitute 不改写普通 Attr 的 node。
+因此 injector、unroll 和索引重写后仍能识别实际任务实例。
+
+最终映射同时核对操作/PIPE、pointer dtype/mask、逻辑读写区间及非 pointer 的
+标量/字符串参数，包括 count 与 fill 值；允许合法整数缩位。首片拒绝跨 dataVar 的
+逻辑 effect remap，不从相同字节 footprint 推导 payload 相同。
+
+函数级 `tl.ascend_s4_manifest` 保存 schema、原始 S2 source_graph、含相同内部标记
+但不含 manifest 的 source_function 快照和候选的 unit/source_path 映射。快照不
+构成循环引用。这些是编译器内部合同，不是新公开调度注解。
+
+### 14.4 最终协议与依赖覆盖
+
+`AscendVerifyConstraintSync(target, platform)` 仅由 constraint 分支调用，位置为
+最后一次 Simplify 之后、AscendResourceScopeVerify 之前；它只读验证，既不插入
+事件，也不修改最终地址。Selection/MaskLegalize 的末端顺序继续保持。
+
+依据稳定任务身份和 source_function 识别原 logical RAW/WAR/WAW 方向；依据最终
+address_map/size_map 重建物理区间，物理 reuse 边按实际发射方向检查，两者不能
+互相替代。GM 参数未知别名保持保守，不能要求普通 kernel 凭空具有 noalias。
+有限静态展开检查相邻迭代与退出到尾部；每条 trace 最多 4096 个硬件任务实例、
+65536 次控制访问，单 loop extent 不超过 65536。超过上限或无法证明的控制流明确拒绝。
+
+具体而言，copy/add/copy 静态循环在不同 GM 参数可能别名时，上一轮输出可能覆盖
+下一轮输入，旧同步未必提供 MTE3→MTE2 的完成关系；此时 constraint 必须拒绝。
+设备 fixture 显式声明 tir.noalias=True，并由三个独立 torch 分配实际满足该合同；
+native 另保留 noalias=False 的拒绝测试，不把设备分配事实推广给普通未知调用者。
+
+按时间顺序维护完成集合：set(src,dst,id) 捕获当时 src 的任务和已继承完成关系，
+wait 精确消费对应活跃 token 并传递快照；barrier 只覆盖它之前的相关任务。
+检查重复 set、无来源 wait、活跃槽冲突和退出 drain。模 8 的 flag 分配不能代替
+liveness 证明，同 PIPE 也不能笼统当作依赖完成，相关 V→V 必须有显式完成证明；
+旧生成器通常使用 PIPE_V barrier，合法且按时间顺序的事件传递也可构成证明。
+旧 barrier 不会自动保护其后才出现的 writer。
+
+设备尾块采用完整、对齐的短 tile：160=64×2+32，动态 padding DMA 不在本片白名单。
+独立尾 allocation 不一定发生物理复用，因此实际复用另用 native 定址正负例验证。
+三个入口及真实结果记录在迁移计划；不从 TIR 验证或一次 smoke 推导设备验收通过。

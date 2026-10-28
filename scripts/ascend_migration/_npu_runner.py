@@ -64,6 +64,10 @@ def prepare_worker(args, evidence: dict) -> tuple:
         str(ROOT / "build/ascend_migration_native_build.json"),
     )
     evidence["native_build"] = verify_manifest(manifest)
+    if getattr(args, "require_solver", False):
+        import z3
+
+        evidence["solver"] = {"version": z3.get_version_string()}
     libraries = {
         Path(item["path"]).name: Path(item["path"])
         for item in evidence["native_build"]["libraries"]
@@ -290,7 +294,7 @@ def run_worker(
         JITKernel.__call__ = real_call
 
 
-def run_cases(args, report, cases, entry_path) -> int:
+def run_cases(args, report, cases, entry_path, *, final_check=None) -> int:
     # Keep previous failures and their logs intact when rerunning an output path.
     destination = Path(args.output).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -372,4 +376,9 @@ def run_cases(args, report, cases, entry_path) -> int:
             )
         if name != "preflight":
             report["counts"]["passed"] += 1
+    if final_check is not None:
+        try:
+            final_check(report)
+        except (AssertionError, KeyError, TypeError, ValueError) as error:
+            return finish(args, report, "FAIL", f"Final case comparison: {error}")
     return finish(args, report, "PASS")

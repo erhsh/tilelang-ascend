@@ -67,3 +67,39 @@ S3 循环接口、S4 planner 接管及后续同步生成仍不在本步实施。
 - 验证覆盖旧调用/FFI、真实生成 IR 的域解释与 exact-once、绕过 builder 的非法标记，
   以及已有 Persistent GEMM/Vector 控制方式下的 A3 数值与重复调用。统一重建匹配源码的
   native 库后才正式运行；三个独立入口交付后更新计划、提交推送并等待审核，不进 S4。
+
+## S4 实施骨架：单 stage 约束规划与最终同步验证
+
+确认依据：用户已明确要求开始 S4；沿用既定单步实现、A3 验收、提交推送后等待审核。
+
+- `PipelinePlanning()` 保持现有 Python/FFI 签名与 phase.py 调用位置。C++ pass_func
+  读取 `tl.ascend_pipeline_planner`，只接受 legacy/constraint，默认 legacy；legacy
+  继续原有类，constraint 调用独立的受限 planner。Python wrapper 只在 constraint
+  下懒注册 S2 solver，不给 legacy 新增 Z3 导入或严格检查。
+- 首片要求 A3 AscendC/auto、自动核内同步与内存规划开启、跨核同步和 VS 同步关闭。
+  全内核只允许 S2 已审计的完整对齐 GM↔UB、fill/add 单 Vector 操作及静态顺序容器。
+  至少一个显式 num_stages=1 的静态 serial 候选循环；手写同步、opaque/raw、混合 C/V、
+  多 stage/version、动态 padding DMA 和用户 stage/order/async 等控制拒绝。
+- 候选 body 依照共用 `CollectAscendPipelineGroups` 的 injector 顺序编号，确保每个
+  unit 恰好一个受审计调用。S2 单迭代的保守 effects 构建 RAW/WAR/WAW，不把其
+  `schedulable=false` 或 `exact=false` 直接当成不安全，也不把循环变量替成 0。
+  使用 straight solver 与单位排序成本；native 独立复核 SAT、排列和候选单迭代依赖。
+  输出 stage 全 0，order 为 solver 执行次序的逆排列；只经过原 injector 一次。
+- `tl.ascend_s4_task` Attr 携带稳定调用 ID，`tl.ascend_s4_iter` 的 value 携带迭代
+  表达式，使 Substitute/unroll 能同步改写。`tl.ascend_s4_manifest` 保存原始 effects、
+  storage 与 logical 依赖身份；覆盖候选外的受支持调用和尾部。内部标记不作为新 API。
+- 新 `AscendVerifyConstraintSync(target, platform)` 只在 constraint 下接入，位于
+  最后 Simplify 之后、ResourceScopeVerify 之前。它不生成或删除硬件同步，读取最终
+  address_map/size_map，核对稳定身份及展开 ABI，并验证原 logical 依赖和实际物理
+  复用边；逻辑方向来自原 source，物理 reuse 方向来自计划后的实际执行次序。
+- 事件检查按时间顺序维护 completion 集：set 捕获当时 producer 快照，wait 精确
+  消费对应 PIPE/event ID，barrier 只覆盖它之前的相关任务。检查重复 set、无来源 wait、
+  活跃槽冲突和 drain；同 PIPE 的依赖不能无条件视为已完成，V→V 依赖需显式完成证明。
+  静态循环展开有明确上限，检查相邻迭代与循环退出到尾部，超限或无法证明时明确拒绝。
+- 交付三个独立入口及永久回归。A3 设备使用已有 add 骨架：full192=64×3、
+  tail160=64×2+独立32尾 tile；f16/f32 × 两种形状 × 两策略分别冷编译并各运行100轮。
+  对比同输入的实际输出，不将独立尾 allocation 自动解释为物理 reuse。物理全/部分
+  重叠另做 native 正负例；策略缓存身份调用实际 cache key 验证。
+- planner、最终 verifier 与 runner 分工实现，统一重建/冻结 manifest 后串行加载库和
+  设备测试。默认值、原 planner/injector/同步器数量和尾部 Selection/MaskLegalize
+  顺序保持；S5 的跨迭代流水、多版本与性能优化不纳入本步。

@@ -56,15 +56,15 @@ Vector 指令选择、mask 合法化、Persistent 参数/partial-wave 保护及 
 | S0 | 迁移计划与技术参考入仓 | 文档已完成 | 文档静态检查通过 | 用户已确认，并明确授权 S1 |
 | S1 | fork 基线审计与前置合同 | 审计、局部修复及三个入口已交付 | 主机通过；历史 A2/A3 native 各 105 项通过；A3 14 项各 100 轮通过 | 用户已明确授权 S2；A2 不再阻塞验收 |
 | S2 | 能力、任务图与 solver 合同（M0） | 显式分析、能力模型、solver/verifier 和三个入口已交付 | solver 105、capability 42、native 171 及 runner 31 项通过；无新增设备执行路径 | 用户已明确授权 S3 |
-| S3 | Parallel/Pipelined/Persistent 接口与安全性 | 循环接口、域保护、受限 Task/Stage 和三个入口已交付 | native 117 + 29、兼容回归 170、runner 44 项通过；A3 9 项、1000 次 launch/golden 通过 | 待用户审核 |
-| S4 | 单核约束规划与同步协议验证（M1） | 未开始 | 未验证 | 未提交 |
+| S3 | Parallel/Pipelined/Persistent 接口与安全性 | 循环接口、域保护、受限 Task/Stage 和三个入口已交付 | native 117 + 29、兼容回归 170、runner 44 项通过；A3 9 项、1000 次 launch/golden 通过 | 用户已明确授权 S4 |
+| S4 | 单核约束规划与同步协议验证（M1） | opt-in constraint、最终协议验证和三个入口已交付 | 原生 45 + 50、兼容 170 + 117 + 29、runner 77 项通过；A3 8 项、800 次 launch/golden 通过 | 待用户审核 |
 | S5 | 跨迭代流水与多缓冲（M2） | 未开始 | 未验证 | 未提交 |
 | S6 | owner/epoch、别名与生命周期（M3） | 未开始 | 未验证 | 未提交 |
 | S7 | A2/A3 新同步生成器（M4） | 未开始 | 未验证 | 未提交 |
 | S8 | 完整自动调度与混合 C/V 接管（M5） | 未开始 | 未验证 | 未提交 |
 
-当前停止点：S3 实现与 A3 验证已完成，本步提交推送后停止等待审核。
-S4 尚未获得执行授权。
+当前停止点：S4 实现与 A3 验证已完成，本步提交推送后停止等待审核。
+S5 尚未获得执行授权。
 实施状态与验证状态分列：“已实现”不等于“native/NPU 验收通过”。
 
 ## 4. 分步交付与验收
@@ -145,7 +145,7 @@ S4 尚未获得执行授权。
 ### S4 单核约束规划与最终同步协议验证
 
 - 在现有 PipelinePlanning 内增加显式选择的 constraint 策略，默认 legacy。
-- 首片限 A2/A3 AscendC、单 Vector、静态循环、单 stage/单 version；
+- 当前首片限 A3 AscendC、单 Vector、静态循环、单 stage/单 version；
   使用审计过的 GM→UB→Vector→GM，拒绝 mixed C/V、opaque/raw 和手写 flag 歧义。
 - 输出现有 stage/order ABI：任务展开必须与 injector 一致；只运行一个 planner、
   一次旧 injector、一套旧同步，不引入额外异步队列语义。
@@ -576,5 +576,98 @@ clang-format 检查，以及 `git diff --check` 均通过；文档相对链接�
 ### 9.3 审核边界
 
 S3 提交包含循环、验证/消费、测试、三个入口与文档；不接入 S4 constraint 策略，
-不宣称跨 wave 流水、owner/epoch 或新同步器已实现。上述设备测试与格式检查已完成，
-只提交推送本步到既定分支，然后等待用户审核和明确的 S4 指令。
+不宣称跨 wave 流水、owner/epoch 或新同步器已实现。S3 已完成上述验证并按约推送；
+用户随后明确授权 S4，按本计划继续单步实施。
+
+## 10. S4 实际交付与验证记录
+
+### 10.1 范围和配置
+
+- 用户明确授权 S4，实施起点为 S3 提交 `8aa8b494`；固定源码基线、主仓参考和推送
+  分支不变。当前 constraint 首片支持 A3 AscendC/auto，A2 保留 legacy，不做 A2 专属验收。
+- `TL_ASCEND_PIPELINE_PLANNER` 选择 legacy/constraint，默认 legacy。原有 planner
+  类保持，constraint 在同一入口分发，Python 仅该分支懒注册可选 solver。
+- constraint 要求 auto_sync/memory_planning 开启、cross-core/VS 同步关闭；全内核
+  受审计，至少一个静态 serial、num_stages=1 候选。只输出 stage 0/version 1 和
+  旧 order ABI，不引入第二个 planner/injector/同步器。
+- 最终只读验证位于最后 Simplify 与 ResourceScopeVerify 之间，通过稳定 task/iter
+  身份检查原 logical 依赖和最终 UB 物理复用；按 set 时刻的完成快照审计事件配对、
+  活跃槽、传递关系及 drain。相关 V→V 依赖需要显式完成证明，不加冗余等待来过检查。
+- 静态 UB f16/f32 allocation 先逐维检查真实声明的乘积，再计算行 padding 和保守总预算，
+  复用旧 allocator 的 196352 字节常量；最终地址/大小和访问范围再核验。手工 placement、未知 effects、
+  多 stage/version、动态 padding DMA、跨 dataVar remap 和无法证明的控制流拒绝。
+- 有限展开限额为每 trace 4096 硬件实例、65536 控制访问，单 loop extent≤65536。
+  solver 的单位 latency/II 只用于抽象顺序，不是 A3 时延测量或性能收益承诺。
+  完整合同见技术参考第 14 节与公开语言说明。
+
+### 10.2 别名、尾块与验证载体
+
+普通未声明 noalias 的 GM 参数保持保守；已确认 copy/add/copy 循环可能缺少上一轮
+GM store 到下一轮未知别名 GM load 的完成路径，这类输入明确拒绝。
+设备 fixture 显式声明 tir.noalias=True，A/B/O 三个实际独立 torch 分配满足该合同；
+native 同时保留 noalias=False 的拒绝测试，不把独立分配事实推广给普通调用者。
+
+尾块采用完整对齐短 tile：full192=64×3、tail160=64×2+32，后者独立尾 allocation
+不自动代表物理 reuse。native 另用最终全/部分重叠地址的正负例证明 reuse 覆盖，
+并验证物理顺序与原 logical 方向不能混淆。设备按 f16/f32、两种形状和两种策略
+分别编译，同 CPU seed 生成输入，逐次重置输出 sentinel、比较 golden，并在入口
+末端比较跨策略实际输入/输出 hash；仅相同 seed 或缓存禁用不能充当一致性证明。
+
+### 10.3 独立入口和验证结果
+
+```bash
+source set_env.sh
+export TL_ASCEND_MIGRATION_BUILD_MANIFEST=/tmp/ascend-migration-s4/native-build.json
+
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s4_check_pipeline_ir.py --platform a3 --output /tmp/ascend-migration-s4/pipeline-ir.json
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s4_check_sync_coverage.py --platform a3 --output /tmp/ascend-migration-s4/sync-coverage.json
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s4_run_vector_npu.py --platform a3 --device 0 --seed 0 --repeat 100 --timeout 120 --output /tmp/ascend-migration-s4/s4-a3.json
+```
+
+复用 S2 的隔离 venv，实际 Z3 为 4.15.4.0，仍继承原 torch/torch_npu/CANN 环境；
+未安装全局依赖。三个入口的缺失/损坏 Z3 预检在 runtime 导入前给出 BLOCKED/2。
+manifest 要由当前源码显式构建，不能复用 S3；方法沿用技术参考第 11.5 节。
+
+| 检查 | 当前实际结果 | 证据（相对 `/tmp/ascend-migration-s4/`） |
+| --- | --- | --- |
+| 规划 ABI、拒绝边界和真实 cache key/路由 | PASS，45 项：planner 42、cache 3；0 fail/skip | `pipeline-ir.json` |
+| 最终协议与 logical/physical 覆盖 | PASS，50 项，0 fail/skip | `sync-coverage.json` |
+| S1/S2/S3 native 兼容 | PASS，170 + 117 + 29 项，0 fail/skip/漏必跑项 | `s2-regression-a3.json`、`s3-loop-regression-a3.json`、`s3-domain-regression-a3.json` |
+| runner 主机回归 | PASS，77 项：S1 20、S2 11、S3 13、S4 33 | `runner-tests.xml` |
+| A3 NPU | PASS，8/8 项；8 次真实冷编译、800 次 launch/golden，4 组跨策略输入/输出 hash 一致，0 fail/skip | `s4-a3.json` |
+
+预算溢出修复后的最终 native source SHA256：
+`a129ba375514d31697cddcad83ba67d681f38a6cbcf41abb29b1e6f1a55be5fb`，
+158 个构建输入，`build-final.log` exit 0，`native-build.json` 已写入并核验。
+旧 manifest 与报告以 `*-before-budget-overflow-fix.json` 保留为诊断。
+固定 TVM 及已补丁临时副本沿用 S1，报告保存 S3 HEAD 上 dirty 工作区、源码/库身份与
+真实加载路径；提交号不是最终 S4 提交号，匹配依据是已验证的 source/库 manifest。
+
+首轮诊断发现迭代 marker 的 value 被旧 NarrowDataType 合法缩位后遭误拒，现允许合法
+整数缩位并逐实例匹配数值；原始 ID node 保持 int64。synthetic fixtures 的旧 TVM
+AttrStmt/call 构造错误也已修正，诊断日志保留，不用中间分项通过替代正式整组结果。
+
+最终复核另确认巨大多维 UB shape 的容量可在旧 TVM 常量乘法中回绕为 16384 字节，
+绕过分析后的预算检查。修复把逐维除法前置检查放在 Analyze 之前；Buffer 与 Allocate
+声明各保留一个精确负例，均在进入旧 allocator 前拒绝。修复前已通过的原生和设备
+报告以 `*-before-budget-overflow-fix.json` 保存为诊断，不计入修复后的最终验收。
+
+最终设备 artifacts 为 `s4-a3-artifacts-a95k7t67`，实际 SoC `Ascend910_9362`、逻辑
+device 0；Python 3.12.9、torch/torch_npu 2.12.0、CANN 9.1.0，Z3 API 版本 4.15.4。
+PATH 所选 Bisheng 为 `/home/developer/Ascend/cann-9.1.0/bin/bisheng`，实际 clang
+15.0.5，compiler SHA256 为
+`7ffc97205a0582ce00a9ec163530696bf3971b24669c43c1c02cc9c7b56f541f`。
+每项各 100 次 attempted/completed/golden，保存真实编译 argv、有序 flags、resolved
+配置和生成源码/产物 hash；全部匹配最终 source/库 manifest。独立 worker 与缓存目录、
+禁用 kernel 内存/磁盘缓存的控制沿用 S1/S3，host wrapper 缓存不计为设备编译。
+上述 800 次仅统计预算修复后的正式入口，不叠加修复前或 smoke 的次数。
+
+修改文件的 Python lint、8 个新 Python 的 100 列格式检查、6 个 C++/header 的
+clang-format、`git diff --check` 及文档相对链接/围栏检查通过。记录为
+`format-report.json` / `format-report.md`，JSON/JUnit、日志和二进制均不提交。
+
+### 10.4 提交和审核边界
+
+只提交 S4 的实现、永久测试、三个入口与文档；不推进 S5 的跨迭代流水、多版本、
+硬件时延校准或新同步器。上述正式原生、A3 与格式检查已完成，按约提交推送到既定分支，
+然后停止等待用户审核与明确的 S5 指令。

@@ -39,14 +39,24 @@ def ClusterPlanning():
 
 
 def PipelinePlanning():
-    """infer the fragment/shared memory layout
+    """Plan software-pipeline annotations with the selected Ascend strategy.
 
-    Returns
-    -------
-    fpass : tvm.transform.Pass
-        The result pass
+    Construct inside the active PassContext. Legacy remains the default; only
+    the constraint strategy registers the optional numeric solver callback.
     """
+    strategy = str(get_pass_context().config.get(PassConfigKey.TL_ASCEND_PIPELINE_PLANNER, "legacy"))
+    if strategy not in {"legacy", "constraint"}:
+        raise ValueError(f"Unknown Ascend pipeline planner strategy: {strategy!r}")
+    if strategy == "constraint":
+        from .ascend_schedule_solver_ffi import register_solver
+
+        register_solver()
     return _ffi_api.PipelinePlanning()  # type: ignore
+
+
+def AscendVerifyConstraintSync(target: tvm.target.Target, platform: str):
+    """Verify final constraint-mode task identities, dependencies and event lifetimes."""
+    return _ffi_api.AscendVerifyConstraintSync(target, platform)  # type: ignore
 
 
 def AscendValidateScheduleHints():
