@@ -28,7 +28,7 @@ def git(*args: str) -> str:
     ).strip()
 
 
-def base_report(entry: str, args: argparse.Namespace) -> dict:
+def base_report(entry: str, args: argparse.Namespace, *, step: str = "S1") -> dict:
     """Capture the tree actually under test, without importing a device runtime."""
     versions = {"python": platform.python_version()}
     for name in ("pytest", "torch", "torch-npu", "tilelang"):
@@ -38,7 +38,7 @@ def base_report(entry: str, args: argparse.Namespace) -> dict:
             versions[name] = None
     return {
         "schema_version": 1,
-        "step": "S1",
+        "step": step,
         "entry": entry,
         "command": [sys.executable, *sys.argv],
         "commit": git("rev-parse", "HEAD"),
@@ -188,6 +188,11 @@ def run_pytest(
     for node in nodes:
         filename, *qualifiers = node.split("::")
         if not qualifiers:
+            if not any(
+                Path(filename).stem in (case["classname"] or "").split(".")
+                for case in result["cases"]
+            ):
+                missing.append(node)
             continue
         function = qualifiers[-1]
         module = Path(filename).stem

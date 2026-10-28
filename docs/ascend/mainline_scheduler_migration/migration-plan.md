@@ -4,6 +4,9 @@
 逐步迁入 tilelang-ascend 的 A2/A3（910B/910C）执行路径。每个独立大步骤
 完成后更新本文件、提交并推送，等待用户审核与明确的继续指令。
 
+当前有效验收口径：用户已明确本环境为 A3，后续跳过 A2 专属测试，A2 不再作为各步
+验收门槛。保留既有 A2 兼容代码和历史测试事实；共享源码数据不表示 A2 设备已验收。
+
 ## 1. 仓库与基线
 
 | 项目 | 固定信息 |
@@ -21,8 +24,7 @@
 实施基线的自动 C/V 分域默认开启，跨核同步、核内同步和自动内存规划策略默认关闭。
 源码已有资源归属验证、
 Vector 指令选择、mask 合法化、Persistent 参数/partial-wave 保护及 L1 多版本修复。
-这些表示源码设施已存在，不表示已在本迁移环境通过 native 或 A2/A3 验收。
-S1 核对实际合同与回归覆盖，优先复用这些设施。
+这些设施的具体合同与验证范围以 S1 审计和后续记录为准，优先复用而非重复迁入。
 
 ## 2. 提交与人工审核规则
 
@@ -32,7 +34,7 @@ S1 核对实际合同与回归覆盖，优先复用这些设施。
    多个紧密相关的文件或局部修改，不按每个小编辑单独打断用户。
    每步末尾还须设计验证脚本；S1–S8 实施交付时，实际提交该步可独立运行的
    2–3 个验证入口，覆盖正常用例、边界或负例。涉及设备执行的步骤须提供
-   A2/A3 NPU 验证入口。脚本可封装已有 pytest 用例，不重复实现同一套断言。
+   A3 NPU 验证入口。脚本可封装已有 pytest 用例，不重复实现同一套断言。
 3. 完成后检查提交范围，单独 commit 并 push 到本分支；同时报告提交号、
    变更摘要、真实验证结果及剩余问题。每步至少有一个可独立审核的提交。
 4. 推送后停止。没有反馈、经过一段时间或仅收到一般性确认，都不代表可以开始
@@ -40,7 +42,8 @@ S1 核对实际合同与回归覆盖，优先复用这些设施。
 5. 用户指出问题时，先在当前步骤修复、重跑受影响检查、更新计划并推送修复提交，
    再等待复核。没有必要时不重复无关测试。
 6. 缺少硬件/native 验证时，可以推送供审阅的候选实现，但必须标成“待环境验证”，
-   不标为该步验收完成。A2 与 A3 的结果分别记录；缩小支持范围需用户明确同意。
+   不标为该步验收完成。当前只要求 A3 结果，A2 历史结果保留；测试范围调整不删除
+   A2 兼容代码，也不构成 A2 新能力的验证结论。
 7. 不自动开启新策略为默认，不自动合并到默认分支。未经用户明确授权，不重写
    已审核提交或强制推送。基线升级、默认行为改变或新增目标平台需等待用户指令。
 
@@ -51,8 +54,8 @@ S1 核对实际合同与回归覆盖，优先复用这些设施。
 | 步骤 | 独立交付 | 实现状态 | 验证状态 | 人工审核 |
 | --- | --- | --- | --- | --- |
 | S0 | 迁移计划与技术参考入仓 | 文档已完成 | 文档静态检查通过 | 用户已确认，并明确授权 S1 |
-| S1 | fork 基线审计与前置合同 | 审计、局部修复及三个入口已交付 | 主机通过；A2/A3 native 各 105 项通过；A3 14 项各 100 轮通过；A2 待设备验证 | 待用户审核，整步验收待 A2 |
-| S2 | A2/A3 能力、任务图与 solver 合同（M0） | 未开始 | 未验证 | 未提交 |
+| S1 | fork 基线审计与前置合同 | 审计、局部修复及三个入口已交付 | 主机通过；历史 A2/A3 native 各 105 项通过；A3 14 项各 100 轮通过 | 用户已明确授权 S2；A2 不再阻塞验收 |
+| S2 | 能力、任务图与 solver 合同（M0） | 显式分析、能力模型、solver/verifier 和三个入口已交付 | solver 105、capability 42、native 171 及 runner 31 项通过；无新增设备执行路径 | 待用户审核 |
 | S3 | Parallel/Pipelined/Persistent 接口与安全性 | 未开始 | 未验证 | 未提交 |
 | S4 | 单核约束规划与同步协议验证（M1） | 未开始 | 未验证 | 未提交 |
 | S5 | 跨迭代流水与多缓冲（M2） | 未开始 | 未验证 | 未提交 |
@@ -60,8 +63,7 @@ S1 核对实际合同与回归覆盖，优先复用这些设施。
 | S7 | A2/A3 新同步生成器（M4） | 未开始 | 未验证 | 未提交 |
 | S8 | 完整自动调度与混合 C/V 接管（M5） | 未开始 | 未验证 | 未提交 |
 
-当前停止点：S1 候选交付待审核，A2 设备验收仍待目标环境补齐；不标记 S1 全面验收完成。
-S2 尚未获得执行授权。
+当前停止点：S2 已交付，提交推送后停止等待审核；S3 尚未获得执行授权。
 实施状态与验证状态分列：“已实现”不等于“native/NPU 验收通过”。
 
 ## 4. 分步交付与验收
@@ -87,7 +89,7 @@ S2 尚未获得执行授权。
 - 回归已有 Persistent、L1 分形多版本、zero/one-trip 和物理地址复用合同。
   只修复确认的缺口，不重复移植已有设施。
 - 验收：形成逐项源文件/配置/测试映射，明确需补入的保护及其实际位置；
-  如果本步补生产修复，须有相应 native 回归，涉及设备行为则另列 A2/A3 结果。
+  如果本步补生产修复，须有相应 native 回归，涉及设备行为则另列 A3 结果。
 - 后续依赖：S2、S3 均以本步确认后的合同为准。
 
 验证脚本设计：
@@ -96,9 +98,9 @@ S2 尚未获得执行授权。
 | --- | --- | --- |
 | s1_check_baseline.py | 主机 Python + Git | 核对实际基线、Pass/默认配置及测试映射，区分已有能力与真实缺口 |
 | s1_check_legacy_lowering.py | 已构建 TVM/专仓，无需 NPU | 基础 Vector/GEMM/CV 的 legacy lowering 与确认后的基线回归；按支持的合同验证生成代码 |
-| s1_run_baseline_npu.py | A2/A3 NPU | 运行本步确认的基准算子，数值与重复 launch 正确；分别保存 A2、A3 的基线记录 |
+| s1_run_baseline_npu.py | A3 NPU | 运行本步确认的基准算子，数值与重复 launch 正确；保留 S1 历史记录 |
 
-### S2 A2/A3 能力、任务图与 solver 合同
+### S2 A3 能力、任务图与 solver 合同
 
 - 明确 UB/L1/L0 各池可用预算、合法 core/PIPE/搬运路由和事件域；
   不复用 950 容量、延迟或 flag spill 参数。
@@ -117,7 +119,7 @@ S2 尚未获得执行授权。
 | --- | --- | --- |
 | s2_check_solver.py | 主机 Python + solver 依赖，无需 TVM/NPU | DAG、RAW/WAR/WAW、资源冲突、配置寄存器 phase 的纯协议/约束、无解和受控超时；结果通过独立 verifier |
 | s2_check_task_ir.py | 已构建 TVM/专仓，无需 NPU | 任务 effects、int32 边界、动态尾界、非零 elem_offset/连续切片、别名及 legacy 隔离；错误结果被拒绝 |
-| s2_check_capabilities.py | 主机 Python，无需 NPU | 分别验证 A2/A3 能力模型的预算、对齐、PIPE/搬运与事件域一致性；不把模型检查当作设备实测 |
+| s2_check_capabilities.py | 主机 Python，无需 NPU | 验证 A3 能力模型的预算、对齐、PIPE/搬运与事件域一致性；不把模型检查当作设备实测 |
 
 ### S3 循环接口与 Persistent 安全性
 
@@ -129,7 +131,7 @@ S2 尚未获得执行授权。
   Task 内部条件与候选任务选择分别分析，保持完整任务同步边界及单 PIPE/core 合同；
   未支持的控制流明确拒绝，PerCoreTask 仍后置。
 - 验收：FFI/IR 注解与任务域覆盖测试通过，旧调用兼容；Persistent 的已有安全合同
-  与新增尾块分别在 A2/A3 做数值验证。注解透传不代表 wave 流水已通过，后者归 S5。
+  与新增尾块在 A3 做数值验证。注解透传不代表 wave 流水已通过，后者归 S5。
 
 验证脚本设计：
 
@@ -137,7 +139,7 @@ S2 尚未获得执行授权。
 | --- | --- | --- |
 | s3_check_loop_ir.py | 已构建 TVM/专仓，无需 NPU | Parallel/Pipelined 参数兼容、注解位置、Task/Stage 合法与非法组合 |
 | s3_check_persistent_domain.py | 已构建 TVM/专仓，无需 NPU | 从实际生成循环核对 tile 恰好覆盖一次；检查少于 core、非整除 group、单/多 wave 和非法域诊断 |
-| s3_run_loop_npu.py | A2/A3 NPU | 验证 Persistent 安全合同、尾块、有效 tile 输出及重复调用；不据此宣称 wave 流水已支持 |
+| s3_run_loop_npu.py | A3 NPU | 验证 Persistent 安全合同、尾块、有效 tile 输出及重复调用；不据此宣称 wave 流水已支持 |
 
 ### S4 单核约束规划与最终同步协议验证
 
@@ -151,7 +153,7 @@ S2 尚未获得执行授权。
 - 将受支持任务图的 RAW/WAR/WAW 及最终地址复用依赖映射到最终代码，逐条确认
   由合法 PIPE 隐式顺序、barrier 或 set/wait 完成关系覆盖；配对正确不能代替依赖覆盖。
 - 验收：策略配置和缓存隔离、ABI、拒绝条件、最终事件协议及 legacy 回归通过；
-  A2、A3 分别完成数值、尾块和重复 launch 验证后，才能标记本步验收完成。
+  A3 完成数值、尾块和重复 launch 验证后，才能标记本步验收完成。
 
 验证脚本设计：
 
@@ -159,26 +161,26 @@ S2 尚未获得执行授权。
 | --- | --- | --- |
 | s4_check_pipeline_ir.py | 已构建 TVM/专仓，无需 NPU | strategy/cache 隔离、stage/order 的展开 ABI、单次规划/注入及不支持输入的诊断 |
 | s4_check_sync_coverage.py | 已构建 TVM/专仓，无需 NPU | 最终依赖覆盖、事件配对和活跃槽复用；注入缺 wait/重复 set 等负例必须失败 |
-| s4_run_vector_npu.py | A2/A3 NPU | GM→UB→Vector→GM，覆盖数值、尾块和重复 launch；legacy 与 constraint 分别执行并比较 |
+| s4_run_vector_npu.py | A3 NPU | GM→UB→Vector→GM，覆盖数值、尾块和重复 launch；legacy 与 constraint 分别执行并比较 |
 
 ### S5 跨迭代流水和多缓冲
 
-- 引入经 A2/A3 校准的 latency/II、多个 stage 和旧 injector 的多版本展开。
+- 引入经 A3 校准的 latency/II、多个 stage 和旧 injector 的多版本展开。
 - 回归已有 L1 分形 tail/stride 修复；仅补入 S1 确认仍缺失的必要修复。
 - 计算真实 padding、对齐、临时区及物理版本占用；验证跨迭代事件活跃期。
 - 开放手动 Stage/enable_offset 前，验证适用配置寄存器的 reaching setter、入口值
   和下一次物理覆盖顺序；条件 setter 或未知 effects 保持保守依赖。
 - 单独验收带 guard 的 Persistent wave 流水，不由 S3 的接口测试推导其正确性。
 - 验收：0/1/N trip、trip 少于 stage 数、非整除尾块、1/2/3 版本及容量边界通过；
-  A2/A3 数值、稳定性与同条件性能记录完整，性能收益不预设。
+  A3 数值、稳定性与同条件性能记录完整，性能收益不预设。
 
 验证脚本设计：
 
 | 入口 | 环境 | 独立验证内容与通过条件 |
 | --- | --- | --- |
 | s5_check_versions_ir.py | 已构建 TVM/专仓，无需 NPU | 实际版本/容量、L1 tail/stride、事件活跃期及配置寄存器跨 Stage/迭代覆盖；错误状态被拒绝 |
-| s5_run_pipeline_npu.py | A2/A3 NPU | 0/1/N trip、短循环、1/2/3 版本及尾块；数值正确且无复用污染/挂起 |
-| s5_run_persistent_pipeline_npu.py | A2/A3 NPU | 独立验证带 guard 的单/多 wave 流水，全部有效 tile 恰好执行一次且尾 wave 同步正确 |
+| s5_run_pipeline_npu.py | A3 NPU | 0/1/N trip、短循环、1/2/3 版本及尾块；数值正确且无复用污染/挂起 |
+| s5_run_persistent_pipeline_npu.py | A3 NPU | 独立验证带 guard 的单/多 wave 流水，全部有效 tile 恰好执行一次且尾 wave 同步正确 |
 
 ### S6 生命周期与 owner/epoch
 
@@ -190,7 +192,7 @@ S2 尚未获得执行授权。
   如采用主仓新合同，须显式正版本数并验证完整物理区间，不能改变 legacy 地址语义。
 - 本步先在 bridge 上分析和校验，不自动从旧 injector/同步器夺取生成所有权。
 - 验收：readiness/reuse、guard、zero-trip 和跨 tile 状态测试通过；
-  新旧逻辑与最终物理别名关系一致，A2/A3 重复运行和复用压力测试通过。
+  新旧逻辑与最终物理别名关系一致，A3 重复运行和复用压力测试通过。
 
 验证脚本设计：
 
@@ -198,16 +200,16 @@ S2 尚未获得执行授权。
 | --- | --- | --- |
 | s6_check_owner_ir.py | 已构建 TVM/专仓，无需 NPU | owner/epoch、地址/版本/别名、raw pointer 与分配元数据；错误 owner 被拒绝，可选精确 placement 启用时拒绝未知项 |
 | s6_check_lifecycle_guards.py | 已构建 TVM/专仓，无需 NPU | 条件、可空、嵌套/连续循环及退出路径的 readiness/reuse；不存在无来源 wait |
-| s6_run_reuse_npu.py | A2/A3 NPU | 随机 scratch、跨 tile、多次 launch 复用压力；数值正确且无跨轮污染 |
+| s6_run_reuse_npu.py | A3 NPU | 随机 scratch、跨 tile、多次 launch 复用压力；数值正确且无跨轮污染 |
 
 ### S7 新同步生成器
 
-- 先在固定保守调度下引入新生成器，再逐步开放重排；按 A2/A3 事件域分配并诊断。
+- 先在固定保守调度下引入新生成器，再逐步开放重排；按 A3 事件域分配并诊断。
 - 消费最终内存规划的地址/大小，重建物理别名和复用边；不能沿用早期逻辑图代替。
 - 覆盖 GM workspace 的生产通知和消费释放；同一依赖只由一个自动同步器负责。
   VS/标量副作用未覆盖前，不移除其旧保护。
 - 验收：核内/跨核 set/wait、事件预算、显式 ID 冲突、初始化与 drain、workspace
-  双向握手通过；A2/A3 长流水、多 core、重复 launch 无死锁或串扰。
+  双向握手通过；A3 长流水、多 core、重复 launch 无死锁或串扰。
 
 验证脚本设计：
 
@@ -215,7 +217,7 @@ S2 尚未获得执行授权。
 | --- | --- | --- |
 | s7_check_event_budget.py | 已构建 TVM/专仓，无需 NPU | 事件域上限前/恰好上限/超限、显式 ID 冲突和物理地址别名；正确分配或明确拒绝 |
 | s7_check_handoff_ir.py | 已构建 TVM/专仓，无需 NPU | GM workspace 生产通知/消费释放、初始化/drain、VS/标量保护及同步单一所有权 |
-| s7_run_sync_stress_npu.py | A2/A3 NPU | 长流水、多 core、重复 launch 与并发 stream；进程级超时检测，无挂起/串扰 |
+| s7_run_sync_stress_npu.py | A3 NPU | 长流水、多 core、重复 launch 与并发 stream；进程级超时检测，无挂起/串扰 |
 
 ### S8 完整调度与混合 C/V 接管
 
@@ -223,7 +225,7 @@ S2 尚未获得执行授权。
 - 明确接管边界：同一区域退出旧 injector/旧自动同步，不叠加新旧版本管理。
 - 保留 A2/A3 GM workspace 路径，不把 950 直连、VF 或 flag spill 当作可移植能力。
 - 验收：GEMM、归约、GEMM+Vector/Attention 等代表性混合算子与旧 Expert 回归通过；
-  A2/A3 各自记录编译、host 与设备耗时及回归情况。PTO 若纳入，另列独立验收。
+  A3 记录编译、host 与设备耗时及回归情况。PTO 若纳入，另列独立验收。
 - 完成后仍保持 opt-in；是否改变默认策略另由用户决定。
 
 验证脚本设计：
@@ -231,8 +233,8 @@ S2 尚未获得执行授权。
 | 入口 | 环境 | 独立验证内容与通过条件 |
 | --- | --- | --- |
 | s8_check_integration_ir.py | 已构建 TVM/专仓，无需 NPU | 接管区域只保留一套规划/版本/同步；保留 A2/A3 搬运与 legacy 合同，不出现 950 专属调用 |
-| s8_run_workloads_npu.py | A2/A3 NPU | GEMM、归约、混合 C/V 和旧 Expert 回归；所有定义输出满足 golden，重复调用稳定 |
-| s8_benchmark_npu.py | A2/A3 NPU | 正确性前置通过后，在同输入/设备/计时法下分别记录编译、host、设备耗时与回归；不预设提速结论 |
+| s8_run_workloads_npu.py | A3 NPU | GEMM、归约、混合 C/V 和旧 Expert 回归；所有定义输出满足 golden，重复调用稳定 |
+| s8_benchmark_npu.py | A3 NPU | 正确性前置通过后，在同输入/设备/计时法下分别记录编译、host、设备耗时与回归；不预设提速结论 |
 
 ## 5. 验证脚本交付规范
 
@@ -248,14 +250,14 @@ S2 尚未获得执行授权。
   复用已有 pytest 时精确选择本步用例，保留原断言而非再造一套相同测试。
   各入口可共享薄 runner 的环境检查、参数和报告逻辑，不重复建设测试框架；
   纯主机入口不导入 tilelang/TVM，native/NPU 入口要求原生构建与当前源码匹配。
-- NPU 入口接受显式 `--platform a2|a3`、`--device`、`--seed`、`--repeat`、
-  `--timeout` 和 `--output`。核对实际设备与平台，A2/A3 独立运行，不能仅改标签
+- NPU 入口接受显式 `--platform a3`、`--device`、`--seed`、`--repeat`、
+  `--timeout` 和 `--output`。本环境使用 a3；保留 a2 参数兼容的旧入口也不得仅改标签
   就将同一设备结果记成两代通过。主机入口只要求与其验证有关的参数。
 - 退出码约定：0 为 PASS，1 为验证失败，2 为环境/参数错误，3 为整体 SKIP，
   124 为超时。包装 pytest 时需明确转换；未收集用例或全部跳过不能报告 PASS。
 - PASS 仅表示该入口全部必跑用例实际通过。部分必跑用例未执行、仅 xfail、
   无设备或脚本未实现均不能记成 PASS；报告区分 FAIL、BLOCKED、SKIP 和
-  NOT_IMPLEMENTED，整步验收还要核对所有要求的入口及 A2/A3 结果。
+  NOT_IMPLEMENTED，整步验收还要核对所有要求的入口及 A3 结果。
 - `--output` 写入机器可读 JSON，记录步骤、实际提交号、命令、平台/设备、
   源码脏状态、调度配置、Python/TVM/CANN/torch_npu 等适用环境版本、随机种子、
   用例通过/失败/跳过数和错误摘要。
@@ -275,10 +277,9 @@ S2 尚未获得执行授权。
 
 ```bash
 # 已构建 TVM/专仓，无需 NPU
-python scripts/ascend_migration/s4_check_pipeline_ir.py --platform a2 --output /tmp/s4-ir.json
+python scripts/ascend_migration/s4_check_pipeline_ir.py --platform a3 --output /tmp/s4-ir.json
 
-# 分别在实际 A2 和 A3 环境运行；平台参数必须与设备匹配
-python scripts/ascend_migration/s4_run_vector_npu.py --platform a2 --device 0 --seed 0 --repeat 100 --timeout 120 --output /tmp/s4-a2.json
+# 在实际 A3 环境运行；平台参数必须与设备匹配
 python scripts/ascend_migration/s4_run_vector_npu.py --platform a3 --device 0 --seed 0 --repeat 100 --timeout 120 --output /tmp/s4-a3.json
 ```
 
@@ -293,15 +294,15 @@ python scripts/ascend_migration/s4_run_vector_npu.py --platform a3 --device 0 --
 | 检查 | 真实命令或工具、环境、结果、失败原因 |
 | 验证脚本 | 本步实际交付的入口、最短运行命令、适用环境及 JSON/日志路径；设计、已交付、已执行分别记录 |
 | native | 构建/注册/lowering/codegen 是否验证，不能由 Python 语法检查代替 |
-| A2 / A3 | 各自的 CANN、设备、用例和结果；没有运行则标明未运行 |
+| A3 | 实际 CANN、设备、用例和结果；没有运行则标明未运行；A2 历史记录不作为门槛 |
 | 发布 | 远端分支、本步骤交付链接与推送结果；提交详情查看 Git 历史 |
 | 审核 | 用户反馈、修复内容、是否明确允许下一步 |
 
 验证逐层推进：数据/solver → 静态 TIR → native 构建/lowering → 代码生成 →
-A2/A3 数值与同步压力 → 性能。优先验证真实依赖、协议和覆盖范围，不固定具体
+A3 数值与同步压力 → 性能。优先验证真实依赖、协议和覆盖范围，不固定具体
 flag 编号或整份生成源码。可能挂起的设备用例使用独立进程控制超时。
 
-各步骤在对应的主机、native 或 Linux/CANN A2/A3 环境中验收；缺少相应运行结果时
+各步骤在对应的主机、native 或 Linux/CANN A3 环境中验收；缺少相应运行结果时
 保持“待环境验证”。进展随交付更新第 3 节，并按本节记录实际验证证据。
 
 ## 7. S1 实际交付与验证记录
@@ -309,7 +310,7 @@ flag 编号或整份生成源码。可能挂起的设备用例使用独立进程
 ### 7.1 范围与有效决策
 
 - 用户已确认 S0 计划并授权 S1。工作分支和固定源码基线保持第 1 节所列值；
-  没有开始 S2，没有新增调度策略、solver 或 Task/Stage 接口，没有改变默认配置。
+  S1 交付时未开始 S2，也未新增调度策略、solver 或 Task/Stage 接口，默认配置不变。
 - 技术参考第 11 节补齐实际 Pass 顺序、配置、旧 FFI、资源归属、workspace 参数、
   Persistent、L1 版本及地址复用的源码/回归映射。已有资源归属和 workspace 保护复用，
   不重复迁入；未知调用、复合 PIPE、寄存器状态及完整 effects 合同留给后续步骤。
@@ -342,7 +343,8 @@ A2/A3 各 36 项通过，并纳入下列各 105 项的完整 native 入口。
 
 ### 7.3 已交付入口与运行结果
 
-运行前在仓库根目录执行 `source set_env.sh`。native/NPU 入口使用本次显式构建的记录：
+以下保留 S1 当时执行的命令，含 A2 历史记录；后续不要求重跑 A2 专属检查。
+运行前在仓库根目录执行 `source set_env.sh`。native/NPU 入口使用该次显式构建的记录：
 
 ```bash
 export TL_ASCEND_MIGRATION_BUILD_MANIFEST=/tmp/ascend-migration-s1/build/native-build.json
@@ -365,7 +367,7 @@ python scripts/ascend_migration/s1_run_baseline_npu.py --platform a2 --device 0 
 | 偏移用例定向设备复验 | PASS，DMA/atomic/fill 各实编一次、同一 kernel 100 轮 launch/golden | `offset-repeat100.json` |
 | A3 NPU | PASS，单次完整入口 14/14、0 failed/skip；14 次真实冷编译，同一 kernel 各 100 次 launch/golden，共 1400 次 | `s1-a3.json`，artifacts 路径见该报告 |
 | 实际 A3 误标为 A2 的负例 | 按预期 BLOCKED、退出 2；0 编译/launch，全部 14 项未执行 | `platform-a2-negative.json` |
-| A2 NPU | 未运行／待环境验证，本机没有 A2 | 无设备验收结果 |
+| A2 NPU | 历史未运行；用户已取消本环境的 A2 验收门槛 | 不作为后续执行要求 |
 
 上表证据文件均相对 `/tmp/ascend-migration-s1/`。
 
@@ -405,8 +407,92 @@ JSON/JUnit、生成源码、二进制和大日志均不提交。
 
 ### 7.4 审核与剩余验证
 
-S1 候选实现、入口和审计记录已交付供独立审核；A3 已完成上述验收用例，
-A2 设备验收仍待目标环境补齐，S1 不标为全面验收完成。
+S1 实现、入口和审计记录已交付；A3 已完成上述验收用例。用户已明确后续只要求 A3
+验证并授权开始 S2；历史 A2 设备未运行，不再作为 S1 的待验收条件。
 本步提交只推送到 `erhsh/codex/ascend-a2a3-scheduler-migration`，提交详情查看该分支
 Git 历史，推送结果在最终交付报告列出。不创建 PR、不合并、不强推；推送后停止，
 等待用户审核和明确的下一步指令。
+
+## 8. S2 实际交付与验证记录
+
+### 8.1 范围和接口
+
+- 用户已明确授权 S2，并取消后续 A2 专属测试与验收门槛；实现起点为 S1 提交
+  `685bce5e`，第 1 节固定源码基线和主仓参考提交均不改变。
+- 新增显式只读 `AnalyzeAscendSchedule(PrimFunc, platform="A3") -> Map` 和旧注册
+  `tl.transform.AnalyzeAscendSchedule`。图保留 task/group/loop/guard/storage 与依赖，
+  不修改原 IR，不接入 `phase.py`，不新增 PassContext 策略或默认行为。
+- 共用原有资源归属分类、workspace 解析和 injector 分组规则；共享抽取保持旧逻辑。
+  首片严格区分受审计的可调度组、保守分析结果与未知 effects 的明确拒绝。
+- 新增独立 A3 capability profile，以及纯数字 straight/modulo solver 与不依赖 Z3
+  的结果 verifier。整数协议不等于已生成正确的多版本、流水或同步代码；S3/S4 及
+  后续执行接管未开始。具体边界见技术参考第 12 节及实现骨架。
+- Z3 只作为 `ascend-scheduler` 可选 extra；legacy 导入不探测 Z3。当前测试依赖安装
+  在 `/tmp/ascend-migration-s2/venv`，未修改全局 Python 环境。
+
+### 8.2 审计限制与修正记录
+
+能力数据来自当前 AscendC 编译器预算和 CANN 9.1/dav-2201 声明，不是设备测量。
+跨核事件的四位编码不能证明可自由分配的槽位，因此本步仍不支持跨核调度预算。
+旧 auto allocator 的 UB 超量探针曾退出 139，根因未定位；正式容量负例验证新增
+capability verifier 的结构化拒绝，不把该崩溃当成通过，不修改 default linear 行为。
+
+实现评审复现过一个纯数字假 UNSAT：带 int64 完成时间上界和固定 manual stage 时，
+II=1 可行，但二分搜索 `[1,16]` 会错误跳过该解。现改为全局 deadline 内升序搜索，
+只有完整指定域均不可满足才返回 UNSAT，并永久保留该回归。还区分了 Z3 真正缺失、
+导入损坏、UNKNOWN 和 TIMEOUT，独立 verifier 对故意漏掉资源对的候选仍能拒绝。
+
+原生分析评审针对 managed GM operand、未声明 local pointer、view 扩张 allocation、
+显式窄化 cast、DMA 参数隐藏内存/opaque effects、未知语义 attr 和条件 allocation
+补入拒绝或保守处理。循环图仅声明单迭代分析，要求顺序迭代，不冒称已覆盖跨迭代
+readiness/reuse；这些情况不影响 legacy 接受范围。
+
+### 8.3 验证入口与结果
+
+以下为本步交付的三个入口，均可从仓库根目录独立运行；native 入口要求显式构建后
+的源码身份 manifest，脚本不自动重编译、安装依赖或修改全局配置。
+
+```bash
+source set_env.sh
+export TL_ASCEND_MIGRATION_BUILD_MANIFEST=/tmp/ascend-migration-s2/native-build.json
+
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s2_check_solver.py --output /tmp/ascend-migration-s2/solver.json
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s2_check_capabilities.py --platform a3 --output /tmp/ascend-migration-s2/capabilities-a3.json
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s2_check_task_ir.py --platform a3 --output /tmp/ascend-migration-s2/task-ir-a3.json
+```
+
+| 检查 | 当前实际结果 | 证据 |
+| --- | --- | --- |
+| 纯 solver / verifier | PASS，105 项，含 13 项独立小规模穷举 oracle | `solver.json` |
+| A3 capability | PASS，42 项，包含模型、预算、对齐、路由和事件域负例 | `capabilities-a3.json` |
+| runner 隔离回归 | PASS，S1 20 项及 S2 11 项；覆盖必跑空文件不能躲在其他通过项后 | `runner-tests.xml` |
+| native Task IR / FFI / legacy | PASS，171 项：Task IR 41、capability IR 16、solver FFI 9、S1 回归 105；无失败/跳过/漏必跑项 | `task-ir-a3.json` |
+
+上表证据位于 `/tmp/ascend-migration-s2/`。原生构建沿用固定 TVM 提交的已补丁临时
+副本，manifest 核验 C++/TVM 源码、patched Python、CMakeCache、日志和实际库路径。
+新 API 不产生设备执行代码，本步未运行新的 NPU 调度验收，也不要求 A2 验证。
+原生 source SHA256 为
+`46aea1e2d37fee143fe4e3eb77b7c1575d7be6ee952075965b628334c9236ca3`，
+153 个 C++/header 等构建输入；最终构建日志为
+`build/native-final-boundary-build.log`，最终 JUnit/日志目录为
+`task-ir-a3-artifacts-xxbb1dwu`。验证期间源码处于 S1 提交上的 dirty 工作区，
+报告保留当时的 commit/dirty 状态与源码哈希；不能把报告中的旧提交号误当成
+最终提交前没有修改源码。
+
+初次 native 运行的测试 IR 构造错误（单元素 SeqStmt、缺少 IfThenElse 的 else 参数）
+诊断保留在 `task-ir-a3-first-failure.json`；修正后 166 项通过的中间结果保存在
+`task-ir-a3-before-final-boundary-checks.json`。最终 171 项另包含 nested Block 初始化/地址提示
+守恒、Float/Bool count 拒绝和 cold legacy/Z3 隔离，不用较早报告替代最终验收。
+
+runtime 依赖为原环境 Python 3.12.9，隔离 venv 中实际 Z3 为 4.15.4.0；真实缺 Z3
+的原环境入口另验证为 BLOCKED/2，见 `solver-missing.json`。runner 回归命令为：
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /tmp/ascend-migration-s2/venv/bin/python -m pytest -q testing/python/ascend_migration/test_s1_runners.py testing/python/ascend_migration/test_s2_entrypoints.py --junitxml=/tmp/ascend-migration-s2/runner-tests.xml
+```
+
+修改的 Python 文件 lint、新 Python 的 100 列格式检查，以及三个新 C++ 文件的
+clang-format 检查均通过；`git diff --check` 通过。格式记录为
+`format-report.json` / `format-report.md`，产物不入库。
+本步只提交推送 S2，提交详情查看分支 Git 历史，推送结果由最终报告列出；
+等待用户审核，不进入 S3。

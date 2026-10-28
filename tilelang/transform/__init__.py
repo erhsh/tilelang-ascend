@@ -49,6 +49,16 @@ def PipelinePlanning():
     return _ffi_api.PipelinePlanning()  # type: ignore
 
 
+def AnalyzeAscendSchedule(func: tvm.tir.PrimFunc, platform: str = "A3") -> tvm.ir.Map:
+    """Inspect audited lowered calls without changing IR or invoking a scheduler.
+
+    The returned legacy TVM containers retain symbolic PrimExpr footprints and
+    guards. They are not an already numeric solver problem or pipeline ABI.
+    Unsupported effects are diagnosed only by this explicit analysis entrypoint.
+    """
+    return _ffi_api.AnalyzeAscendSchedule(func, platform)  # type: ignore
+
+
 def LayoutInference():
     """LayoutInference
 

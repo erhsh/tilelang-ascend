@@ -6,7 +6,10 @@
 随后再迁移 owner/epoch、版本管理及新的同步协议。每个阶段独立验收。
 
 分阶段交付、验证脚本与人工审核见 [migration-plan.md](migration-plan.md)。
-下列新接口和 Pass 为设计提案。
+未注明已实现的接口和 Pass 仍为设计提案；S1 审计见第 11 节，S2 合同与交付见第 12 节。
+
+用户已明确当前及后续只要求 A3 测试和验收。本文的 A2/A3 目标范围保留既有后端
+兼容性，不要求新增 A2 专属测试，也不把 A2 历史未运行当作步骤验收缺口。
 
 ## 1. 基线与范围
 
@@ -267,10 +270,10 @@ A2/A3 的对齐、容量及可用 pool 由能力表决定，不复制 950/SS/SIM
 | 阶段 | 可独立评审的交付 | 完成标准 |
 | --- | --- | --- |
 | M0 | 配置/能力合同、审计过的操作效果、只读任务图、solver 协议与独立 verifier | legacy 无行为变化；依赖、别名、预算和未支持情况能被构造测试验证 |
-| M1 | 新规划器替换单核静态循环的旧规划策略，单阶段/单版本，复用旧 injector/同步器并验证最终 set/wait 协议 | 单 Vector 路径正确；无双规划/双展开；无活跃事件槽覆盖；默认行为不变；A2/A3 数值与重复运行通过 |
+| M1 | 新规划器替换单核静态循环的旧规划策略，单阶段/单版本，复用旧 injector/同步器并验证最终 set/wait 协议 | 单 Vector 路径正确；无双规划/双展开；无活跃事件槽覆盖；默认行为不变；A3 数值与重复运行通过 |
 | M2 | 接入 A2/A3 latency/II、跨迭代阶段与旧 injector 多版本，扩展最终协议验证 | 短循环、尾块、0/1/N 次循环、存储预算、事件复用和最终展开结果验证通过 |
 | M3 | 迁入 owner/epoch、alias-aware 版本计划和 readiness/reuse 验证 | 初始化、消费、复用和退出路径完整；可空/条件循环不会生成无对应 set 的 wait |
-| M4 | 在固定、保守调度下接入新同步生成，再逐步开放重排 | 新旧同步按区域单一所有权；A2/A3 事件预算/跨核 workspace 协议经实机验证 |
+| M4 | 在固定、保守调度下接入新同步生成，再逐步开放重排 | 新旧同步按区域单一所有权；A3 事件预算/跨核 workspace 协议经实机验证 |
 | M5 | 完整任务调度与新版本管理接管选定区域，扩展混合 C/V | 退出旧 injector/同步路径的区域有完整新后端合同；混合算子与旧 Expert 回归通过 |
 
 Persistent/循环接口增强可与 M0 并行，但单独验收；Task/Stage 的执行语义应与
@@ -337,7 +340,8 @@ PerCoreTask、条件 exact-once 分派和完整 stateful/grouped tile scheduler 
 
 ## 7. 文件和依赖清单
 
-以下新增路径及名字是实施提案；当前不包含对应实现。
+下表是分阶段的路径提案；其中已落地的 S2 部分以第 12 节实际接口为准，
+其余不代表已经实现。
 
 | 位置 | 计划改动 |
 | --- | --- |
@@ -397,7 +401,7 @@ strided-slice 回归，替换 950 专属指令和资源参数。
 
 纯数据与 solver 测试使用独立主机环境；TIR、FFI、lowering 和 codegen 测试
 要求与源码匹配的 TVM/专仓原生构建。设备验收要求 Linux/CANN、Bisheng、
-兼容的 torch_npu 及实际 A2/A3 设备，两代设备分别记录结果。
+兼容的 torch_npu 及实际 A3 设备；后续不要求 A2 验收，历史结果分别保留。
 仅编译生成代码不能替代数值、同步稳定性和性能验证。
 
 ## 10. 源码核对入口
@@ -581,8 +585,8 @@ manifest 记录 TVM 固定提交、两项 patch 的 SHA 和已应用状态，源
 TVM 的 Python 文件。native/NPU 入口依据 manifest 同时设置 `PYTHONPATH` 和
 `TVM_IMPORT_PYTHON_PATH`，并验证实际 `tvm.__file__` 来自该 checkout；不能把新的
 `.so` 与原仓未应用 slice-step patch 的 TVM Python 混用。入口还要求实际加载的
-TileLang/TVM 库来自 manifest 记录的本地构建。A2 host 检查使用 `--platform a2`；
-A2 数值与同步验收仍须在实际 A2 设备上单独运行 NPU 入口。
+TileLang/TVM 库来自 manifest 记录的本地构建。S1 历史 A2 host 记录保留；
+后续不要求 A2 专属检查或设备验收。
 
 ### 11.6 S1 的 elem_offset 重复累加修复
 
@@ -600,3 +604,111 @@ view 的 `elem_offset=16`、切片起点 5，原生 lowering 生成的地址是 
 同步策略或公开 API。零基址、双向非零基址、非零切片起点、连续 view 及 public
 tile 调用由 `test_ascend_migration_baseline.py` 的精确节点覆盖；正式结果以重建后
 native 和相应平台设备记录为准。
+
+## 12. S2：显式分析、能力与数值协议
+
+本节描述 S2 的实现合同；实际构建、检查命令和结果统一记录在迁移计划第 8 节。
+S2 不接入默认编译流程，不启用 constraint 策略，不发射 stage/order、版本或同步。
+原有 A2 编译路径保留；新增分析和本轮验证明确面向 A3。
+
+### 12.1 原生分析与任务边界
+
+Python 接口为 `AnalyzeAscendSchedule(func: PrimFunc, platform="A3") -> Map`，
+旧注册名为 `tl.transform.AnalyzeAscendSchedule`。实现位于
+`src/transform/ascend_schedule_analysis.cc`，而非不会被当前 CMake glob 收集的
+`common/*.cc`。输入 IR 和 attrs 不变，测试比较分析前后的结构相等。
+
+图保留调用级 task、不可拆 statement group、循环和 guard。所有 ID 按源码遍历
+生成；group 对应旧 injector 直接子语句的展开规则，后续 annotation 应按 group
+发射，不能把硬件调用数量误当成 injector 的 statement 数量。共享抽取只移动
+既有分类和分组规则；legacy pipeline 的行为由已有编译回归验证。
+
+操作归属与访问模式复用现有 `ResourceForCall`、`OperationConfig` 和
+`ResolveOperationConfig`，新适配器只补已经审计的物理 footprint 和副作用条件。
+首片允许 float16/float32、单行完整连续且合法对齐的 GM↔UB copy，以及受审计的
+managed fill/add。部分 copy helper 会执行 Duplicate、padding 和内部事件，
+因此动态 copy 尾块不能仅凭 `default_pipeline=MTE2` 被当成单 PIPE 可调度任务。
+已知多调用 group 保留组内顺序并标明不可调度；未知调用、raw code、未建模的
+配置状态或手写 mask/flag 明确诊断，不返回可被误用的部分成功图。
+
+访问使用 int64 字节半开区间，先递归提升内部索引运算，再构造端点。
+`tvm_access_ptr` offset 已包含 view 基址，不再次加 `elem_offset`。
+相同 data Var 的不同 view 和 dtype 进入同一 storage；不同名字不证明独立。
+未声明 noalias 的 GM 参数、显式地址重叠和无法证明不相交的动态范围保守保留依赖。
+这不是最终 MemoryPlanning 后的物理复用验证，后者仍留给后续同步接管。
+当前图明确声明 single-iteration 范围；含循环的 group 要求顺序迭代并不可调度，
+不能用同迭代的区间不相交证明跨迭代独立。无循环根 owner region 可以暴露子 group，
+但保留 parent group 和原 wrapper 映射，不能把它直接当作任意 For 的 injector ABI。
+
+### 12.2 A3 能力合同
+
+`ascend_schedule_capabilities.py` 可以直接按文件加载，不导入 TileLang/TVM/Z3。
+`get_capabilities("A3")` 提供 pool、allocation、route 和 local event 验证；
+未知平台或未审计路由明确拒绝，不改 legacy 对应路径。
+
+| pool | owner | 编译器预算（字节） | allocation alignment |
+| --- | --- | ---: | ---: |
+| shared.ub | V | 196352 | 32B |
+| shared.l1 | C | 524032 | 32B |
+| wmma.matrix_a | C | 65536 | 32B |
+| wmma.matrix_b | C | 65536 | 32B |
+| wmma.accumulator | C | 131072 | 32B |
+
+每版本 size 必须包含 layout padding 和 scratch，验证器另计算 allocation rounding
+及物理版本总占用。表中数值来自现有 codegen/allocator，不把与 nominal 容量的
+差额解释为已经证明的硬件保留区。native 夹具只独立核对 allocator 的有效边界、
+地址对齐和 codegen `InitBuffer`，不表示 Duplicate 等测试占位操作在所有 pool 都可执行。
+
+当前 CANN 9.1.0 对 `dav-2201` 声明 `QUE_MAX_EVENT=8`，核内 ID 为 0..7；domain
+包含 core 实例与有向 PIPE pair，reserved ID 按域扣除。首片仅开放 Vector 侧
+MTE2/V/MTE3 的有向不同 PIPE 组合，同 PIPE 顺序另行处理。声明可编码不等于全部空闲，
+有隐藏内部事件或未知状态的 helper 不因此获准调度。
+跨核四位 ID 编码不证明存在 16 个可自由分配槽，故其预算仍未知且不支持。
+`timing_model=None`，不迁入 950 latency、容量、直连或 spill 参数。
+
+新增 verifier 对超预算给出明确拒绝。默认 legacy linear 策略仍按已有
+`check_overflow=false` 行为运行，不添加新的拒绝条件。审计时旧 auto allocator 的
+UB 超量探针曾退出 139，根因未定位；不能把它记成容量错误诊断通过，正式负例先验证
+新 capability 接口的拒绝行为。
+
+### 12.3 Solver 与独立结果验证
+
+`ascend_z3_scheduler.py` 是只使用标准库的单文件模块，首次显式求解才导入 Z3。
+host 通过 `spec_from_file_location` 加载并登记 `sys.modules`，避免普通 package
+导入先初始化 TileLang/TVM。可选 extra 为
+`ascend-scheduler: z3-solver>=4.13.0,<4.15.5`，范围依据固定主仓的依赖声明；
+不加入基础 requirements，不修改全局环境。
+
+请求为普通整数/数组组成的 schema version 1：
+
+- 公共字段包括 mode、latencies、iis、resource_flags、data/resource/owner/PIPE
+  依赖，以及 timeout_ms 和 seed；时序输入都是 synthetic 提示，不是硬件性能预测。
+- `data_deps=(u,v,distance,gap)` 表示
+  `start[v]+distance*II >= start[u]+gap`；负 distance `-b-1` 引用 buffer b 的版本数。
+  gap 是请求已经明确给出的最小间隔，不能由 solver 猜测未建模的真实 effects。
+- modulo 提供有限的 inclusive II 域、buffer 的物理字节数、容量组、版本上限和
+  可选 manual stages。寄存器 phase 使用独立的 `(u,v,wrap,gap)`，wrap 仅 0/1，
+  不能把寄存器状态当作普通 buffer 多版本化。
+
+结果区分 SAT、UNSAT、TIMEOUT、UNKNOWN、MISSING_DEPENDENCY 和 ERROR。
+非法请求单独抛参数错误；缺少 Z3 与安装损坏分开处理，不返回未验证的顺序调度。
+UNSAT 仅表示给定有限域内所有候选均不可满足。搜索遵守全局 deadline；不能在带
+int64 完成时间上界的问题上假定 II 可行性单调并用二分跳过候选。
+
+SAT 返回 raw starts、II、order 和 buffer_versions。modulo 顺序按 phase 升序、
+stage 降序、源码顺序恢复；不隐式归零而破坏 manual stage 的意义。
+独立 verifier 不调用 Z3，不复用 solver 的约束构造函数，重新检查覆盖、整数域、
+依赖、从 mask 重建的资源互斥、容量、PIPE/stage 和寄存器 phase/tie 规则。
+只有验证成功的候选才能返回 SAT；这些数字结果不代表物理多版本或 wave 执行已验收。
+
+`ascend_schedule_solver_ffi.register_solver()` 通过旧 `tvm.register_func` 显式注册
+`tl.ascend.solve_schedule`，严格转换 TVM 数值 containers，拒绝符号表达式和非字符串
+字段名；不自动从 Task IR 求解，不覆盖已有用户回调。legacy 初始化不探测或导入 Z3。
+
+### 12.4 验证分层
+
+三个独立入口分别验证纯 solver、原生 Task IR 和纯 host capabilities；共同使用
+S1 runner 的退出码、JUnit/JSON、缺依赖与超时约定，S2 报告显式记录 step。
+原生入口在新 C++ 重建完成后核对源码身份和实际库加载路径。缺依赖、未知结果、
+受控超时、损坏候选解和未执行必跑用例均不能冒充 PASS。
+本步没有新的 NPU 执行路径，S2 结果不得被描述为新调度器的 A3 设备验收。

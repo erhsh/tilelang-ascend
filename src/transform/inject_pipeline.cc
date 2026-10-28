@@ -28,6 +28,7 @@
 
 #include <unordered_set>
 
+#include "./common/ascend_pipeline_structure.h"
 #include "support/utils.h"
 #include "tir/schedule/utils.h"
 #include "tir/transforms/ir_utils.h"
@@ -987,24 +988,13 @@ private:
     auto f_add_child = [&](const Stmt &child) {
       original_order.push_back(MakeBlock(child, buffer_data_to_buffer_));
     };
-    for (size_t i = 0; i < pipeline_body_seq->seq.size(); i++) {
-      const auto *nested_block_realize =
-          pipeline_body_seq->seq[i].as<BlockRealizeNode>();
-      if (nested_block_realize && is_one(nested_block_realize->predicate) &&
-          nested_block_realize->block->body->IsInstance<SeqStmtNode>()) {
-        const Block &nested_pipeline_block = nested_block_realize->block;
-        ICHECK(nested_pipeline_block->match_buffers
-                   .empty()); // match_buffer should have been lowered
-        for (const auto &buffer : nested_pipeline_block->alloc_buffers) {
-          pipeline_allocs.push_back(buffer);
-          buffer_data_to_buffer_.Set(buffer->data, buffer);
-        }
-        const auto *nested_seq = nested_pipeline_block->body.as<SeqStmtNode>();
-        for (size_t j = 0; j < nested_seq->seq.size(); j++) {
-          f_add_child(nested_seq->seq[j]);
-        }
+    auto groups = CollectAscendPipelineGroups(GetRef<SeqStmt>(pipeline_body_seq));
+    for (const auto &element : groups) {
+      if (element.allocation.defined()) {
+        pipeline_allocs.push_back(element.allocation);
+        buffer_data_to_buffer_.Set(element.allocation->data, element.allocation);
       } else {
-        f_add_child(pipeline_body_seq->seq[i]);
+        f_add_child(element.statement);
       }
     }
 
