@@ -415,3 +415,188 @@ strided-slice 回归，替换 950 专属指令和资源参数。
 设计采用当前源码确定的顺序；遇到旧 reference 与 phase.py 不一致时，以实际
 输入/输出合同和源码为准。新增变换不得跨越最终 MemoryPlanning、ResourceScopeVerify、
 InstructionSelection 与 MaskLegalize 的依赖边界。
+
+## 11. S1 基线审计映射
+
+本节以专仓固定基线 `43b0b69720f479894a13c02746599eccee5c5769` 为比较对象，
+区分已有合同、S1 回归和 S2 之后的设计。运行结果、实际源码身份和 A2/A3 验收状态
+统一记录在迁移计划中；下表列出源码与测试映射，不表示对应测试已经运行。
+目前的 `legacy` 指既有编译路径；第 2.2 节的 planner 策略配置仍是后续提案。
+
+### 11.1 编译顺序、配置与 FFI
+
+| 合同 | 已核对源码 | S1 固定内容 |
+| --- | --- | --- |
+| Phase 1 前置顺序 | `tilelang/engine/phase.py::LowerAndLegalize` | `AscendInferBufferScope` 先于带 `plan_vid_reduction=True` 的 `InjectTmpBuffer`，再运行 `AscendVidReduction`；工作区大小与最终 UB scope 一致 |
+| 调度桥接入口 | `tilelang/engine/phase.py::OptimizeForTarget` | allocation placement → CrossCorePipeline → CombineCV → 再次 placement → PipelinePlanning → 一次 InjectSoftwarePipeline；S1 不添加新规划器 |
+| 最终地址与同步 | 同上；`src/transform/ascend_memory_planning.cc` | MemoryPlanning 发布最终 `address_map/size_map` 后运行两类同步；不能在其后改变 buffer/access/alias 合同 |
+| 资源与后端末端 | 同上；`ascend_combinecv.cc::AscendResourceScopeVerifier` | 同步及最终相关 Simplify 后验证资源归属；仅 A2/A3 AscendC/auto 接 Selection → MaskLegalize；其后无 TIR 变换 |
+| CV 与跨核同步默认 | `src/transform/ascend_combinecv.cc::CombineCV::Substitute` | `tl.ascend_auto_cv_combine=true`；`tl.ascend_auto_cross_core_sync=false`；尊重有效显式 C/V scope |
+| 普通同步默认 | `src/transform/ascend_sync_insert.cc::Substitute` | `tl.ascend_auto_sync=false`；存在 Pass 调用不等于启用自动同步 |
+| 内存规划默认 | `ascend_memory_planning.cc::Substitute` | `tl.ascend_memory_planning=false` 选择既有线性策略，Pass 仍运行并发布映射 |
+| VS 默认与入口差异 | `ascend_sync_insert_vs.cc::Substitute`；`tilelang/transform/pass_config.py::_TARGET_PASS_DEFAULTS` | C++ 默认 false；Python JIT 对 PTO 补默认 true，AscendC/auto 不补；用户显式设置优先，不将裸 PassContext 与 JIT 目标默认混淆 |
+| mask 状态复用 | `ascend_vector_mask_legalize.cc`；`pass_config.py` | `tl.ascend_vector_mask_reuse=true`；未知 extern/raw code 会使现有 mask facts 失效，但这不构成完整调度副作用模型 |
+| 原生接口 | `tilelang/transform/_ffi_api.py`、`__init__.py`；对应 `TVM_REGISTER_GLOBAL` | 继续使用 `tvm.tir`、`tvm._ffi._init_api("tl.transform", ...)` 与 `.set_body_typed(...)`；Pass wrapper 参数与 native 注册配对；CMake 要求 C++17 |
+
+现有 workflow reference 的 Phase 1 顺序仍写成 InjectTmpBuffer → InferBufferScope，
+与本基线的实际调用不同。本次以源码为准记录，不把 reference 的步骤号当作执行顺序。
+
+### 11.2 资源分类与操作效果边界
+
+`ascend_combinecv.cc` 中的 `ResourceForCall` 同时服务于 CV 拆分和最终 verifier，
+会校验 copy 的局部存储 scope，并处理手写 flag/barrier、mask setter、未知 extern、
+`ascend_src_code` 与 `CustomizedCode`。未知代码没有可推断 owner 时要求显式 scope；
+在显式 scope 中保留 opaque 调用，只证明归属，不证明它可重排或没有隐藏副作用。
+GM scalar store 也必须有显式 owner，不能按附近操作推断后复制到两侧。
+
+`src/transform/common/operation_config.h` 已提供 `GetWorkspaceOpConfigs` 和
+`ResolveOperationConfig`。可选 workspace 在 InjectTmpBuffer 后可能插入或移除，
+后者按最终 access pointer 的读写 mask 恢复参数位置；现有 planner 和两类同步器均已消费。
+S1 复用这项保护，不重新维护一套 workspace 位置表。
+其中 operation 配置表和 workspace resolver 已位于可复用的 common header；
+资源分类器目前位于 CombineCV 文件内部，尚不是新的公开分析接口。后续若抽取为
+共享 helper，必须保持现有 CV/最终 verifier 的共同规则，并用既有回归证明行为一致。
+
+现有 `OperationConfig` 只记录参数读写、默认 PIPE 及 copy scope/owner，不能表达完整的
+物理 DMA 足迹、复合 helper 多 PIPE 占用、配置寄存器 effects 或 owner/epoch。
+例如 `gemm_v0` 的 `PIPE_M` 分类不证明 helper 内部只使用 M PIPE。现有同步器对未列入
+配置表的 extern 不恢复完整访问效果；显式资源 scope 不能填补这个缺口。
+这些是 S2 的 effect adapter/allow-list 与后续 constraint 入口需要补充的合同，
+不据此给 legacy 增加全局拒绝条件。未知调用、手写状态和复合 helper 在新规划器内
+应保守建模或明确拒绝，不能默认无副作用。
+
+### 11.3 旧地址注解与新 placement 的区别
+
+`tilelang/language/__init__.py::annotate_address` 将 Buffer 转为 data Var，并把 byte
+offset 写入 `address_map`；`AscendMemoryPlanning::SetPreAllocBuffer` 内部再以
+`name_hint` 索引预分配地址。这个旧合同没有新 placement 的版本数参数，也不等价于
+alias-aware storage identity。不同逻辑 Buffer 可以显式指向同一物理地址，现有同步
+回归正是用它验证复用依赖，S1 不把这种行为改为一律拒绝重叠。
+
+线性策略保留显式地址的原值，auto allocator 则把显式地址向上对齐到 32 bytes，
+两条路径不能假定对未对齐输入有相同结果。其他分配沿用各自的现有分配策略；
+现有容量检查也不是新约束规划器的完整
+资源预算证明。因此第 4 节要求的正版本数、全版本容量、alignment、placed pool 内
+不重叠及未放置项空闲区间分配，属于将来新 placement 的独立合同，不能当成旧 API
+已提供的能力。最终 `address_map/size_map` 消费和物理地址复用同步仍须保留。
+
+### 11.4 精确回归入口
+
+以下文件均位于 `testing/python/language/`。S1 native 入口按具体 node 选择既有断言，
+只做 TIR、FFI、lowering 和生成源码检查；不调用 Bisheng，也不创建 NPU tensor。
+
+| 合同 | 精确测试节点 |
+| --- | --- |
+| 默认 CV、opt-out 与显式 owner | `test_tilelang_ascend_resource_scope.py::{test_combine_default_and_explicit_opt_out,test_default_combine_lowers_vector_kernel_with_optional_scope,test_default_combine_preserves_explicit_owners_and_rejects_conflicts,test_unscoped_gm_scalar_store_is_not_inferred_from_context}` |
+| CV 后依赖与循环结构 | 同文件 `::{test_default_combine_keeps_dependencies_across_explicit_vector_blocks,test_default_combine_does_not_use_local_events_for_cross_core_dependencies,test_pipeline_with_nested_serial_loop_lowers_after_cv_split}` |
+| 同步后的资源验证与末端顺序 | `test_tilelang_ascend_vector_mask.py::{test_selection_runs_after_phase_two_and_legalizer_runs_last,test_resource_scope_is_explicit_nested_and_fail_closed,test_resource_scope_checks_automatic_barriers}` |
+| opaque 与手写状态 | 同文件 `::{test_opaque_symbol_changes_invalidate_mask_facts,test_resource_scope_normalizes_pipe_case_but_rejects_ambiguous_sync,test_target_scope_keeps_a5_and_pto_unchanged}` |
+| 可选 workspace 参数 | `test_tilelang_ascend_language_explicit_tmp.py::{test_every_workspace_api_has_the_target_specific_lowered_layout,test_optional_workspace_metadata_uses_the_lowered_call_layout,test_pto_select_metadata_tracks_shifted_src_and_destination}` |
+| Persistent 已有安全性 | `test_tilelang_ascend_language_persistent.py::{test_persistent_guard_for_static_domains,test_persistent_guard_for_dynamic_domain,test_persistent_rejects_invalid_static_arguments,test_partial_single_wave_guard_reaches_codegen,test_multi_wave_break_guard_reaches_codegen}` |
+| 物理 alias 和零次循环 | `test_ascend_sync_insert.py::{test_outstanding_reader_survives_another_pipe_read,test_new_reader_is_not_protected_by_old_alias_handoff,test_loop_exit_preserves_the_zero_trip_reader,test_optional_loops_compose_without_losing_the_entry_reader}` |
+| 一次循环退出 | `test_ascend_sync_insert_one_trip.py::{test_loop_exit_does_not_borrow_a_second_iteration_handoff,test_nested_loop_exit_keeps_a_writer_created_in_the_outer_iteration}` |
+| S1 Buffer view 与 offset | `test_ascend_migration_baseline.py::{test_copy_elem_offset,test_atomic_elem_offset,test_contiguous_view_offsets,test_tile_region_elem_offset,test_tile_fill_view_elem_offset}` |
+| S1 原生内存与 L1 物理版本 | 同文件 `::{test_l1_pipeline_physical_versions,test_legacy_memory_maps}` |
+
+`test_ascend_memory_planning.py` 的多项名称虽是 offset/IR 检查，其 helper 实际调用
+`tilelang.compile`；`test_ascend_sync_insert_zero_trip.py` 和 GEMM K-tail 流水回归也包含
+真实设备编译或 launch。因此它们不能仅凭名称放进无需 Bisheng/NPU 的 native 入口。
+设备回归由独立 NPU 入口选择，S1 补充的内存映射和 L1 版本检查直接运行原生 Pass。
+
+native 测试仍依赖 pytest、可导入的 TileLang/TVM 原生构建及 PyTorch：语言测试的
+`conftest.py` 与 TileLang adapter/profiler 会导入 torch；若该 PyTorch 环境加载了
+torch_npu 扩展，还需其 CANN runtime 动态库可加载。无需实际 NPU 不等于只安装 TVM
+即可，也不等于 `--help` 需要这些依赖。
+
+native 入口要求显式重建后记录的源码/库身份 manifest，验证当前项目原生源码、
+实际 TVM 构建源码、CMakeCache 与三个本地 `.so` 的哈希，并核对实际加载库路径。
+脚本不自动重建；`--help` 仅依赖标准库。已有 fixtures 内部的 A2/A3/PTO 参数保持原样，
+报告列出它们的配置范围；`--platform a2|a3` 不把这些 host 检查转换为相应平台的设备
+验收。必跑测试未执行、skip/xfail、零收集或 JUnit 缺失不能记录为 PASS。
+
+### 11.5 显式准备 native 构建身份
+
+以下 Bash 命令在仓库根目录运行，要求 Linux/CANN 环境、CMake/Ninja/C++ 编译器和
+原仓已完整初始化的 TVM 子模块。它使用独立的本地 TVM checkout，应用仓库内两项
+patch，嵌套依赖只读复用本地子模块；不联网、不改原 TVM checkout，也不安装依赖。
+请为 `S1_EVIDENCE` 选择新的输出目录；构建日志和 manifest 不提交到仓库。
+
+```bash
+set -euo pipefail
+export S1_EVIDENCE=/tmp/ascend-migration-s1
+export S1_TVM_SOURCE="$S1_EVIDENCE/build/tvm-source"
+mkdir -p "$S1_EVIDENCE/build"
+git clone --shared --no-checkout 3rdparty/tvm "$S1_TVM_SOURCE"
+git -C "$S1_TVM_SOURCE" checkout --detach c2921fdaf795b1103d21abc962e83a209c7258d7
+for patch in "$PWD"/3rdparty/patches/tvm_*.patch; do
+    git -C "$S1_TVM_SOURCE" apply --check "$patch"
+    git -C "$S1_TVM_SOURCE" apply "$patch"
+done
+python - <<'PY'
+import os
+from pathlib import Path
+import subprocess
+
+original = Path.cwd() / "3rdparty/tvm"
+source = Path(os.environ["S1_TVM_SOURCE"])
+entries = subprocess.check_output(["git", "-C", str(source), "ls-files", "--stage", "-z"])
+for entry in filter(None, entries.split(b"\0")):
+    metadata, name = entry.split(b"\t", 1)
+    if metadata.split()[0] != b"160000":
+        continue
+    relative = name.decode()
+    dependency = original / relative
+    if not dependency.is_dir() or not any(dependency.iterdir()):
+        raise SystemExit(f"Missing initialized local dependency: {dependency}")
+    destination = source / relative
+    if destination.exists():
+        destination.rmdir()  # Only an empty gitlink placeholder may be removed.
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.symlink_to(dependency, target_is_directory=True)
+PY
+cmake -S . -B build -G Ninja -DTVM_SOURCE_DIR="$S1_TVM_SOURCE" \
+    -DUSE_ASCEND=ON -DUSE_CUDA=OFF -DUSE_ROCM=OFF -DUSE_LLVM=OFF \
+    -DUSE_GTEST=OFF -DUSE_LIBBACKTRACE=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake --build build --target tilelang_module tvm_runtime --parallel 8 \
+    2>&1 | tee "$S1_EVIDENCE/build/native-build.log"
+export TL_ASCEND_MIGRATION_BUILD_MANIFEST="$S1_EVIDENCE/build/native-build.json"
+PYTHONPATH=scripts/ascend_migration python - <<'PY'
+import os
+from _native_build import write_manifest
+
+write_manifest(
+    os.environ["TL_ASCEND_MIGRATION_BUILD_MANIFEST"],
+    tvm_source=os.environ["S1_TVM_SOURCE"],
+    build_command=["cmake", "--build", "build", "--target", "tilelang_module", "tvm_runtime",
+                   "--parallel", "8"],
+    build_log=os.path.join(os.environ["S1_EVIDENCE"], "build/native-build.log"),
+)
+PY
+python scripts/ascend_migration/s1_check_legacy_lowering.py --platform a3 \
+    --timeout 120 --output "$S1_EVIDENCE/native-a3.json"
+```
+
+只有构建成功后才生成 manifest；构建失败则停止，不继续运行后面的记录命令。
+manifest 记录 TVM 固定提交、两项 patch 的 SHA 和已应用状态，源码哈希包含 patched
+TVM 的 Python 文件。native/NPU 入口依据 manifest 同时设置 `PYTHONPATH` 和
+`TVM_IMPORT_PYTHON_PATH`，并验证实际 `tvm.__file__` 来自该 checkout；不能把新的
+`.so` 与原仓未应用 slice-step patch 的 TVM Python 混用。入口还要求实际加载的
+TileLang/TVM 库来自 manifest 记录的本地构建。A2 host 检查使用 `--platform a2`；
+A2 数值与同步验收仍须在实际 A2 设备上单独运行 NPU 入口。
+
+### 11.6 S1 的 elem_offset 重复累加修复
+
+修复前的最小诊断用例设置 GM view 的 `elem_offset=32`、切片起点 3，以及输出
+view 的 `elem_offset=16`、切片起点 5，原生 lowering 生成的地址是 `a[67]`、`o[37]`，
+而所需地址为 `a[35]`、`o[21]`。Python tile region helper 也存在同一合同问题：
+`elem_offset=16` 加 region 起点 3 得到 pointer offset 35，public `T.tile.fill`
+生成 `v[35]`，都应为 19。诊断库的复现用于定位，不能替代重建后当前源码的验收。
+
+共同原因是 `Buffer::OffsetOf` 已包含 view 的基址，而 `access_ptr` 还会累加
+`elem_offset`。S1 只在交接 offset 给 `access_ptr` 前扣除一次基址：C++ 涉及
+`src/op/ascend.cc` 的 `AscendCopy::Lower`（src/dst/tmp）与 `AscendAtomicAdd::Lower`
+（src/dst）；Python 涉及 `ascend_tile.py` 的 `_get_buffer_info`、
+`_handle_buffer_region`、`_handle_buffer_region_2d`。不更改 copy route、layout、
+同步策略或公开 API。零基址、双向非零基址、非零切片起点、连续 view 及 public
+tile 调用由 `test_ascend_migration_baseline.py` 的精确节点覆盖；正式结果以重建后
+native 和相应平台设备记录为准。

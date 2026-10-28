@@ -50,8 +50,8 @@ S1 核对实际合同与回归覆盖，优先复用这些设施。
 
 | 步骤 | 独立交付 | 实现状态 | 验证状态 | 人工审核 |
 | --- | --- | --- | --- | --- |
-| S0 | 迁移计划与技术参考入仓 | 文档已完成 | 文档静态检查通过 | 待用户确认并明确继续 |
-| S1 | fork 基线审计与前置合同 | 未开始 | 未验证 | 未提交 |
+| S0 | 迁移计划与技术参考入仓 | 文档已完成 | 文档静态检查通过 | 用户已确认，并明确授权 S1 |
+| S1 | fork 基线审计与前置合同 | 审计、局部修复及三个入口已交付 | 主机通过；A2/A3 native 各 105 项通过；A3 14 项各 100 轮通过；A2 待设备验证 | 待用户审核，整步验收待 A2 |
 | S2 | A2/A3 能力、任务图与 solver 合同（M0） | 未开始 | 未验证 | 未提交 |
 | S3 | Parallel/Pipelined/Persistent 接口与安全性 | 未开始 | 未验证 | 未提交 |
 | S4 | 单核约束规划与同步协议验证（M1） | 未开始 | 未验证 | 未提交 |
@@ -60,7 +60,8 @@ S1 核对实际合同与回归覆盖，优先复用这些设施。
 | S7 | A2/A3 新同步生成器（M4） | 未开始 | 未验证 | 未提交 |
 | S8 | 完整自动调度与混合 C/V 接管（M5） | 未开始 | 未验证 | 未提交 |
 
-当前停止点：S0 待审核；S1 仅在用户明确要求继续后启动。
+当前停止点：S1 候选交付待审核，A2 设备验收仍待目标环境补齐；不标记 S1 全面验收完成。
+S2 尚未获得执行授权。
 实施状态与验证状态分列：“已实现”不等于“native/NPU 验收通过”。
 
 ## 4. 分步交付与验收
@@ -302,3 +303,110 @@ flag 编号或整份生成源码。可能挂起的设备用例使用独立进程
 
 各步骤在对应的主机、native 或 Linux/CANN A2/A3 环境中验收；缺少相应运行结果时
 保持“待环境验证”。进展随交付更新第 3 节，并按本节记录实际验证证据。
+
+## 7. S1 实际交付与验证记录
+
+### 7.1 范围与有效决策
+
+- 用户已确认 S0 计划并授权 S1。工作分支和固定源码基线保持第 1 节所列值；
+  没有开始 S2，没有新增调度策略、solver 或 Task/Stage 接口，没有改变默认配置。
+- 技术参考第 11 节补齐实际 Pass 顺序、配置、旧 FFI、资源归属、workspace 参数、
+  Persistent、L1 版本及地址复用的源码/回归映射。已有资源归属和 workspace 保护复用，
+  不重复迁入；未知调用、复合 PIPE、寄存器状态及完整 effects 合同留给后续步骤。
+- 确认并局部修复非零 `elem_offset` 被重复累加：DMA 源/目标/tmp、atomic 源/目标，
+  以及三个 Python BufferRegion 指针 helper，在传给 `access_ptr` 前去掉已经计入的
+  view 基址。回归覆盖零偏移、两端非零偏移、连续 view、1D/2D stride 和公开 fill 路径。
+- 旧 `annotate_address` 仍是字节地址/复用合同；不引入新 placement API，不统一原有
+  auto 对齐与 linear 保留地址的差异。非对齐地址的 native 数学检查不表示设备支持；
+  设备偏移用例使用满足相应搬运/向量约束的对齐切片。
+
+### 7.2 环境、构建和缓存证据
+
+| 项目 | 实际记录 |
+| --- | --- |
+| 主机 | Python 3.12.9；torch 2.12.0+cpu；torch_npu 2.12.0；CANN 9.1.0 |
+| TVM | 固定子模块 `c2921fdaf795b1103d21abc962e83a209c7258d7` 的临时副本，应用仓库自带两份补丁；包含 patched Python parser；原仓子模块保持干净 |
+| 构建 | 显式 CMake/Ninja，Ascend 开启，CUDA/ROCM/LLVM/GTest/libbacktrace 关闭；构建产物在 `build/`，不覆盖包内旧库、不安装 Python 包、不修改全局配置 |
+| 身份记录 | `/tmp/ascend-migration-s1/build/native-build.json`；核验源码、TVM Python/依赖、补丁、CMakeCache、构建日志及三个 `.so` 哈希；同时核对实际加载路径 |
+| 真实设备 | A3 `Ascend910_9362`，逻辑 device 0；本机未提供 A2，不能据此宣称 A2 设备验收通过 |
+| Bisheng | PATH 选择 `/home/developer/Ascend/cann-9.1.0/bin/bisheng`，realpath 为同一 CANN 的 `tools/bisheng_compiler/bin/bisheng`；clang 15.0.5，构建时间 2026-04-30T17:11:05+08:00 |
+| 编译器哈希 | SHA256 `7ffc97205a0582ce00a9ec163530696bf3971b24669c43c1c02cc9c7b56f541f`；完整 `--version`、resource dir 和 CANN version.info 写入设备 JSON |
+| 编译与缓存 | 每个设备用例新进程、新 KernelCache 目录并 disable_cache，直接编译新 kernel；记录实际 Bisheng argv、返回码、源码/产物哈希、有效有序 flags 和实际 pass_configs；Cython host wrapper 缓存另记，不当作设备编译证据 |
+
+预装库虽可导入，但没有可信的当前源码构建记录，未作为最终 native 验收依据。
+可信未修复新库的新增回归为 21 failed / 15 passed，证实偏移问题；修复后新增回归
+A2/A3 各 36 项通过，并纳入下列各 105 项的完整 native 入口。
+构建准备和 manifest 生成命令见技术参考第 11.5 节；实际配置、构建及复现日志保存在
+`/tmp/ascend-migration-s1/build/`。首次 8 并发构建以 130 中断后用 16 并发续建成功；
+一次与链接重叠的检查出现 `file too short`，等待构建成功结束后重新验证通过，未计作通过证据。
+
+### 7.3 已交付入口与运行结果
+
+运行前在仓库根目录执行 `source set_env.sh`。native/NPU 入口使用本次显式构建的记录：
+
+```bash
+export TL_ASCEND_MIGRATION_BUILD_MANIFEST=/tmp/ascend-migration-s1/build/native-build.json
+
+python scripts/ascend_migration/s1_check_baseline.py --output /tmp/ascend-migration-s1/host.json
+python scripts/ascend_migration/s1_check_legacy_lowering.py --platform a3 --output /tmp/ascend-migration-s1/native-a3.json
+python scripts/ascend_migration/s1_check_legacy_lowering.py --platform a2 --output /tmp/ascend-migration-s1/native-a2.json
+python scripts/ascend_migration/s1_run_baseline_npu.py --platform a3 --device 0 --seed 0 --repeat 100 --timeout 120 --output /tmp/ascend-migration-s1/s1-a3.json
+
+# 负例：本机实际为 A3，必须拒绝误标成 A2，不是 A2 设备验收
+python scripts/ascend_migration/s1_run_baseline_npu.py --platform a2 --device 0 --seed 0 --repeat 100 --timeout 120 --output /tmp/ascend-migration-s1/platform-a2-negative.json
+```
+
+| 检查 | 实际结果 | 证据 |
+| --- | --- | --- |
+| 纯主机基线审计 | PASS，18 项；不导入 TileLang/TVM/NPU | `host.json` |
+| native，参数 a3 | PASS，105 passed / 0 failed / 0 skipped；必跑节点完整 | `native-a3.json` 及其 artifacts/JUnit |
+| native，参数 a2 | PASS，105 passed / 0 failed / 0 skipped；必跑节点完整 | `native-a2.json` 及其 artifacts/JUnit |
+| runner 主机回归 | PASS，20 项；含 skip/xfail、零收集、遗漏必跑节点、超时杀进程组、缺构建记录、旧源码/库身份及优化模式负例 | `runner-tests.xml` |
+| 偏移用例定向设备复验 | PASS，DMA/atomic/fill 各实编一次、同一 kernel 100 轮 launch/golden | `offset-repeat100.json` |
+| A3 NPU | PASS，单次完整入口 14/14、0 failed/skip；14 次真实冷编译，同一 kernel 各 100 次 launch/golden，共 1400 次 | `s1-a3.json`，artifacts 路径见该报告 |
+| 实际 A3 误标为 A2 的负例 | 按预期 BLOCKED、退出 2；0 编译/launch，全部 14 项未执行 | `platform-a2-negative.json` |
+| A2 NPU | 未运行／待环境验证，本机没有 A2 | 无设备验收结果 |
+
+上表证据文件均相对 `/tmp/ascend-migration-s1/`。
+
+native 两个参数分别作用于新增 S1 fixtures；既有 fixtures 保留各自的 A2/A3/PTO
+目标与配置，报告逐类注明。它们是主机 TIR/lowering/codegen 验证，没有调用 Bisheng
+或执行 kernel，不能替代两代设备结果。
+
+设备预检最初尝试将已有 IR-only 标量 C Persistent fixture 用于数值测试，发现部分
+输出未写，随即停止该组；只确认该载体不适合本次数值验收，未据此认定生产 Persistent
+算法有缺陷，也未把缓存行竞争推断当成已证实根因。设备入口改为复用现有
+`test_tilelang_ascend_language_l1_to_l0.py` 的 GEMM Persistent kernel，显式匹配
+launch core 数和 wave_size，分别检查 8 tile/8 core、4 tile/8 core 和 9 tile/4 core。
+原有 IR fixture 和生产 Persistent 实现均保持原样；初次失败的 `s1-a3-smoke.json`
+及修正后剩余用例预检的 `s1-a3-remainder-smoke.json` 均保留，不充作正式整组通过证据。
+
+首次 100 轮设备运行在 DMA 偏移用例发现数值失败，前 11 项已通过，后续用例未执行。
+该地址 factory 原为 native 生成代码检查设计，未提供 GM→UB→GM 的运行时同步；
+首次 smoke 偶然通过不构成安全证明。仅在设备入口对 DMA/atomic/fill 偏移用例
+显式开启已有 `tl.ascend_auto_sync` 和 `tl.ascend_memory_planning`，生产默认值和
+native 地址断言不变；失败批次另存为诊断，修正后重新验证完整正式入口。
+对照生成代码的 GM 地址仍为 `a[40]` / `o[24]`，两次 copy 之间新增既有
+`MTE2_MTE3` set/wait 完成关系；该配置下三个偏移用例各 100 轮定向检查通过。
+该失败批次保存在 `s1-a3-copy-unsynchronized-failure.json`，原 artifacts 目录保留；
+后续每次入口调用创建独立 artifacts 目录，避免复跑覆盖旧日志。
+
+runner 回归命令：
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q testing/python/ascend_migration/test_s1_runners.py --junitxml=/tmp/ascend-migration-s1/runner-tests.xml
+```
+
+格式检查限定本步文件。Python lint 通过；C++ 全文件 clang-format 检查只有固定基线
+已有第 370 行的三条相同诊断，本步修改行没有新增诊断，未为此改写无关代码。
+日志分别为 `build/clang-format-check.log` 和 `build/clang-format-baseline.log`。
+完整格式检查记录为 `format-report.json` 和 `format-report.md`。
+JSON/JUnit、生成源码、二进制和大日志均不提交。
+
+### 7.4 审核与剩余验证
+
+S1 候选实现、入口和审计记录已交付供独立审核；A3 已完成上述验收用例，
+A2 设备验收仍待目标环境补齐，S1 不标为全面验收完成。
+本步提交只推送到 `erhsh/codex/ascend-a2a3-scheduler-migration`，提交详情查看该分支
+Git 历史，推送结果在最终交付报告列出。不创建 PR、不合并、不强推；推送后停止，
+等待用户审核和明确的下一步指令。
