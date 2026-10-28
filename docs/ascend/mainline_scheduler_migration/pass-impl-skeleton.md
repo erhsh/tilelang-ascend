@@ -103,3 +103,49 @@ S3 循环接口、S4 planner 接管及后续同步生成仍不在本步实施。
 - planner、最终 verifier 与 runner 分工实现，统一重建/冻结 manifest 后串行加载库和
   设备测试。默认值、原 planner/injector/同步器数量和尾部 Selection/MaskLegalize
   顺序保持；S5 的跨迭代流水、多版本与性能优化不纳入本步。
+
+## S5 实施骨架：受校准成本约束的多 stage 与真实多版本
+
+确认依据：用户明确授权 S5；仅 A3 验收，完成后提交推送并等待审核，不进入 S6。
+
+- 保留 legacy 默认、一次 PipelinePlanning/InjectSoftwarePipeline 和旧同步器。扩展
+  constraint 的静态 Vector full/aligned f16/f32 copy/fill/add 候选到 num_stages 1/2/3，
+  num_stages 是版本搜索上限，不能直接当作每个 buffer 的物理 N 或 manual Stage 上限。
+- `tl.ascend_pipeline_cost_model` 接收完整 canonical Map。schema/model/unit、实际 A3
+  SoC/CANN/Bisheng/flags、op/dtype/count/geometry、ns 量子、effective latency/II、
+  原始样本和方法证据参与 profile hash 与真实缓存身份。没有匹配校准模型时拒绝多 stage，
+  不把 950 数据或 S4 单位成本当作 A3 校准值。
+- 校准复用 legacy 明确同步的 microbench：dependent fenced chain 和 independent batch，
+  多个动态 N、固定 setup/drain、逐次准确性检查后用 msprof op 采样。耗时随 N 的斜率
+  包含 issue/同步开销，仅是 effective 成本；正确性仍由最终任务/地址/事件证明保障。
+- planner 使用 modulo solver 并独立核验消费的 starts/II/stage/order/versions/依赖与容量。
+  Pipelined 的 annotations 仅新解禁 bool enable_offset，由 planner 消费；旧 injector
+  没有该功能。多 stage 自动模式默认允许 offset，显式 False 则限定 stage 0。
+  非零 Stage 只在 constraint 的完整受审计 Task/unit 上开放，不能先被 late hint 擦除。
+  legacy 对新非零 Stage/offset 仍诊断；Task latency/ii override 暂不开放。
+- 新 early prepare 在 Simplify 前保留 0/1-trip 的候选意图，避免请求静默丢失；退化循环
+  不声称执行了不存在的流水。原生测试另直接解释 injector 生成的 0/1/N/短 trip 谓词。
+- 抽取旧 injector 的 required-N/版本布局逻辑，planner 与 materializer 共用。每个候选
+  发布真实 dataVar、N、物理 shape/stride/elem_offset/selector remap；constraint-only
+  override 不得小于旧 required N，最终实际计划重新核验容量与约束。候选外只读 UB 或
+  共享写 UB、read-before-write/跨迭代 recurrence 拒绝；本迭代 fullwrite 后的 inplace 需证明。
+- 已实证旧 trip1、stage[0,1,2] 中间 unit 会重复。局部修正 prologue/body/epilogue 为
+  连续不重叠区间，body 不产生负 extent；pointer 与 BufferLoad/Store 的版本原点统一，
+  回归非零 min、实际展开 exact-once 和已有 L1 分形 tail/stride。
+- 最终 verifier 依据原 source 为每个 UB read 绑定 reaching writer，核对去除真实版本
+  基址后的逻辑区间，不能照搬 S4 跨不同 slot 的 WAR/WAW。GM/非重命名逻辑依赖保留，
+  final 同 slot 的物理 RAW/WAR/WAW 负责复用；按稳定 task/iter 身份解释真实展开。
+- Persistent 正 stages 的 guarded wave 只在新受支持 constraint 路径接入。由内部标记
+  区分生成的有效 tile 谓词，不能把 loop_break 移进不同 stage；每 unit 保持同一逻辑
+  迭代的有效性条件。按实际 worker/展开 IR 证明所有有效 tile 恰好一次、无 padding 副作用。
+- 配置寄存器不随 buffer version 复制。deq/atomic/HF32/MMAD/opaque/条件 setter 未审计
+  时拒绝；managed Vector mask 有真实 effects，继续由末端 Selection/Legalize 按实际
+  调度 IR 修复。在 Legalize 内部末端增加 constraint-only 只读合同检查，复用 requires/
+  ensures/入口未知/分支 must facts，逐 terminal 校验 reaching mode/payload 与覆盖顺序，
+  不在 MaskLegalize 后增加 TIR rewrite，不为校验虚构额外 barrier。
+- 三个独立入口为 s5_check_versions_ir.py、s5_run_pipeline_npu.py、
+  s5_run_persistent_pipeline_npu.py。覆盖真实 1/2/3 版本与容量、0/1/N/短 trip、
+  静态短尾、guarded 单/多 wave、重复调用，以及相同输入/flags/缓存热度的 msprof 性能。
+- 校准在已验证的 S4 source/libs 搬移快照中运行，保留原构建 cache/log 字节与身份；
+  workspace 的 S5 C++ 可独立应用和构建。正式设备入口仍等成本模型及新 native manifest
+  都验证后执行，所有未执行项保持未验证状态。

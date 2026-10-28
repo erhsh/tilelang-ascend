@@ -11,6 +11,8 @@ def _plain(value):
         return bool(value.value) if value.dtype == "bool" else int(value.value)
     if isinstance(value, (tvm.ir.Array, list, tuple)):
         return [_plain(item) for item in value]
+    if isinstance(value, tvm.ir.DictAttrs):
+        return {key: _plain(value[key]) for key in value.keys()}
     if isinstance(value, (tvm.ir.Map, dict)):
         result = {}
         for key, item in value.items():
@@ -26,6 +28,15 @@ def _plain(value):
 def register_solver():
     """Register a lazy thunk, preserving an existing user or prior registration."""
     from tilelang import tvm
+
+    if tvm.get_global_func("tl.ascend.verify_schedule", allow_missing=True) is None:
+
+        def verify(problem, candidate):
+            from .ascend_z3_scheduler import verify_schedule
+
+            return tvm.runtime.convert(verify_schedule(_plain(problem), _plain(candidate)))
+
+        tvm.register_func("tl.ascend.verify_schedule", verify)
 
     existing = tvm.get_global_func("tl.ascend.solve_schedule", allow_missing=True)
     if existing is not None:

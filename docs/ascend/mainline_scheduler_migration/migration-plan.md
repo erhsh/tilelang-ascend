@@ -57,14 +57,14 @@ Vector 指令选择、mask 合法化、Persistent 参数/partial-wave 保护及 
 | S1 | fork 基线审计与前置合同 | 审计、局部修复及三个入口已交付 | 主机通过；历史 A2/A3 native 各 105 项通过；A3 14 项各 100 轮通过 | 用户已明确授权 S2；A2 不再阻塞验收 |
 | S2 | 能力、任务图与 solver 合同（M0） | 显式分析、能力模型、solver/verifier 和三个入口已交付 | solver 105、capability 42、native 171 及 runner 31 项通过；无新增设备执行路径 | 用户已明确授权 S3 |
 | S3 | Parallel/Pipelined/Persistent 接口与安全性 | 循环接口、域保护、受限 Task/Stage 和三个入口已交付 | native 117 + 29、兼容回归 170、runner 44 项通过；A3 9 项、1000 次 launch/golden 通过 | 用户已明确授权 S4 |
-| S4 | 单核约束规划与同步协议验证（M1） | opt-in constraint、最终协议验证和三个入口已交付 | 原生 45 + 50、兼容 170 + 117 + 29、runner 77 项通过；A3 8 项、800 次 launch/golden 通过 | 待用户审核 |
-| S5 | 跨迭代流水与多缓冲（M2） | 未开始 | 未验证 | 未提交 |
+| S4 | 单核约束规划与同步协议验证（M1） | opt-in constraint、最终协议验证和三个入口已交付 | 原生 45 + 50、兼容 170 + 117 + 29、runner 77 项通过；A3 8 项、800 次 launch/golden 通过 | 用户已明确授权 S5 |
+| S5 | 跨迭代流水与多缓冲（M2） | A3有效成本、实际版本/配置证明及guarded波流水已交付 | 校准32、原生234、兼容411项通过；A3 26用例/2600次launch与golden、4组性能已记录 | 本次S5提交，等待用户审核 |
 | S6 | owner/epoch、别名与生命周期（M3） | 未开始 | 未验证 | 未提交 |
 | S7 | A2/A3 新同步生成器（M4） | 未开始 | 未验证 | 未提交 |
 | S8 | 完整自动调度与混合 C/V 接管（M5） | 未开始 | 未验证 | 未提交 |
 
-当前停止点：S4 实现与 A3 验证已完成，本步提交推送后停止等待审核。
-S5 尚未获得执行授权。
+当前停止点：S5 实现与 A3 验收已完成；更新计划并提交推送后等待用户审核。
+S6 尚未获得执行授权。
 实施状态与验证状态分列：“已实现”不等于“native/NPU 验收通过”。
 
 ## 4. 分步交付与验收
@@ -671,3 +671,188 @@ clang-format、`git diff --check` 及文档相对链接/围栏检查通过。记
 只提交 S4 的实现、永久测试、三个入口与文档；不推进 S5 的跨迭代流水、多版本、
 硬件时延校准或新同步器。上述正式原生、A3 与格式检查已完成，按约提交推送到既定分支，
 然后停止等待用户审核与明确的 S5 指令。
+
+## 11. S5 实施记录
+
+S5 实现、CPU 与 A3 设备验收已完成。本节记录实际证据与性能限制；未执行 A2 专项
+测试。交付后停止等待用户审核，S6 尚未开始。
+
+### 11.1 实现范围与边界
+
+- 保持 legacy 默认与原规划/注入/同步流水。constraint 多 stage 接收完整、带摘要的
+  `tl.ascend_pipeline_cost_model` Map；内部 PassConfig 使用该版 TVM 支持的 DictAttrs。
+  Python loader 校验模型内容，模型内容进入既有缓存键。legacy 不导入 Z3。
+- `num_stages=1/2/3` 是版本搜索上限；规划器与旧 injector 共用实际版本、shape、stride
+  推导，并对修订后的实际 N 再次验证。最终 remap 与 Allocate 记录真实占用，不从请求数
+  推断版本。版本基址统一使用 `(logical_iteration-min) % N`。
+- 旧 injector 的 trip1、stage[0,1,2] 中间 unit 重复执行已复现并修复；分段不重叠，
+  steady 不产生负 extent。0-trip 是显式 no-op，不宣称执行了多版本分配。
+- 非零手动 Stage 需要 constraint 正候选及显式 `enable_offset=True`。Stage 保持源程序
+  imperative 值语义；冲突排程必须 UNSAT。任一显式 Stage 使候选未标注 unit 取 Stage0；
+  候选外非零 Stage 拒绝，Stage0 可按原顺序消费。Task 成本 override 仍拒绝。
+- 仅支持 loop-private、单行连续、每版 32B 对齐的 f16/f32 UB。每迭代须先 full-write
+  后读；full-write 后的完整 in-place 更新仍需 producer/slot 证明。外部只读 UB、
+  共享写 UB、跨迭代 carry 不在本片范围，不扩展为 S6 通用 owner/epoch。
+- 最终证明分别检查静态 core/vid 的源 producer 与实际同 slot 最近 writer、物理覆盖及
+  事件完成关系。managed mask 使用每个 Vector 域的一份状态，Legalize 末端只读检查
+  reaching setter/入口未知/下一次覆盖；不复制 mask 到 buffer version，不额外插同步。
+  未审计配置寄存器、opaque 或条件 stateful 操作仍拒绝。
+- guarded Persistent 使用纯 If-noelse 保留每 logical tile 的 padding/末 wave guard，
+  不把 loop_break 搬入 stage。原 `num_stages=0` 语义保留。
+- staging horizon 为 64，窗口×unit 上限 65536、任务实例上限 4096；整数域与容量在
+  展开前检查。既有 L1 分形 tail/stride 仅做 legacy 回归，不开放 constraint Cube。
+
+### 11.2 A3 有效成本的测量政策
+
+校准在独立 S4 源码/三库快照中运行 legacy 微基准，SoC 为 Ascend910_9362，CANN 9.1.0。
+manifest schema 2 明确标记 `relocated_verified_build`，保留原构建命令和
+CMAKE_HOME_DIRECTORY，逐字节验证原 manifest/cache/log、相对源码及三库；不冒称快照
+重新构建。普通 schema 1 仍严格匹配当前源码和库。
+
+矩阵为四类 GM→UB、UB→GM、fill、add × f16/f32 × tile32/64 × dependent/independent，
+共 32 个微基准，对应 16 条成本记录。采用同一 `msprof op` BasicInfo-only 政策：
+N=0/32/128/256/512，每 N 每 round 5 次预热、20 次测量，3 rounds；每个微基准先逐 N
+做 3 次数值校验。独立模式使用固定 128-tile arena，在有界批次复用处 drain。
+每次应用调用有 journal，并与 main_kernel 的唯一 BasicInfo 行一一匹配；PMU replay
+不计为独立样本。频率、SoC、CANN、bisheng SHA 和有序 flags 均入证据。
+
+多 N 斜率包含 issue、同步、批次 drain 的有效成本；它不是原始指令延迟。
+hierarchical bootstrap 纳入 round 漂移，要求 95% CI 下界正、相对半宽≤20%、
+相对残差≤10%。最多两批，重试必须合并全部原始样本与 rounds 再判定，保留首批失败；
+不丢弃失败批、不 clamp 为 1。取 CI 上界向上取整至 ns，`quantum_ns=1`。
+小 N 的早期噪声试验与 PMU 诊断不混入正式成本表。
+
+完整校准已实际通过：32/32，16 records；12750 次 profiling 应用调用、10200 个
+measured samples。GM→UB 的 f32/tile32 与 f32/tile64 independent 各两批，均以合并
+全部样本后的结果通过；其余单批。两项 add/f32/tile64 复用已接受的同政策 pilot，
+已核对生成源码、工具链及身份，不重新计为额外样本。
+模型为 `/tmp/ascend-migration-s5/a3-effective-cost-model.json`，canonical SHA256
+`f2aa7ecfa4e592199c81801140903352f6e34fc1cee7be220987d6c5753a13fd`，
+生产 loader 独立复核通过。实际 ordered flags 为 `[-O2]`，current/rated 频率均1650MHz。
+bisheng SHA256 为
+`7ffc97205a0582ce00a9ec163530696bf3971b24669c43c1c02cc9c7b56f541f`。
+`calibration-acceptance.json` 逐项核对32份 accuracy、34份 profile worker 的引用 SHA、
+编译及调用计数：480 次 accuracy launch/golden，profiling 的510次 post-group
+golden，接受证据内66次真实 bisheng 编译。profiling 不冒称每次调用均做独立 golden。
+模型文件 SHA256 为
+`5549a92dc630e629252945d31dbefb73145570f7e6b7487a41083282dae3b569`。
+本次矩阵由 `/tmp/ascend-migration-s5/run-calibration-matrix.py` 分阶段驱动；永久入口的
+`--calibrate-profile` 封装同一 worker、BasicInfo parser、合并拟合及导出政策，用于后续
+重现。公开控制器的失败路径与导出合同通过 host 测试。
+
+### 11.3 对照基线
+
+普通非零 trip 用同一逻辑 kernel 比较两种 planner。Persistent 的 legacy 基线使用
+`num_stages=0` 的串行 wave；constraint 使用 2/3，因为 legacy 的既定合同拒绝 guarded
+positive stages。两侧逻辑域、输入、golden 和编译 flags 相同，报告保留各自 directive，
+不宣称两侧 stage 参数相同。
+
+零次 legacy 原夹具留下死 UB allocation，旧 codegen 因缺 address_map 拒绝；该失败
+作为诊断保留。专用 serial zero baseline 在前缀用 fill(3)、fill(4)、add、copy 产生7；
+constraint 仍保留独立 anchor 和原零次 candidate。两者有效输出/未写 canary 相同，
+元数据明确源程序差异；不通过共享候选 UB 弱化新模式的 loop-private 门禁。
+
+### 11.4 最终 CPU 验证
+
+当前构建证据为 `/tmp/ascend-migration-s5/native-build.json`，project source SHA256
+`e125218f60dc09de220c5a3041c0854575ef6aa520d8bfc702cc9eb529f127c1`，
+module SHA256 `118b8e2f4c4dcc17c3e71901ea611c8d7cd221a8a6407f5e8ae92ac37364347f`。
+这是 guarded 仿射边界精确归一化后的构建：旧 TVM 未能从联合 guard 证明展开的字节
+上界，修复利用精确整数余数归一化等价比较，仍要求 CanProve。9×1 合法域完整 lowering
+及去 guard/真实越界拒绝3项已通过。
+
+| 已执行检查 | 结果 | 证据 |
+| --- | --- | --- |
+| S5 原生 IR/最终同步/mask/成本协议/快照/cache/最终 trace | 234 PASS，0 skip | versions-ir.json |
+| S1/S2 兼容 | 170 PASS，0 skip | legacy-s1-s2-ir.json |
+| S3 loop 兼容 | 117 PASS，0 skip | legacy-s3-loop-ir.json |
+| S1–S5 入口 host 回归 | 全量132 PASS；末次受影响18项复验PASS，去重133项 | cpu-validation-summary.json；两次实际命令/XML与节点均保留 |
+| S3 domain 兼容 | 29 PASS，0 skip | legacy-s3-domain.json |
+| S4 pipeline/sync 兼容 | 45 + 50 PASS，0 skip | legacy-s4-pipeline-ir.json、legacy-s4-sync.json |
+| 完整真实成本模型预检 | 24 PASS | real-profile-ir.json；实际版本、完整lowering与最终GM写域 |
+
+以上 JSON 位于 `/tmp/ascend-migration-s5/`。原生项含明确标记的 synthetic 成本协议
+fixture，不构成硬件校准结果。真实成本矩阵与设备验收的独立证据见11.2、11.6。
+旧523构建的12份正式报告/日志原字节保存在
+`diagnostic-523/`，archive-index记录哈希；旧 manifest 身份也保留在旧报告内。
+本地临时日志/JSON/二进制不提交。
+
+`cpu-validation-summary.json` 汇总全部实际公开入口命令和节点。clang-format15检查7个
+整文件及 ir.cc/inject_pipeline.cc 的改动范围通过；全部变更 Python 的 ruff检查通过。
+
+真实模型预检中，steady1/2 分别物化1/2版本；steady3 的 manual(0,0,3,3) 加显式 offset
+物化 A/B/C 各3份、每个缓冲区768B。trip1/2 的 constraint 夹具也实际物化3份；zero
+为无 remap 的 no-op。这些是注入/分配证据，设备结果另行统计。
+
+### 11.5 复核入口
+
+使用既有 venv（含 Z3 4.15.4.0）与 CANN 环境；实际库加载路径由 manifest 预检核对。
+以下入口均只接受 A3：
+
+```bash
+source set_env.sh
+migration_python=/tmp/ascend-migration-s2/venv/bin/python
+"$migration_python" scripts/ascend_migration/s5_check_versions_ir.py \
+  --platform a3 --build-manifest /tmp/ascend-migration-s5/native-build.json \
+  --output /tmp/ascend-migration-s5/review-versions-ir.json
+"$migration_python" scripts/ascend_migration/s5_run_pipeline_npu.py \
+  --platform a3 --device 0 --repeat 100 --timeout 180 \
+  --build-manifest /tmp/ascend-migration-s5/native-build.json \
+  --cost-profile /tmp/ascend-migration-s5/a3-effective-cost-model.json \
+  --output /tmp/ascend-migration-s5/review-pipeline-npu.json
+"$migration_python" scripts/ascend_migration/s5_run_persistent_pipeline_npu.py \
+  --platform a3 --device 0 --repeat 100 --timeout 180 \
+  --build-manifest /tmp/ascend-migration-s5/native-build.json \
+  --cost-profile /tmp/ascend-migration-s5/a3-effective-cost-model.json \
+  --output /tmp/ascend-migration-s5/review-persistent-npu.json
+```
+
+若需重新采集完整成本矩阵，可使用当前匹配构建或显式 `--calibration-source-root`
+指定独立且经 manifest 验证的快照；该模式无需已有模型：
+
+```bash
+"$migration_python" scripts/ascend_migration/s5_run_pipeline_npu.py \
+  --platform a3 --device 0 --timeout 180 --calibration-timeout 180 \
+  --build-manifest /tmp/ascend-migration-s5/native-build.json \
+  --calibrate-profile /tmp/ascend-migration-s5/review-cost-model.json \
+  --output /tmp/ascend-migration-s5/review-calibration.json
+```
+
+### 11.6 A3 设备与性能结果
+
+普通流水正式父入口 `pipeline-npu.json` 已 PASS（进程退出0）：18/18 用例、
+18次真实 bisheng 编译、1800次同 kernel 调用及1800次逐轮 golden。8组实际输出
+pair 的输入/golden/输出摘要一致；两项既有 L1 tail/parallel 各100轮也通过。
+真实配置、kernel源码、实际 remap/Allocate 与加载库身份保存在逐用例证据。
+
+Persistent 正式父入口 `persistent-npu.json` 已 PASS（进程退出0）：8/8 用例、8次真实
+bisheng 编译、800次同 kernel 调用及800次逐轮 golden。single、partial f16、3×10
+group tail 和修复后的9×1多 wave 两侧均通过；4组输入/golden/输出摘要一致，实际最终
+GM store trace 的 valid tile exact-once 与 NaN canary 同时验证。
+
+两入口总计26个数值用例、26次真实编译、2600次调用/逐轮 golden。另8个性能 worker
+各独立编译，3 rounds ×（5预热+20测量）=75次应用调用，合计600次调用、480个
+measured samples、24次 post-group golden；不把性能调用当作逐轮数值断言。
+正式执行使用 device0、seed0、repeat100、timeout120 与本节 manifest/model，两个
+父入口严格串行。`device-validation-summary.json` 汇总两父报告与逐 worker 证据。
+
+| 夹具 | legacy median ns（95% CI） | constraint median ns（95% CI） | 观测 legacy/constraint |
+| --- | --- | --- | --- |
+| 普通 steady2 | 5901（5281–6781） | 5651（5401–5971） | 1.04423996 |
+| 普通 tail_f16 | 4671（4141–5661） | 4431（4081–4821） | 1.05416385 |
+| Persistent group_tail | 5781（5481–5911） | 6681（6561–6901） | 0.86528963 |
+| Persistent partial_f16 | 4771（4691–4831） | 4761（4701–4971） | 1.00210040 |
+
+性能来自 `msprof op` BasicInfo-only Task Duration；两侧输入/输出摘要、SoC、flags与
+1650MHz频率一致。每策略独立冷编译，输入以同政策预热，不做 timed cache flush。
+CI 为各策略 median 的 hierarchical bootstrap 区间；表中比值是观测 median 比值。
+group_tail 的观测耗时增加约15.6%，作为本阶段已知性能退化保留；其余三组的区间有
+重叠，不据此宣称稳健提速。性能收益不预设的验收约定保持，数值/覆盖/同步正确性与
+性能观测分别记录。性能 helper 源SHA记录在父/子证据并核对一致。
+
+### 11.7 交付停止点
+
+本次交付仅包含 S5 实现、永久测试、三个公开入口及文档；legacy 仍为默认。
+完整校准模型、原始采样、manifest、JSON和二进制保留于 `/tmp/ascend-migration-s5/`，
+通过本节命令可复核。提交推送至 `erhsh/codex/ascend-a2a3-scheduler-migration` 后
+停止，等待用户审核；S6 owner/epoch、通用别名和生命周期尚未获得执行授权。

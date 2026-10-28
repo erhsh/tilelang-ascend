@@ -9,8 +9,10 @@
 #include <tvm/tir/transform.h>
 
 #include <functional>
+#include <limits>
 #include <vector>
 
+#include "common/ascend_constraint.h"
 #include "common/ascend_schedule_hints.h"
 
 namespace tvm {
@@ -29,7 +31,36 @@ void ValidateMarkerValue(const AttrStmtNode *hint) {
       << "Malformed Ascend schedule marker value; expected int32 1";
 }
 
+void ValidateNewScheduleControls(const PrimFunc &function) {
+  bool constraint =
+      tvm::transform::PassContext::Current()
+          ->GetConfig<String>(kAscendPipelinePlanner, String("legacy"))
+          .value() == "constraint";
+  PostOrderVisit(function->body, [&](const ObjectRef &node) {
+    const auto *loop = node.as<ForNode>();
+    if (!loop)
+      return;
+    for (const char *key : {"enable_offset", kAscendPersistentGuard}) {
+      auto annotation = loop->annotations.Get(key);
+      if (!annotation.defined())
+        continue;
+      const auto *value = annotation.value().as<IntImmNode>();
+      ICHECK(value && value->dtype == DataType::Bool())
+          << "New scheduling controls require constant boolean values: " << key;
+      ICHECK(!value->value || constraint)
+          << key << " requires the constraint scheduling mode";
+    }
+  });
+}
+
 class HintSyntaxChecker final : public StmtExprVisitor {
+public:
+  HintSyntaxChecker()
+      : constraint_(
+            tvm::transform::PassContext::Current()
+                ->GetConfig<String>(kAscendPipelinePlanner, String("legacy"))
+                .value() == "constraint") {}
+
 private:
   void VisitStmt_(const AttrStmtNode *op) final {
     if (op->attr_key == kAscendPerCoreTaskHint) {
@@ -54,9 +85,13 @@ private:
       ValidateAscendStageHintPayload(op);
       ICHECK(!task_depth_ && !stage_depth_ && !parallel_depth_)
           << "T.Stage must wrap complete tasks, outside Task/Parallel/Stage";
-      ICHECK(!pipeline_conflict_)
+      bool manual = constraint_ && offset_context_ && !manual_conflict_;
+      ICHECK(!pipeline_conflict_ || manual)
           << "Stage(0) cannot mix with positive num_stages, "
              "legacy stage/order or enable_offset";
+      const auto *stage = op->node.as<IntImmNode>();
+      ICHECK(stage && (stage->value == 0 || manual))
+          << "Nonzero Stage requires constraint mode and enable_offset=True";
       ++stage_depth_;
       int previous = stage_tasks_;
       stage_tasks_ = 0;
@@ -76,10 +111,13 @@ private:
     ICHECK(!task_depth_ && !stage_depth_)
         << "Loops inside Task/Stage are unsupported in S3";
     bool previous = pipeline_conflict_;
+    bool previous_offset = offset_context_;
+    bool previous_manual = manual_conflict_;
     for (const char *key :
          {"tl_pipeline_order", "tl_pipeline_stage", "software_pipeline_order",
           "software_pipeline_stage"}) {
       pipeline_conflict_ = pipeline_conflict_ || op->annotations.count(key);
+      manual_conflict_ = manual_conflict_ || op->annotations.count(key);
     }
     for (const char *key : {"num_stages", "enable_offset"}) {
       auto value = op->annotations.Get(key);
@@ -89,12 +127,24 @@ private:
             pipeline_conflict_ || !constant || constant->value != 0;
       }
     }
+    auto offset = op->annotations.Get("enable_offset");
+    if (offset.defined()) {
+      const auto *enabled = offset.value().as<IntImmNode>();
+      ICHECK(enabled && enabled->dtype == DataType::Bool())
+          << "enable_offset requires a constant boolean";
+      if (enabled->value) {
+        ICHECK(constraint_) << "enable_offset=True requires constraint mode";
+        offset_context_ = true;
+      }
+    }
     bool parallel =
         op->kind != ForKind::kSerial && op->kind != ForKind::kUnrolled;
     parallel_depth_ += parallel;
     VisitStmt(op->body);
     parallel_depth_ -= parallel;
     pipeline_conflict_ = previous;
+    offset_context_ = previous_offset;
+    manual_conflict_ = previous_manual;
   }
 
   void VisitStmt_(const IfThenElseNode *op) final {
@@ -132,12 +182,14 @@ private:
   int task_depth_{0}, stage_depth_{0}, parallel_depth_{0};
   int task_calls_{0}, stage_tasks_{0};
   bool pipeline_conflict_{false};
+  bool offset_context_{false}, manual_conflict_{false};
+  const bool constraint_;
 };
 
 class HintConsumer final : public StmtMutator {
 public:
-  explicit HintConsumer(PrimFunc function, String platform)
-      : function_(function), platform_(platform) {}
+  explicit HintConsumer(PrimFunc function, String platform, bool constraint)
+      : function_(function), platform_(platform), constraint_(constraint) {}
 
 private:
   using Frame = std::function<Stmt(Stmt)>;
@@ -154,8 +206,13 @@ private:
   }
 
   Stmt VisitStmt_(const AttrStmtNode *op) final {
-    if (op->attr_key == kAscendStageHint)
-      return VisitStmt(op->body);
+    if (op->attr_key == kAscendStageHint) {
+      Optional<Integer> saved = stage_;
+      stage_ = Downcast<Integer>(op->node);
+      Stmt body = VisitStmt(op->body);
+      stage_ = saved;
+      return body;
+    }
     if (op->attr_key == kAscendTaskHint) {
       Stmt probe = op->body;
       for (auto frame = frames_.rbegin(); frame != frames_.rend(); ++frame)
@@ -166,6 +223,11 @@ private:
       auto tasks = Downcast<Array<ObjectRef>>(graph["tasks"]);
       ICHECK_EQ(tasks.size(), 1U)
           << "T.Task requires exactly one audited hardware call in S3";
+      if (constraint_ && stage_.defined()) {
+        Map<String, ObjectRef> metadata{{"stage", stage_.value()}};
+        return AttrStmt(metadata, kAscendS5TaskHint,
+                        IntImm(DataType::Int(32), 1), op->body);
+      }
       return op->body;
     }
     // Unrelated outer pragmas remain in the real IR, but are not task effects.
@@ -217,6 +279,8 @@ private:
   PrimFunc function_;
   String platform_;
   std::vector<Frame> frames_;
+  Optional<Integer> stage_;
+  const bool constraint_;
 };
 
 } // namespace
@@ -242,9 +306,15 @@ void ValidateAscendTaskHintPayload(const tir::AttrStmtNode *hint) {
 void ValidateAscendStageHintPayload(const tir::AttrStmtNode *hint) {
   ValidateMarkerValue(hint);
   const auto *stage = hint->node.as<tir::IntImmNode>();
-  ICHECK(stage && stage->dtype == DataType::Int(64) && stage->value == 0)
-      << "S3 Stage requires constant int64 zero; nonzero stages are "
-         "unsupported";
+  bool constraint =
+      tvm::transform::PassContext::Current()
+          ->GetConfig<String>(kAscendPipelinePlanner, String("legacy"))
+          .value() == "constraint";
+  ICHECK(stage && stage->dtype == DataType::Int(64) && stage->value >= 0 &&
+         stage->value <= std::numeric_limits<int32_t>::max() &&
+         (stage->value == 0 || constraint))
+      << "Stage requires nonnegative int32-range literal; nonzero stages "
+         "require constraint mode";
 }
 
 void ValidateAscendScheduleHintStructure(const tir::PrimFunc &function) {
@@ -255,6 +325,7 @@ void ValidateAscendScheduleHintStructure(const tir::PrimFunc &function) {
 tvm::transform::Pass AscendValidateScheduleHints() {
   auto pass = [](tir::PrimFunc function, IRModule,
                  tvm::transform::PassContext) {
+    ValidateNewScheduleControls(function);
     if (!HasAscendScheduleHints(function->body))
       return function;
     ValidateAscendScheduleHintStructure(function);
@@ -268,7 +339,7 @@ tvm::transform::Pass AscendValidateScheduleHints() {
 
 tvm::transform::Pass AscendLowerScheduleHints(Target target, String platform) {
   auto pass = [target, platform](tir::PrimFunc function, IRModule,
-                                 tvm::transform::PassContext) {
+                                 tvm::transform::PassContext context) {
     bool has_hints = HasAscendScheduleHints(function->body);
     auto pending = function->GetAttr<Bool>(kAscendScheduleHintsPending);
     if (!has_hints && !pending.defined())
@@ -283,7 +354,10 @@ tvm::transform::Pass AscendLowerScheduleHints(Target target, String platform) {
         << "Task/Stage hints are supported only for A3 AscendC/auto in S3";
     if (has_hints) {
       ValidateAscendScheduleHintStructure(function);
-      Stmt body = HintConsumer(function, platform)(function->body);
+      bool constraint =
+          context->GetConfig<String>(kAscendPipelinePlanner, String("legacy"))
+              .value() == "constraint";
+      Stmt body = HintConsumer(function, platform, constraint)(function->body);
       ICHECK(!HasAscendScheduleHints(body)) << "Unconsumed Task/Stage marker";
       function.CopyOnWrite()->body = body;
     }

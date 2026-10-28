@@ -50,8 +50,34 @@ def PipelinePlanning():
     if strategy == "constraint":
         from .ascend_schedule_solver_ffi import register_solver
 
+        _validate_constraint_cost_model()
         register_solver()
     return _ffi_api.PipelinePlanning()  # type: ignore
+
+
+def load_ascend_pipeline_cost_model(path, *, expected_identity=None):
+    """Load the complete artifact to pass as TL_ASCEND_PIPELINE_COST_MODEL."""
+    from .ascend_pipeline_cost import load_cost_model
+
+    return load_cost_model(path, expected_identity=expected_identity)
+
+
+def _validate_constraint_cost_model():
+    profile = get_pass_context().config.get(PassConfigKey.TL_ASCEND_PIPELINE_COST_MODEL)
+    if profile is not None:
+        import json
+        from .ascend_schedule_solver_ffi import _plain
+        from .ascend_pipeline_cost import validate_cost_model
+
+        # Convert old-TVM String/Map/IntImm containers without treating a
+        # symbolic expression or a filename as calibrated numeric data.
+        validate_cost_model(json.loads(json.dumps(_plain(profile))))
+
+
+def AscendPrepareConstraintPipeline(target: tvm.target.Target):
+    """Preserve requested short-loop pipeline facts before simplification."""
+    _validate_constraint_cost_model()
+    return _ffi_api.AscendPrepareConstraintPipeline(target)  # type: ignore
 
 
 def AscendVerifyConstraintSync(target: tvm.target.Target, platform: str):

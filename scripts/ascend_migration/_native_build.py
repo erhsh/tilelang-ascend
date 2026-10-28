@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 from typing import Any
 
@@ -88,13 +89,16 @@ def source_identity(root: Path, paths: tuple[str, ...]) -> dict[str, Any]:
     return {"algorithm": "sha256", "digest": digest.hexdigest(), "files": len(files)}
 
 
-def verify_cmake_source(cache: Path, tvm_source: Path) -> None:
+def verify_cmake_source(
+    cache: Path, tvm_source: Path, *, build_source_root: Path | None = None
+) -> None:
     entries = {}
     for line in cache.read_text().splitlines():
         if not line.startswith(("#", "//")) and ":" in line and "=" in line:
             name, value = line.split("=", 1)
             entries[name.split(":", 1)[0]] = value
-    for key, expected in (("TVM_SOURCE_DIR", tvm_source), ("CMAKE_HOME_DIRECTORY", ROOT)):
+    project = ROOT if build_source_root is None else build_source_root
+    for key, expected in (("TVM_SOURCE_DIR", tvm_source), ("CMAKE_HOME_DIRECTORY", project)):
         if key not in entries or Path(entries[key]).resolve() != expected.resolve():
             raise ValueError(f"CMakeCache {key} does not identify the recorded build source")
 
@@ -136,18 +140,125 @@ def write_manifest(
     return report
 
 
+def write_relocated_manifest(
+    original_manifest: str | Path, snapshot_root: str | Path, output: str | Path
+) -> dict[str, Any]:
+    """Snapshot an already verified build, preserving its original build record.
+
+    The caller prepares a source checkout with identical relative source
+    contents. This copies artifacts and evidence; it does not claim a build
+    happened in the destination or rewrite the original CMakeCache.
+    """
+    original_path = Path(original_manifest).resolve()
+    original = verify_manifest(original_path)
+    if original["schema_version"] != 1:
+        raise ValueError("Relocation requires an original, non-relocated build manifest")
+    snapshot = Path(snapshot_root).resolve()
+    if snapshot == ROOT.resolve():
+        raise ValueError("Build snapshot must be separate from the build source checkout")
+    if source_identity(snapshot, SOURCE_PATHS) != original["project_source"]:
+        raise ValueError("Snapshot source contents differ from the verified original build")
+
+    def copy(source: str | Path, relative: str) -> Path:
+        destination = (snapshot / relative).resolve()
+        if not destination.is_relative_to(snapshot):
+            raise ValueError("Snapshot artifacts must not link back to mutable build files")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        return destination
+
+    origin_copy = copy(original_path, "build/ascend_migration_original_manifest.json")
+    cache = copy(original["cmake_cache"]["path"], "build/CMakeCache.txt")
+    log = copy(original["build"]["log"], "build/ascend_migration_original_build.log")
+    by_name = {Path(item["path"]).name: item for item in original["libraries"]}
+    libraries = []
+    for relative in LIBRARY_PATHS:
+        item = by_name[Path(relative).name]
+        destination = copy(item["path"], relative)
+        digest = file_digest(destination)
+        if digest != item["sha256"]:
+            raise ValueError("Copied snapshot library does not match the original build")
+        libraries.append({"path": str(destination), "sha256": digest})
+    report = {key: value for key, value in original.items() if key != "path"}
+    report.update(
+        schema_version=2,
+        artifact_kind="relocated_verified_build",
+        repo_root=str(snapshot),
+        libraries=libraries,
+        cmake_cache={"path": str(cache), "sha256": file_digest(cache)},
+        build={**original["build"], "log": str(log)},
+        relocated_from={
+            "manifest": str(origin_copy),
+            "manifest_sha256": file_digest(origin_copy),
+            "build_source_root": original["repo_root"],
+        },
+    )
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(report, indent=2) + "\n")
+    return report
+
+
+def _relocated_build_source(report: dict[str, Any]) -> Path:
+    if report.get("artifact_kind") != "relocated_verified_build":
+        raise ValueError("Relocated manifest must identify an existing verified build")
+    relocation = report.get("relocated_from")
+    if not isinstance(relocation, dict):
+        raise ValueError("Relocated manifest is missing its original build evidence")
+    origin_path = Path(relocation["manifest"])
+    if not origin_path.resolve().is_relative_to(ROOT.resolve()):
+        raise ValueError("Original build evidence must be an immutable snapshot copy")
+    if file_digest(origin_path) != relocation["manifest_sha256"]:
+        raise ValueError("Original build manifest copy changed")
+    origin = json.loads(origin_path.read_text())
+    build_source = Path(relocation["build_source_root"])
+    if (
+        not build_source.is_absolute()
+        or origin.get("schema_version") != 1
+        or origin.get("repo_root") != str(build_source)
+    ):
+        raise ValueError("Relocated manifest does not identify the original build checkout")
+    for field in ("project_source", "tvm_source_root", "tvm_source", "tvm_provenance"):
+        if report[field] != origin[field]:
+            raise ValueError(f"Relocated build {field} differs from the original evidence")
+    for field in ("cmake_cache", "build"):
+        copied = Path(report[field]["path" if field == "cmake_cache" else "log"]).resolve()
+        if not copied.is_relative_to(ROOT.resolve()):
+            raise ValueError("Relocated build evidence must not reference mutable build files")
+    if (
+        report["cmake_cache"]["sha256"] != origin["cmake_cache"]["sha256"]
+        or report["build"]["command"] != origin["build"]["command"]
+        or report["build"]["log_sha256"] != origin["build"]["log_sha256"]
+    ):
+        raise ValueError("Relocated build cache, command or log provenance changed")
+    original_libraries = {Path(item["path"]).name: item["sha256"] for item in origin["libraries"]}
+    relocated_libraries = {}
+    for item in report["libraries"]:
+        path = Path(item["path"]).resolve()
+        if not path.is_relative_to(ROOT.resolve()):
+            raise ValueError("Relocated libraries must be independent snapshot copies")
+        relocated_libraries[path.name] = item["sha256"]
+    if relocated_libraries != original_libraries:
+        raise ValueError("Relocated libraries differ from the original build evidence")
+    return build_source
+
+
 def verify_manifest(path: str | Path) -> dict[str, Any]:
     """Reject stale source, library, configure, or build-log identities."""
     path = Path(path).resolve()
     report = json.loads(path.read_text())
     if not isinstance(report, dict):
         raise ValueError("Native build manifest must be a JSON object")
-    if report.get("schema_version") != 1 or report.get("repo_root") != str(ROOT):
+    schema = report.get("schema_version")
+    if type(schema) is not int or schema not in (1, 2) or report.get("repo_root") != str(ROOT):
         raise ValueError("Native build manifest schema or repository does not match")
+    build_source_root = ROOT if schema == 1 else _relocated_build_source(report)
     if report["project_source"] != source_identity(ROOT, SOURCE_PATHS):
         raise ValueError("Native build manifest does not match the current project sources")
     tvm_source = Path(report["tvm_source_root"])
-    verify_cmake_source(Path(report["cmake_cache"]["path"]), tvm_source)
+    verify_cmake_source(
+        Path(report["cmake_cache"]["path"]), tvm_source, build_source_root=build_source_root
+    )
     if report["tvm_provenance"] != tvm_provenance(tvm_source):
         raise ValueError("Native build manifest does not match the TVM commit and patches")
     if report["tvm_source"] != source_identity(tvm_source, TVM_PATHS):

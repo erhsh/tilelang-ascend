@@ -35,9 +35,10 @@ def Persistent(
         Positive grouping factor for the last domain dimension. Non-divisible
         groups are padded and invalid tiles are excluded from the body.
     num_stages : int
-        Defaults to zero for serial waves. Positive values currently require
-        a provable single full wave with no padding guard; guarded wave
-        pipelining requires the later S5 implementation.
+        Defaults to zero for serial waves. The legacy planner accepts positive
+        values for a provable single full wave without padding. The constraint
+        planner also supports statically bounded guarded waves with a matching
+        calibrated A3 cost model, subject to its pipeline eligibility checks.
     annotations : Mapping[str, Any], optional
         Additional loop metadata; reserved scheduling keys cannot be injected.
 

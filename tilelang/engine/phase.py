@@ -47,6 +47,11 @@ def allow_vectorize(pass_ctx: PassContext | None = None) -> bool:
 
 
 def LowerAndLegalize(mod: IRModule, target: Target) -> IRModule:
+    planner = str(
+        tilelang.transform.get_pass_context().config.get("tl.ascend_pipeline_planner", "legacy")
+    )
+    if planner == "constraint":
+        mod = tilelang.transform.AscendPrepareConstraintPipeline(target)(mod)
     mod = tilelang.transform.AscendValidateScheduleHints()(mod)
     # Workspace sizing must see the same UB scopes as VidReduction.
     mod = tilelang.transform.AscendInferBufferScope()(mod)

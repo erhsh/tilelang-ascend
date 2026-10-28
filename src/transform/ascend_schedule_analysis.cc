@@ -1,6 +1,7 @@
 // Copyright (c) Tile-AI Corporation.
 // Licensed under the MIT License.
 
+#include <limits>
 #include <tvm/arith/analyzer.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/tir/expr_functor.h>
@@ -9,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "./common/ascend_constraint.h"
 #include "./common/ascend_pipeline_structure.h"
 #include "./common/ascend_resource.h"
 #include "./common/ascend_schedule_hints.h"
@@ -24,6 +26,10 @@ using Record = Map<String, ObjectRef>;
 // multiplication, and retaining a narrow Cast would reintroduce that overflow.
 class ScheduleIndexPromoter : public ExprMutator {
 public:
+  explicit ScheduleIndexPromoter(const Map<Var, Range> &domains) {
+    for (const auto &entry : domains)
+      proof_.Bind(entry.first, entry.second);
+  }
   PrimExpr VisitExpr_(const VarNode *op) final {
     if (op->dtype.is_bool())
       return GetRef<PrimExpr>(op);
@@ -45,6 +51,7 @@ public:
     if (op->dtype.is_uint() && !op->dtype.is_bool() && op->dtype.bits() == 64) {
       LOG(FATAL) << "Unsupported uint64 schedule cast";
     }
+    PrimExpr value = VisitExpr(op->value);
     if (op->dtype.is_int() || (op->dtype.is_uint() && !op->dtype.is_bool())) {
       const DataType source = op->value.dtype();
       bool lossless = (source.is_int() && op->dtype.is_int() &&
@@ -54,18 +61,22 @@ public:
                       (source.is_uint() && op->dtype.is_uint() &&
                        op->dtype.bits() >= source.bits());
       if (!lossless && op->dtype.bits() < 64) {
+        int64_t lower =
+            op->dtype.is_uint() ? 0 : -(int64_t(1) << (op->dtype.bits() - 1));
+        int64_t upper =
+            (int64_t(1) << (op->dtype.bits() - (op->dtype.is_uint() ? 0 : 1))) -
+            1;
         if (const auto *constant = op->value.as<IntImmNode>()) {
-          int64_t lower =
-              op->dtype.is_uint() ? 0 : -(int64_t(1) << (op->dtype.bits() - 1));
-          int64_t upper = (int64_t(1) << (op->dtype.bits() -
-                                          (op->dtype.is_uint() ? 0 : 1))) -
-                          1;
           lossless = constant->value >= lower && constant->value <= upper;
+        }
+        if (!lossless &&
+            (source.is_int() || (source.is_uint() && source.bits() < 64))) {
+          auto bound = proof_.const_int_bound(value);
+          lossless = bound->min_value >= lower && bound->max_value <= upper;
         }
       }
       ICHECK(lossless) << "Unsupported narrowing/lossy schedule index cast";
     }
-    PrimExpr value = VisitExpr(op->value);
     if (op->dtype.is_int() || (op->dtype.is_uint() && op->dtype.bits() < 64)) {
       return cast(DataType::Int(64), value);
     }
@@ -114,6 +125,9 @@ public:
     LOG(FATAL) << "Unsupported Ramp schedule index";
     return PrimExpr();
   }
+
+private:
+  arith::Analyzer proof_;
 };
 
 struct Access {
@@ -150,7 +164,7 @@ struct Group {
   bool exact{true};
   int parent{-1};
   bool explicit_task{false};
-  bool stage_zero{false};
+  Optional<Integer> stage;
 };
 
 class ScheduleGraphBuilder {
@@ -209,8 +223,9 @@ public:
                 group.loops.empty())}};
       if (group.explicit_task) {
         record.Set("explicit_task", Bool(true));
-        if (group.stage_zero)
-          record.Set("stage", Integer(0));
+        if (group.stage.defined())
+          record.Set("stage",
+                     Integer(static_cast<int>(group.stage.value()->value)));
       }
       group_records.push_back(record);
     }
@@ -247,8 +262,31 @@ public:
 
 private:
   PrimExpr Wide(const PrimExpr &expr) {
-    ScheduleIndexPromoter promoter;
+    ScheduleIndexPromoter promoter(proof_domains_);
     return analyzer_.Simplify(promoter(expr));
+  }
+  void BindProofDomain(const Var &variable, const PrimExpr &minimum,
+                       const PrimExpr &extent) {
+    // A reused Var shadows the old range even when its new domain is unknown.
+    proof_domains_.erase(variable);
+    PrimExpr min_expr = analyzer_.Simplify(minimum),
+             count_expr = analyzer_.Simplify(extent);
+    const auto *min_value = min_expr.as<IntImmNode>();
+    const auto *count_value = count_expr.as<IntImmNode>();
+    DataType dtype = variable.dtype();
+    if (!min_value || !count_value || count_value->value <= 0 ||
+        !dtype.is_int() || dtype.bits() > 64)
+      return;
+    __int128 end = __int128(min_value->value) + count_value->value;
+    int64_t lower = dtype.bits() == 64 ? std::numeric_limits<int64_t>::min()
+                                       : -(int64_t(1) << (dtype.bits() - 1));
+    int64_t upper = dtype.bits() == 64 ? std::numeric_limits<int64_t>::max()
+                                       : (int64_t(1) << (dtype.bits() - 1)) - 1;
+    if (min_value->value < lower || end > upper || count_value->value > upper)
+      return;
+    proof_domains_.Set(variable,
+                       Range::FromMinExtent(IntImm(dtype, min_value->value),
+                                            IntImm(dtype, count_value->value)));
   }
   PrimExpr Index(const PrimExpr &expr) {
     DataType dtype = expr.dtype();
@@ -367,9 +405,10 @@ private:
         int parent = group_parent_;
         if (group >= 0)
           group_parent_ = group;
-        stage_zero_ = true;
+        Optional<Integer> previous_stage = stage_;
+        stage_ = Downcast<Integer>(attr->node);
         Walk(attr->body, -1);
-        stage_zero_ = false;
+        stage_ = previous_stage;
         group_parent_ = parent;
         return;
       }
@@ -381,7 +420,7 @@ private:
           group = NewGroup(statement);
         }
         groups_[group].explicit_task = true;
-        groups_[group].stage_zero = stage_zero_;
+        groups_[group].stage = stage_;
         ++task_hint_depth_;
         Walk(attr->body, group);
         --task_hint_depth_;
@@ -390,7 +429,45 @@ private:
         group_parent_ = parent;
         return;
       }
+      if (attr->attr_key == kAscendS5TaskHint) {
+        // CombineCV can leave a metadata wrapper around the empty opposite
+        // core branch. It is not a task and must not acquire a phantom ID.
+        if (const auto *empty = attr->body.as<EvaluateNode>()) {
+          if (is_zero(empty->value))
+            return;
+        }
+        ICHECK(attr->node.as<runtime::MapNode>() &&
+               attr->value.dtype() == DataType::Int(32) && is_one(attr->value))
+            << "Malformed S5 task metadata";
+        auto metadata = Downcast<Map<String, ObjectRef>>(attr->node);
+        ICHECK(metadata.size() == 1 && metadata.count("stage"))
+            << "Unsupported S5 task metadata fields";
+        const auto *stage = metadata["stage"].as<IntImmNode>();
+        ICHECK(stage && stage->dtype == DataType::Int(64) &&
+               stage->value >= 0 &&
+               stage->value <= std::numeric_limits<int32_t>::max())
+            << "Malformed S5 task stage";
+        int parent = group_parent_;
+        if (group < 0 || !groups_[group].statement.same_as(statement)) {
+          if (group >= 0)
+            group_parent_ = group;
+          group = NewGroup(statement);
+        }
+        Optional<Integer> previous = manual_stage_;
+        manual_stage_ = GetRef<Integer>(stage);
+        groups_[group].explicit_task = true;
+        groups_[group].stage = manual_stage_;
+        ++task_hint_depth_;
+        Walk(attr->body, group);
+        --task_hint_depth_;
+        ICHECK_EQ(groups_[group].members.size(), 1U)
+            << "S5 task metadata must wrap one audited hardware call";
+        manual_stage_ = previous;
+        group_parent_ = parent;
+        return;
+      }
       int saved = core_;
+      Map<Var, Range> saved_domains = proof_domains_;
       if (attr->attr_key == "resource_scope") {
         const auto *value = attr->value.as<IntImmNode>();
         ICHECK(value && (value->value == 0 || value->value == 1))
@@ -401,6 +478,8 @@ private:
       } else if (attr->attr_key == "thread_extent") {
         launch_domains_.push_back(
             Record{{"iter_var", attr->node}, {"extent", Index(attr->value)}});
+        if (const auto *axis = attr->node.as<IterVarNode>())
+          BindProofDomain(axis->var, make_zero(axis->var.dtype()), attr->value);
       } else {
         LOG(FATAL) << "Unsupported schedule attribute: " << attr->attr_key;
       }
@@ -417,6 +496,7 @@ private:
       }
       group_parent_ = parent;
       core_ = saved;
+      proof_domains_ = saved_domains;
     } else if (const auto *allocation = statement.as<AllocateNode>()) {
       ICHECK(is_one(allocation->condition))
           << "Unsupported conditional schedule allocation";
@@ -439,7 +519,10 @@ private:
                                      {"extent", Index(loop->extent)},
                                      {"parent_loop_ids", loop_stack_}});
       loop_stack_.push_back(Integer(id));
+      Map<Var, Range> saved_domains = proof_domains_;
+      BindProofDomain(loop->loop_var, loop->min, loop->extent);
       Walk(loop->body, -1);
+      proof_domains_ = saved_domains;
       loop_stack_.pop_back();
     } else if (const auto *branch = statement.as<IfThenElseNode>()) {
       if (group < 0)
@@ -641,6 +724,8 @@ private:
                    {"writes", writes},
                    {"state_effects", Array<ObjectRef>()}};
     tasks_.push_back(task);
+    if (manual_stage_.defined())
+      tasks_.back().record.Set("manual_stage", manual_stage_.value());
     groups_[group].members.push_back(Integer(id));
     if (!is_one(guard_))
       groups_[group].complex = true;
@@ -687,7 +772,7 @@ private:
   int core_{-1};
   int group_parent_{-1};
   int task_hint_depth_{0};
-  bool stage_zero_{false};
+  Optional<Integer> stage_, manual_stage_;
   PrimExpr guard_;
   arith::Analyzer analyzer_;
   std::unordered_map<const VarNode *, int> storage_ids_;
@@ -699,6 +784,7 @@ private:
   Array<ObjectRef> launch_domains_;
   Array<Integer> loop_stack_;
   Map<Var, PrimExpr> addresses_;
+  Map<Var, Range> proof_domains_;
 };
 
 } // namespace

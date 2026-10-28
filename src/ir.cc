@@ -7,6 +7,7 @@
  *
  */
 
+#include "./transform/common/ascend_constraint.h"
 #include "./transform/common/attr.h"
 #include "op/builtin.h"
 #include <tvm/arith/analyzer.h>
@@ -50,15 +51,24 @@ static ForFrame MakeIterVarFrame(std::string name, PrimExpr dom) {
   return ForFrame(n);
 }
 
-static void ValidateLoopAnnotations(const Map<String, ObjectRef> &annotations) {
+static void ValidateLoopAnnotations(const Map<String, ObjectRef> &annotations,
+                                    bool allow_offset = false) {
   ICHECK(annotations.defined()) << "Loop annotations must be a non-null Map";
   for (const auto &entry : annotations) {
     std::string key = entry.first;
-    ICHECK(key != "num_stages" && key != "tl_pipeline_order" &&
-           key != "tl_pipeline_stage" && key != "tl_pipeline_sync" &&
-           key != "tl_pipeline_group" && key != "tl_cross_interval" &&
-           key != "tl.ascend_task" && key != "tl.ascend_stage" &&
-           key != "enable_offset" && key != "parallel_loop_layout" &&
+    if (key == "enable_offset" && allow_offset) {
+      const auto *value = entry.second.as<tvm::tir::IntImmNode>();
+      ICHECK(value && value->dtype.is_bool())
+          << "enable_offset must be boolean";
+      continue;
+    }
+    ICHECK(key != kAscendPersistentGuard && key != kAscendS5LoopId &&
+           key != kAscendS5Versions && key != "num_stages" &&
+           key != "tl_pipeline_order" && key != "tl_pipeline_stage" &&
+           key != "tl_pipeline_sync" && key != "tl_pipeline_group" &&
+           key != "tl_cross_interval" && key != "tl.ascend_task" &&
+           key != "tl.ascend_stage" && key != "enable_offset" &&
+           key != "parallel_loop_layout" &&
            key.rfind("software_pipeline_", 0) != 0)
         << "Loop annotation '" << key
         << "' is reserved; use its dedicated supported API";
@@ -108,7 +118,7 @@ ForFrame PipelinedFor(PrimExpr start, PrimExpr stop, int num_stages,
                       Array<Array<PrimExpr>> groups, int cross_interval,
                       Map<String, ObjectRef> annotations) {
   using namespace tvm::tir;
-  ValidateLoopAnnotations(annotations);
+  ValidateLoopAnnotations(annotations, true);
   ObjectPtr<ForFrameNode> n = make_object<ForFrameNode>();
   DataType dtype = stop.dtype();
   n->vars.push_back(Var("v", dtype));
@@ -222,11 +232,9 @@ ForFrame PersistentFor(const Array<PrimExpr> &domain, const PrimExpr &wave_size,
                  *wave_size_value)
       << "T.Persistent padded wave index range must fit int64";
   auto loop_var = Var("w", waves.dtype());
-  ICHECK(num_stages == 0 ||
-         (!needs_tile_guard &&
-          validation_analyzer.CanProveEqual(padded_size, wide_wave_size)))
-      << "T.Persistent guarded or multi-wave num_stages > 0 requires S5 wave "
-         "pipelining support; use num_stages=0";
+  bool guarded_positive =
+      num_stages > 0 && (needs_tile_guard || !validation_analyzer.CanProveEqual(
+                                                 padded_size, wide_wave_size));
 
   n->f_make_for_loop = [=](const Array<Var> &vars, const Array<Range> &doms,
                            const Stmt &body) -> Stmt {
@@ -234,6 +242,8 @@ ForFrame PersistentFor(const Array<PrimExpr> &domain, const PrimExpr &wave_size,
     Map<String, ObjectRef> anno = annotations;
     if (num_stages > 0) {
       anno.Set("num_stages", PrimExpr(num_stages));
+      if (guarded_positive)
+        anno.Set(kAscendPersistentGuard, Bool(true));
     }
     Array<PrimExpr> idxs(grouped_domain.size(), PrimExpr());
     PrimExpr global_index = loop_var * wide_wave_size + wide_index;
@@ -253,21 +263,26 @@ ForFrame PersistentFor(const Array<PrimExpr> &domain, const PrimExpr &wave_size,
 
     arith::Analyzer analyzer;
     Stmt new_body = body;
-    if (needs_tile_guard) {
-      PrimExpr last_coordinate = idxs[0] * group_size + idxs[vars.size()];
-      new_body =
-          tvm::tir::IfThenElse(last_coordinate < last_extent, new_body, Stmt());
-    }
-    if (analyzer.CanProveGreaterEqual(waves, 2)) {
-      new_body = SeqStmt({out_if, new_body});
-    } else if (!analyzer.CanProveEqual(padded_size, wide_wave_size)) {
-      // A unit loop can be removed during lowering, so a loop_break guard
-      // would become an invalid top-level C++ break. Predicate the tile body
-      // for partial first waves and symbolic wave counts instead. Under
-      // Persistent's 0 <= index < wave_size contract, no guard is needed when
-      // the domain is provably exactly one full wave.
-      new_body =
-          tvm::tir::IfThenElse(global_index < padded_size, new_body, Stmt());
+    if (num_stages > 0) {
+      PrimExpr valid = global_index < padded_size;
+      if (needs_tile_guard) {
+        PrimExpr last_coordinate = idxs[0] * group_size + idxs[vars.size()];
+        valid = valid && last_coordinate < last_extent;
+      }
+      if (guarded_positive)
+        new_body = tvm::tir::IfThenElse(valid, new_body, Stmt());
+    } else {
+      if (needs_tile_guard) {
+        PrimExpr last_coordinate = idxs[0] * group_size + idxs[vars.size()];
+        new_body = tvm::tir::IfThenElse(last_coordinate < last_extent, new_body,
+                                        Stmt());
+      }
+      if (analyzer.CanProveGreaterEqual(waves, 2)) {
+        new_body = SeqStmt({out_if, new_body});
+      } else if (!analyzer.CanProveEqual(padded_size, wide_wave_size)) {
+        new_body =
+            tvm::tir::IfThenElse(global_index < padded_size, new_body, Stmt());
+      }
     }
     Stmt outer = For(loop_var, make_const(loop_var.dtype(), 0), waves,
                      ForKind::kSerial, new_body, NullOpt, anno);

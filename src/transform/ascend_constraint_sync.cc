@@ -9,6 +9,7 @@
 #include <tvm/tir/stmt_functor.h>
 #include <tvm/tir/transform.h>
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <map>
@@ -25,6 +26,7 @@ namespace {
 using namespace tir;
 using Record = Map<String, ObjectRef>;
 using Key = std::vector<int64_t>;
+using LaunchCase = std::map<std::string, std::pair<int64_t, int64_t>>;
 constexpr size_t kTaskLimit = 4096;
 constexpr size_t kControlLimit = 65536;
 
@@ -48,8 +50,10 @@ struct TraceEvent {
 // marker values travel through the injector's Substitute and loop unrolling.
 class TraceBuilder {
 public:
-  TraceBuilder(PrimFunc function, Array<ObjectRef> units, bool source)
-      : function_(function), units_(units), source_(source) {
+  TraceBuilder(PrimFunc function, Array<ObjectRef> units, bool source,
+               const LaunchCase &launch_case = {}, bool strict_launch = false)
+      : function_(function), units_(units), source_(source),
+        launch_case_(launch_case), strict_launch_(strict_launch) {
     Walk(function->body);
   }
 
@@ -142,7 +146,17 @@ private:
         int64_t extent = IntegerValue(attr->value);
         ICHECK_GT(extent, 0) << "Invalid constraint launch extent";
         Map<Var, PrimExpr> saved = bindings_;
-        if (extent == 1)
+        auto coordinate = launch_case_.find(axis->thread_tag);
+        ICHECK(!strict_launch_ || coordinate != launch_case_.end())
+            << "Unmapped S5 physical launch domain";
+        if (coordinate != launch_case_.end()) {
+          ICHECK(coordinate->second.second == extent &&
+                 coordinate->second.first >= 0 &&
+                 coordinate->second.first < extent)
+              << "S5 launch domain changed after planning";
+          bindings_.Set(axis->var,
+                        IntImm(axis->var.dtype(), coordinate->second.first));
+        } else if (extent == 1)
           bindings_.Set(axis->var, make_zero(axis->var.dtype()));
         if (launch_vars_.insert(axis->var.get()).second)
           launches_.push_back(GetRef<AttrStmt>(attr));
@@ -299,6 +313,8 @@ private:
   PrimFunc function_;
   Array<ObjectRef> units_;
   bool source_;
+  LaunchCase launch_case_;
+  const bool strict_launch_;
   int active_task_{-1}, scope_{-1};
   size_t visits_{0};
   arith::Analyzer analyzer_;
@@ -322,6 +338,12 @@ struct Instance {
   std::vector<Effect> reads, writes;
 };
 
+struct VersionRemap {
+  Var logical, physical;
+  int64_t loop, versions, stride, span, total, origin, logical_begin,
+      logical_end;
+};
+
 class ProtocolVerifier {
 public:
   explicit ProtocolVerifier(PrimFunc function) : function_(function) {}
@@ -330,19 +352,63 @@ public:
     auto attribute = function_->GetAttr<Record>(kAscendS4Manifest);
     ICHECK(attribute.defined()) << "Missing constraint source manifest";
     Record manifest = attribute.value();
-    ICHECK_EQ(Downcast<Integer>(manifest["schema_version"])->value, 1)
+    int64_t schema = Downcast<Integer>(manifest["schema_version"])->value;
+    ICHECK(schema == 1 || schema == 2)
         << "Unsupported constraint manifest version";
+    versions_enabled_ = schema == 2;
     Record source_graph = Downcast<Record>(manifest["source_graph"]);
+    if (versions_enabled_)
+      LoadVersionRemaps(source_graph);
     Array<ObjectRef> units = Downcast<Array<ObjectRef>>(source_graph["tasks"]);
     PrimFunc source_function = Downcast<PrimFunc>(manifest["source_function"]);
     ICHECK(!source_function->GetAttr<Record>(kAscendS4Manifest).defined())
         << "Recursive constraint source manifest";
-    TraceBuilder source(source_function, units, true);
-    TraceBuilder final(function_, units, false);
+    std::vector<LaunchCase> cases{{}};
+    if (versions_enabled_) {
+      std::map<std::string, int64_t> domains;
+      for (const ObjectRef &item :
+           Downcast<Array<ObjectRef>>(source_graph["launch_domains"])) {
+        Record domain = Downcast<Record>(item);
+        IterVar axis = Downcast<IterVar>(domain["iter_var"]);
+        int64_t extent = StaticInteger(domain["extent"], "launch extent");
+        std::string tag = axis->thread_tag;
+        ICHECK(!tag.empty() && extent > 0) << "Invalid S5 static launch domain";
+        auto previous = domains.find(tag);
+        if (previous != domains.end()) {
+          ICHECK_EQ(previous->second, extent)
+              << "Conflicting S5 launch domains";
+          continue;
+        }
+        ICHECK(extent <= int64_t(kTaskLimit / cases.size()))
+            << "S5 launch-case verification limit exceeded (4096)";
+        domains[tag] = extent;
+        std::vector<LaunchCase> expanded;
+        for (const LaunchCase &binding : cases) {
+          for (int64_t index = 0; index < extent; ++index) {
+            LaunchCase copy = binding;
+            copy[tag] = {index, extent};
+            expanded.push_back(copy);
+          }
+        }
+        cases = std::move(expanded);
+      }
+    }
+    for (const LaunchCase &launch : cases)
+      CheckCase(source_function, units, launch);
+  }
+
+private:
+  void CheckCase(const PrimFunc &source_function, const Array<ObjectRef> &units,
+                 const LaunchCase &launch) {
+    TraceBuilder source(source_function, units, true, launch,
+                        versions_enabled_);
+    TraceBuilder final(function_, units, false, launch, versions_enabled_);
     Record original_graph = source.Analyze();
     Record final_graph = final.Analyze();
     auto original = Instances(original_graph, false);
     auto actual = Instances(final_graph, true);
+    if (versions_enabled_)
+      CheckActualVersionAllocations(final_graph, actual);
     ICHECK_EQ(original.size(), actual.size())
         << "Constraint task coverage mismatch";
     std::map<Key, int> final_ids;
@@ -358,13 +424,13 @@ public:
       ICHECK(found != final_ids.end())
           << "Missing final constraint task instance";
       correspondence.push_back(found->second);
-      SameTask(original[i], actual[found->second]);
+      SameTask(original[i], actual[found->second], source.keys[i]);
     }
     std::vector<std::set<int>> requirements(actual.size());
     bool noalias = source_function->HasNonzeroAttr("tir.noalias");
     for (size_t i = 0; i < original.size(); ++i) {
       for (size_t j = i + 1; j < original.size(); ++j) {
-        if (Hazard(original[i], original[j], false, noalias))
+        if (Hazard(original[i], original[j], false, noalias, versions_enabled_))
           requirements[correspondence[j]].insert(correspondence[i]);
       }
     }
@@ -374,10 +440,204 @@ public:
           requirements[j].insert(i);
       }
     }
+    if (versions_enabled_)
+      CheckReachingWriters(original, actual, source.keys, correspondence,
+                           &requirements);
     CheckEvents(final.events, actual, requirements);
   }
 
-private:
+  int64_t StaticInteger(const ObjectRef &object, const char *field) {
+    const auto *value = object.as<IntImmNode>();
+    ICHECK(value && value->dtype.is_int() && value->dtype.bits() <= 64)
+        << "Non-static S5 version metadata: " << field;
+    return value->value;
+  }
+  int64_t ShapeBytes(const ObjectRef &object, int bytes, const char *field,
+                     bool logical) {
+    Array<PrimExpr> shape = Downcast<Array<PrimExpr>>(object);
+    ICHECK(!shape.empty()) << "Empty S5 version shape: " << field;
+    int64_t product = bytes;
+    for (size_t i = 0; i < shape.size(); ++i) {
+      int64_t extent = StaticInteger(shape[i], field);
+      ICHECK(extent > 0 && extent <= kAscendA2A3UBBudget / product)
+          << "S5 version shape exceeds the native UB budget";
+      if (logical && i + 1 < shape.size())
+        ICHECK_EQ(extent, 1)
+            << "S5 versioned UB must be one contiguous logical row";
+      product *= extent;
+    }
+    return product;
+  }
+  void LoadVersionRemaps(const Record &source_graph) {
+    auto attribute = function_->GetAttr<Array<ObjectRef>>(kAscendS5BufferRemap);
+    ICHECK(attribute.defined()) << "Missing actual S5 buffer remap metadata";
+    for (const ObjectRef &item : attribute.value()) {
+      Record record = Downcast<Record>(item);
+      auto number = [&](const char *field) {
+        return StaticInteger(record[field], field);
+      };
+      Var logical = Downcast<Var>(record["logical_data"]);
+      Var physical = Downcast<Var>(record["physical_data"]);
+      const auto *pointer = logical->type_annotation.as<PointerTypeNode>();
+      const auto *element =
+          pointer ? pointer->element_type.as<PrimTypeNode>() : nullptr;
+      ICHECK(element && (element->dtype == DataType::Float(16) ||
+                         element->dtype == DataType::Float(32)))
+          << "S5 version remap requires float16/float32 UB storage";
+      int64_t count = number("versions"),
+              stride = number("version_stride_bytes"),
+              span = number("version_span_bytes"),
+              total = number("total_bytes");
+      ICHECK(count >= 1 && count <= 3 && stride > 0 && span > 0 &&
+             span <= stride && stride % 32 == 0 && total > 0 &&
+             total <= kAscendA2A3UBBudget && __int128(count) * stride == total)
+          << "Invalid S5 physical version geometry";
+      int64_t logical_bytes =
+          ShapeBytes(record["logical_shape"], element->dtype.bytes(),
+                     "logical_shape", true);
+      int64_t physical_bytes =
+          ShapeBytes(record["physical_shape"], element->dtype.bytes(),
+                     "physical_shape", false);
+      ICHECK_EQ(physical_bytes, total) << "S5 physical shape/total mismatch";
+      int64_t offset = number("logical_elem_offset");
+      ICHECK(offset >= 0 &&
+             __int128(offset) * element->dtype.bytes() + logical_bytes <= span)
+          << "S5 logical elem_offset/region exceeds one physical version";
+      int64_t loop = number("loop_id"), origin = number("selector_origin");
+      auto loops = Downcast<Array<ObjectRef>>(source_graph["loops"]);
+      ICHECK(loop >= 0 && size_t(loop) < loops.size())
+          << "Invalid S5 remap loop identity";
+      Record owner = Downcast<Record>(loops[loop]);
+      ICHECK_EQ(StaticInteger(owner["min"], "source loop minimum"), origin)
+          << "S5 version selector origin differs from its source loop";
+      for (const VersionRemap &old : remaps_)
+        ICHECK(!old.logical.same_as(logical) ||
+               (old.loop != loop && old.versions == 1 && count == 1))
+            << "Unsupported overlapping/nested S5 version ownership";
+      int64_t begin = offset * element->dtype.bytes();
+      remaps_.push_back({logical, physical, loop, count, stride, span, total,
+                         origin, begin, begin + logical_bytes});
+    }
+  }
+  void CheckActualVersionAllocations(const Record &graph,
+                                     const std::vector<Instance> &actual) {
+    auto storages = Downcast<Array<ObjectRef>>(graph["storages"]);
+    for (const VersionRemap &remap : remaps_) {
+      bool used = false;
+      for (const Instance &task : actual)
+        for (const auto *effects : {&task.reads, &task.writes})
+          for (const Effect &effect : *effects)
+            used |= effect.data.same_as(remap.physical);
+      if (!used)
+        continue; // Zero-trip allocations may be legally eliminated.
+      bool found = false;
+      for (const ObjectRef &item : storages) {
+        Record storage = Downcast<Record>(item);
+        if (!Downcast<Var>(storage["data"]).same_as(remap.physical))
+          continue;
+        ICHECK(Downcast<Bool>(storage["physical_allocation"])->value &&
+               Downcast<String>(storage["scope"]) == "shared.ub" &&
+               Equal(Downcast<PrimExpr>(storage["capacity_bytes"]),
+                     IntImm(DataType::Int(64), remap.total)))
+            << "Actual allocation shape does not match the S5 version remap";
+        found = true;
+      }
+      ICHECK(found) << "Missing actual S5 version allocation";
+    }
+  }
+  bool Iteration(const Key &key, int64_t loop, int64_t *value) const {
+    for (size_t i = 1; i + 1 < key.size(); i += 2) {
+      if (key[i] == loop) {
+        *value = key[i + 1];
+        return true;
+      }
+    }
+    return false;
+  }
+  const VersionRemap *Remap(const Effect &effect, const Key &key) const {
+    const VersionRemap *found = nullptr;
+    bool versioned = false;
+    for (const VersionRemap &remap : remaps_) {
+      if (!remap.logical.same_as(effect.data))
+        continue;
+      versioned |= remap.versions > 1;
+      int64_t iteration;
+      if (Iteration(key, remap.loop, &iteration)) {
+        ICHECK(!found) << "Ambiguous S5 version remap";
+        found = &remap;
+      }
+    }
+    ICHECK(found || !versioned)
+        << "Versioned UB used outside its owning pipeline";
+    return found;
+  }
+  bool Renamed(const Effect &effect) const {
+    for (const VersionRemap &remap : remaps_)
+      if (remap.versions > 1 && remap.logical.same_as(effect.data))
+        return true;
+    return false;
+  }
+  void CheckReachingWriters(const std::vector<Instance> &source,
+                            const std::vector<Instance> &final,
+                            const std::vector<Key> &keys,
+                            const std::vector<int> &correspondence,
+                            std::vector<std::set<int>> *requirements) {
+    std::map<const VarNode *, int> writer;
+    for (size_t index = 0; index < source.size(); ++index) {
+      for (size_t operand = 0; operand < source[index].reads.size();
+           ++operand) {
+        const Effect &read = source[index].reads[operand];
+        const VersionRemap *remap = Remap(read, keys[index]);
+        if (!remap)
+          continue;
+        ICHECK(Equal(read.begin, Integer(remap->logical_begin)) &&
+               Equal(read.end, Integer(remap->logical_end)))
+            << "S5 versioned reads must cover one fixed whole logical region";
+        auto definition = writer.find(read.data.get());
+        ICHECK(definition != writer.end())
+            << "Versioned UB read has no source full writer";
+        const Key &current = keys[index], &producer = keys[definition->second];
+        ICHECK(current.size() == producer.size() &&
+               std::equal(current.begin() + 1, current.end(),
+                          producer.begin() + 1))
+            << "Loop-carried versioned UB accumulators require a later "
+               "ownership model";
+        int consumer_id = correspondence[index],
+            producer_id = correspondence[definition->second];
+        (*requirements)[consumer_id].insert(producer_id);
+        const Effect &physical_read = final[consumer_id].reads[operand];
+        bool matched = false;
+        for (int previous = consumer_id - 1; previous >= 0 && !matched;
+             --previous) {
+          for (const Effect &write : final[previous].writes) {
+            if (!Overlap(write, physical_read, true, false))
+              continue;
+            ICHECK(
+                previous == producer_id &&
+                analyzer_.CanProve(write.physical_begin.value() <=
+                                       physical_read.physical_begin.value() &&
+                                   physical_read.physical_end.value() <=
+                                       write.physical_end.value()))
+                << "S5 versioned read observes the wrong reaching writer or "
+                   "overwritten slot";
+            matched = true;
+            break;
+          }
+        }
+        ICHECK(matched)
+            << "S5 versioned read observes an uninitialized physical slot";
+      }
+      for (const Effect &write : source[index].writes) {
+        const VersionRemap *remap = Remap(write, keys[index]);
+        if (!remap)
+          continue;
+        ICHECK(Equal(write.begin, Integer(remap->logical_begin)) &&
+               Equal(write.end, Integer(remap->logical_end)))
+            << "S5 versioned writes must cover one fixed whole logical region";
+        writer[write.data.get()] = index;
+      }
+    }
+  }
   std::vector<Instance> Instances(const Record &graph, bool physical) {
     auto storages = Downcast<Array<ObjectRef>>(graph["storages"]);
     std::vector<Instance> result;
@@ -443,7 +703,7 @@ private:
       }
     }
   }
-  void SameTask(const Instance &source, const Instance &final) {
+  void SameTask(const Instance &source, const Instance &final, const Key &key) {
     ICHECK(source.pipe == final.pipe && source.operation == final.operation)
         << "Constraint task operation/PIPE identity changed";
     SamePayload(source.call, final.call);
@@ -453,10 +713,32 @@ private:
       ICHECK_EQ(left.size(), right.size())
           << "Constraint task effect count changed";
       for (size_t i = 0; i < left.size(); ++i) {
-        ICHECK(left[i].data.same_as(right[i].data) &&
+        const VersionRemap *remap =
+            versions_enabled_ && left[i].scope == "shared.ub"
+                ? Remap(left[i], key)
+                : nullptr;
+        PrimExpr shift = IntImm(DataType::Int(64), 0);
+        Var expected_data = left[i].data;
+        if (remap) {
+          int64_t iteration;
+          ICHECK(Iteration(key, remap->loop, &iteration))
+              << "Missing S5 iteration identity";
+          __int128 normalized = __int128(iteration) - remap->origin;
+          int64_t slot =
+              int64_t((normalized % remap->versions + remap->versions) %
+                      remap->versions);
+          shift = IntImm(DataType::Int(64), slot * remap->stride);
+          expected_data = remap->physical;
+          auto sizes = function_->GetAttr<Map<Var, PrimExpr>>("size_map");
+          ICHECK(sizes.defined() && sizes.value().count(expected_data) &&
+                 analyzer_.CanProve(sizes.value()[expected_data] >=
+                                    Integer(remap->total)))
+              << "Actual allocation does not contain the S5 version remap";
+        }
+        ICHECK(expected_data.same_as(right[i].data) &&
                left[i].scope == right[i].scope &&
-               Equal(left[i].begin, right[i].begin) &&
-               Equal(left[i].end, right[i].end))
+               Equal(left[i].begin + shift, right[i].begin) &&
+               Equal(left[i].end + shift, right[i].end))
             << "Unsupported constraint task logical effect remapping";
       }
     }
@@ -500,13 +782,16 @@ private:
     }
     return !analyzer_.CanProve(end_a <= begin_b || end_b <= begin_a);
   }
-  bool Hazard(const Instance &a, const Instance &b, bool physical,
-              bool noalias) {
+  bool Hazard(const Instance &a, const Instance &b, bool physical, bool noalias,
+              bool renamed = false) {
     auto overlap = [&](const std::vector<Effect> &left,
                        const std::vector<Effect> &right) {
       for (const Effect &x : left)
         for (const Effect &y : right)
-          if (Overlap(x, y, physical, noalias))
+          if (renamed && !physical && x.scope == "shared.ub" &&
+              y.scope == "shared.ub" && (Renamed(x) || Renamed(y)))
+            continue;
+          else if (Overlap(x, y, physical, noalias))
             return true;
       return false;
     };
@@ -561,6 +846,8 @@ private:
 
   PrimFunc function_;
   arith::Analyzer analyzer_;
+  bool versions_enabled_{false};
+  std::vector<VersionRemap> remaps_;
 };
 } // namespace
 

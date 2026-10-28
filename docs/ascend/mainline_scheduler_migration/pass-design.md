@@ -9,6 +9,7 @@
 未注明已实现的接口和 Pass 仍为设计提案；S1 审计见第 11 节，S2 合同见第 12 节，
 S3 的循环与标记实现边界见第 13 节。
 S4 的约束桥接与最终同步验证合同见第 14 节，实际验证状态以迁移计划为准。
+S5 的多 stage/版本与成本模型合同见第 15 节。
 
 用户已明确当前及后续只要求 A3 测试和验收。本文的 A2/A3 目标范围保留既有后端
 兼容性，不要求新增 A2 专属测试，也不把 A2 历史未运行当作步骤验收缺口。
@@ -876,3 +877,103 @@ liveness 证明，同 PIPE 也不能笼统当作依赖完成，相关 V→V 必�
 设备尾块采用完整、对齐的短 tile：160=64×2+32，动态 padding DMA 不在本片白名单。
 独立尾 allocation 不一定发生物理复用，因此实际复用另用 native 定址正负例验证。
 三个入口及真实结果记录在迁移计划；不从 TIR 验证或一次 smoke 推导设备验收通过。
+
+## 15. S5：校准成本、多 stage 与物理版本
+
+### 15.1 成本模型和缓存
+
+`TL_ASCEND_PIPELINE_COST_MODEL = "tl.ascend_pipeline_cost_model"` 接收完整 canonical
+Map；旧 TVM 配置系统内部以 DictAttrs 承载，用户无需构造 Attrs。纯主机工具
+`load_ascend_pipeline_cost_model(path, expected_identity=...)` 返回已校验内容，
+不是把路径作为缓存身份。内容包括 schema/model/unit、实际平台/SoC/CANN/Bisheng/
+有序 flags、逐 op/dtype/elements/bytes/rows 的有效成本、原始样本及方法证据。
+排除 profile_sha256 本身后对 sorted JSON 求 SHA256；所有内容参与已有 cache key。
+相同路径的新内容不能命中旧模型；未知几何、未通过校准或单位不匹配时不退回单位成本。
+
+模型为 `a3-effective-op-v1`，单位 ns，带显式正整数 quantum_ns。latency/II 是 msprof
+测得时间随操作数 N 的斜率上界，经量子向上取整得到的整数成本，包含 issue、同步和
+有界 arena drain 开销；不是纯指令延迟，不使用 SYS_CNT 名称猜测 core-cycle 频率。
+独立最终依赖/事件/地址证明不依赖成本估计准确，性能结果不预设收益。
+
+校准先做逐 N 准确性，再以统一 BasicInfo-only、预热、采样和缓存政策测量 dependent
+fenced chain 与 independent batch。多 N/多 round 及 hierarchical bootstrap 纳入
+round 漂移，要求 CI 下界为正、相对半宽≤20%、相对残差≤10%；噪声失败不 clamp 成 1。
+ns/整数成本与原始 CSV/journal 对应，PMU 内部 replay 不当作独立应用 launch。
+
+校准可使用显式搬移快照：native manifest schema 2 标记 relocated_verified_build，
+source snapshot 相对内容与原 schema 1 完全相同，三库、原 cache/log/manifest 均按原字节
+复制核验，保留真实原 CMAKE_HOME_DIRECTORY 和 build command，不冒称新构建。
+这样运行中的校准不会加载随后被 S5 链接覆盖的库；普通 schema 1 的严格检查保持。
+
+### 15.2 规划与真实版本 ABI
+
+num_stages 1/2/3 为版本搜索上限，不等于实际 N，也不是 manual Stage 的上限。
+S4 单 stage、无 profile 的 straight 路径保留；多 stage 使用匹配模型和 modulo solver。
+独立纯 verifier 通过显式 FFI 桥检查消费的 starts/II/资源/依赖/版本和容量，不导入 Z3；
+legacy 不自动注册 solver/verifier。实际版本修订后再次验证，不仅验证原数字候选。
+
+只有固定区间、整 buffer、单行连续且每版字节 32B 对齐的 loop-private UB 可重命名，
+每次迭代须 full-write 后读；该首片不接受候选使用外部只读 UB 或共享写 UB。
+read-before-write 和跨迭代 carry 不擅自多版本化；本迭代 full-write 后的 in-place
+full-read/write 仍须通过同一 producer/slot 证明。这不扩展为 S6 的通用 owner/epoch 分析。
+
+planner 与旧 injector 共用 required-N/shape/stride 推导。constraint-only override
+不得小于旧 required N、不得超过搜索上限，真实 N/物理 shape/stride/elem_offset/
+selector 及分配字节写入 remap 合同。真实 padding、对齐和所有版本的总量先过原生预算。
+Pointer 与 BufferLoad/Store 的 selector 原点统一为 logical_iteration-min。
+不从 solver.buffer_versions 或请求数单独推导实际物化结果。
+
+已实证旧 injector 在 trip1、stage[0,1,2] 重复发射中间 unit。分段修复保持 prologue、
+steady、epilogue 连续不重叠，steady 不产生负 extent。实际生成谓词的解释测试核对
+0/1/N、trip 小于 stage 跨度和非零 min；规划前核验 staging horizon 与整数域，防止
+显式 unroll 后才发现资源爆量。独立 staging horizon 为 64，窗口×unit 控制预算为
+65536、实际任务展开预算为 4096。既有 L1 分形 tail/stride 继续走 legacy 回归。
+
+### 15.3 Stage、offset 与短循环
+
+Python Stage 接收非负 int32 literal，bool 拒绝。非零 Stage 仅在受支持 constraint
+候选和 enable_offset=True 下消费，legacy 编译仍拒绝；Task latency/ii override
+继续拒绝，由显式校准模型提供成本。Stage 约束源程序的排程，不重解释 read 的语义；
+与原 imperative 数据依赖矛盾时必须 UNSAT，不能按 stage 重新排序源值绑定。
+出现任一显式 Stage 后，未标注 unit 按既有完整 manual_stages 协议视为 Stage0；
+单独 Task 而无 Stage 不冻结自动 stage 选择。候选外非零 Stage 明确拒绝，Stage0 可按
+普通顺序区域等价消费，不能静默擦除未实现的排程要求。
+
+仅 Pipelined annotations 解禁 bool enable_offset，由 planner/solver 消费；旧
+injector 不读取它。多 stage 自动模式默认允许 offset；显式 False 固定 stage 0。
+Parallel/Persistent 仍拒绝注入该字段和内部 loop/version/guard 标记。
+early prepare 在 Simplify 前记录候选意图，检查 0/1-trip 事实没有静默丢失。
+具体设备案例以实际展开 IR 为准，折叠循环不声称运行不存在的 prologue/epilogue。
+
+### 15.4 最终数据与配置状态证明
+
+对真实 N>1 的 UB，不再照搬跨不同 slot 的源 WAR/WAW：源 read 必须有唯一 reaching
+full writer，最终同 slot 的最近 writer 必须匹配该源 producer 的 task/iteration 身份。
+去除已验证的版本基址后再比较逻辑区间，不能仅放宽 S4 的 SameTask 范围检查。
+GM、非重命名 buffer 及 N1 仍保留原依赖方向；实际同 slot 物理 hazard 继续要求完成关系。
+source/final 按静态 core/vid 分别解释，事件域隔离；不把每核证明称为跨核握手证明。
+
+managed Vector mask 有真实 mode/lo/hi effects，不能随 buffer version 复制。
+最后 Selection/MaskLegalize 按实际调度 IR 修复，Legalize 内部末端增加 constraint-only
+只读 MaskContractVerifier，复用 ContractOf/requires/ensures/入口未知和 must-facts。
+每 terminal 检查 reaching mode/payload，并按发射次序应用 ensures，不能让后一 setter
+提前覆盖前一 reader。检查器不 Repair、不插额外 barrier，不在末端增加 TIR rewrite。
+未审计的 deq/atomic/HF32/MMAD、opaque 和条件 setter/reader 继续拒绝。
+
+### 15.5 Guarded Persistent 与验收
+
+新正 stages 的 guarded Persistent 由内部 marker 区分。有效谓词同时排除 padded
+group 空洞与末 wave overshoot；正流水改用纯 If-noelse，不把 loop_break 移入某 stage。
+每 unit 的 guard 随同一 logical iteration 替换，实际 post-injector IR 核对每 worker 的
+有效 tile 恰好一次、无 invalid 读写。num_stages=0 的 legacy 路径保留已有保护。
+
+对旧 TVM 无法直接证明的 guarded 仿射范围，可由 Analyzer 的精确 ModularSet 将
+`start+span<=capacity` 归一化为整数商的等价上界，再要求 CanProve。此路径保留
+非负 start、正静态 span/capacity、规范 residue 与算术可表示性检查；未知仍拒绝。
+例如 `4*wave+core<9` 下的 768B 步长，不以各轴独立区间的过宽上界误拒绝，
+也不放行移除 guard 或真实越界的访问。
+
+交付 s5_check_versions_ir.py、s5_run_pipeline_npu.py 和
+s5_run_persistent_pipeline_npu.py。分别保存实际版本/容量/事件/配置故障注入、
+0/1/N/短 trip 与 1/2/3 物理版本、静态短尾、guarded 单/多 wave、重复调用和同条件
+msprof 性能记录。最终新构建 manifest、实际结果与剩余边界记录在迁移计划，未验证不记 PASS。

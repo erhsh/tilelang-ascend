@@ -102,16 +102,22 @@ def test_persistent_legacy_arity_and_positive_single_fullwave_metadata():
 )
 @pytest.mark.parametrize("direct_ffi", [False, True])
 def test_persistent_guarded_positive_stages_require_s5(domain, wave_size, group_size, direct_ffi):
-    with pytest.raises(tvm.TVMError, match="requires S5.*use num_stages=0"):
+    def frame():
         if direct_ffi:
-            _ffi_api.Persistent(domain, wave_size, 0, group_size, 2, {})
-        else:
-            T.Persistent(domain, wave_size, 0, group_size, 2)
+            return _ffi_api.Persistent(domain, wave_size, 0, group_size, 2, {})
+        return T.Persistent(domain, wave_size, 0, group_size, 2)
+
+    function = _function(frame)
+    assert bool(_loops(function)[0].annotations["tl.ascend_persistent_guard"])
+    with pytest.raises(tvm.TVMError, match="requires the constraint scheduling mode"):
+        tilelang.transform.AscendValidateScheduleHints()(tvm.IRModule.from_expr(function))
 
 
 def test_persistent_symbolic_positive_stages_require_s5():
-    with pytest.raises(tvm.TVMError, match="requires S5"):
-        T.Persistent([T.symbolic("rows"), 2], 8, 0, num_stages=2)
+    function = _function(lambda: T.Persistent([T.symbolic("rows"), 2], 8, 0, num_stages=2))
+    assert bool(_loops(function)[0].annotations["tl.ascend_persistent_guard"])
+    with pytest.raises(tvm.TVMError, match="requires the constraint scheduling mode"):
+        tilelang.transform.AscendValidateScheduleHints()(tvm.IRModule.from_expr(function))
 
 
 def test_persistent_nondivisible_group_is_padded_and_guarded():
@@ -224,9 +230,16 @@ def test_reserved_annotations_rejected_by_python_and_native(key, builder):
             return _ffi_api.Pipelined(0, 4, 0, [], [], [], [], 1, metadata)
         return _ffi_api.Persistent([4, 2], 8, 0, 8, 0, metadata)
 
-    with pytest.raises(ValueError, match="reserved"):
+    if key == "enable_offset" and builder == "pipelined":
+        python_error, native_error = "bool", "boolean"
+    else:
+        python_error = native_error = "reserved"
+    python_exception = (
+        TypeError if key == "enable_offset" and builder == "pipelined" else ValueError
+    )
+    with pytest.raises(python_exception, match=python_error):
         python()
-    with pytest.raises(tvm.TVMError, match="reserved"):
+    with pytest.raises(tvm.TVMError, match=native_error):
         native()
 
 

@@ -45,7 +45,10 @@ class PassConfigKey(str, Enum):
     """Enable/disable TileLang AscendMemoryPlanning pass. Default: False"""
 
     TL_ASCEND_PIPELINE_PLANNER = "tl.ascend_pipeline_planner"
-    """Select legacy (default) or the opt-in A3 single-stage constraint planner."""
+    """Select legacy (default) or the audited opt-in A3 constraint planner."""
+
+    TL_ASCEND_PIPELINE_COST_MODEL = "tl.ascend_pipeline_cost_model"
+    """Full calibrated A3 effective-cost map for constraint modulo planning."""
 
     TL_ASCEND_AUTO_CV_COMBINE = "tl.ascend_auto_cv_combine"
     """Enable/disable TileLang CombineCV pass. Default: True.

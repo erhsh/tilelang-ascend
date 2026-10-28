@@ -39,8 +39,8 @@ def Pipelined(
         The interval for cross-core synchronization. When cross_interval=1,
         sync every iteration. When cross_interval=N, sync every N iterations.
     annotations : Mapping[str, Any], optional
-        Additional loop metadata. Built-in scheduling keys are reserved and
-        must be passed through their existing dedicated arguments.
+        Additional loop metadata. The bool ``enable_offset`` option is consumed
+        by constraint planning; other built-in scheduling keys are reserved.
     Returns
     -------
     res : frame.ForFrame
@@ -67,5 +67,5 @@ def Pipelined(
         sync,
         group,
         cross_interval,
-        loop_annotations(annotations),
+        loop_annotations(annotations, allow_offset=True),
     )

@@ -150,7 +150,13 @@ def prepare_worker(args, evidence: dict) -> tuple:
 
 
 def run_worker(
-    args, case_callback, *, launch_multiplier=1, sentinel_description=None, case_parameters=None
+    args,
+    case_callback,
+    *,
+    launch_multiplier=1,
+    sentinel_description=None,
+    case_parameters=None,
+    preflight_check=None,
 ) -> int:
     evidence = {
         "case": args._case,
@@ -175,6 +181,8 @@ def run_worker(
     save()
     try:
         tilelang, torch = prepare_worker(args, evidence)
+        if preflight_check is not None:
+            preflight_check(args, evidence, tilelang)
         save()
     except Exception as exc:
         evidence.update(error=str(exc), traceback=traceback.format_exc())
@@ -334,6 +342,8 @@ def run_cases(args, report, cases, entry_path, *, final_check=None) -> int:
         ]
         if getattr(args, "build_manifest", None) is not None:
             command.extend(["--build-manifest", str(args.build_manifest)])
+        if getattr(args, "cost_profile", None) is not None:
+            command.extend(["--cost-profile", str(args.cost_profile)])
         try:
             result = run_process(command, artifacts, name, env=env, timeout=args.timeout)
         except OSError as exc:

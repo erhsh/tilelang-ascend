@@ -254,14 +254,14 @@ def test_markers_keep_original_order_and_follow_substitute_and_unroll():
     [
         ({"stages": None}, "at least one"),
         ({"stages": 0}, "at least one"),
-        ({"stages": 2}, "requires S5"),
+        ({"stages": 2}, "explicit calibrated cost profile"),
         ({"minimum": 2**31 - 1, "extent": 2}, "representable static"),
         ({"dtype": "int64", "minimum": 2**63 - 1, "extent": 1}, "representable static"),
         ({"dtype": "uint32"}, "signed int32/int64"),
         ({"extent": tir.Var("trips", "int32")}, "representable static"),
         ({"annotations": {"tl_pipeline_order": [0, 1, 2]}}, "manual pipeline"),
         ({"annotations": {"software_pipeline_async_stages": [0]}}, "manual pipeline"),
-        ({"annotations": {"enable_offset": True}}, "manual pipeline"),
+        ({"annotations": {"enable_offset": True}}, "explicit calibrated cost profile"),
     ],
 )
 def test_unsupported_loop_and_manual_controls_are_rejected(kwargs, error):

@@ -19,7 +19,7 @@ tir = tvm.tir
 TARGET = tvm.target.Target("c -keys=ascend -model=ascendc")
 
 
-def make_task_stage_vector_kernel(*, marked=True):
+def make_task_stage_vector_kernel(*, marked=True, stage=0):
     """An existing copy/add/copy shape, with only its add explicitly grouped."""
     if marked:
 
@@ -36,7 +36,7 @@ def make_task_stage_vector_kernel(*, marked=True):
                 with T.Scope("V"):
                     T.copy(A, a)
                     T.copy(B, b)
-                    with T.Stage(0):  # noqa: SIM117 - exercise both lexical marker boundaries
+                    with T.Stage(stage):  # noqa: SIM117 - exercise both lexical marker boundaries
                         with T.Task():
                             T.tile.add(c, a, b)
                     T.copy(c, O)
@@ -109,9 +109,16 @@ def test_task_stage_builders():
     assert markers["tl.ascend_stage"].node.dtype == "int64"
     assert int(markers["tl.ascend_stage"].node) == 0
     assert not hasattr(T, "PerCoreTask")
-    for value in (True, False, 1, -1, 0.0, "0", tir.Var("stage", "int32")):
-        with pytest.raises(ValueError, match="constant integer 0"):
+    for value in (True, False, -1, 1 << 31, 0.0, "0", tir.Var("stage", "int32")):
+        with pytest.raises(ValueError, match="nonnegative constant signed int32"):
             T.Stage(value)
+    positive = make_task_stage_vector_kernel(stage=1)
+    assert any(
+        node.attr_key == "tl.ascend_stage" and int(node.node) == 1
+        for node in _attributes(positive)
+    )
+    with pytest.raises(tvm.TVMError, match="constraint mode"):
+        _consume(tvm.IRModule.from_expr(positive))
     for kwargs in ({"latency": 0}, {"ii": 1}, {"latency": "bad"}):
         with pytest.raises(ValueError, match="latency/ii overrides"):
             T.Task(**kwargs)

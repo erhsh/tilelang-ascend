@@ -57,8 +57,9 @@ New Parallel metadata is attached only to the outermost loop. The existing
 `coalesced_width` behavior is retained on every generated Parallel dimension;
 supplying conflicting widths through the keyword and metadata is an error.
 Use the dedicated arguments for pipeline controls: generated stage/order/sync
-keys, task/stage markers and unimplemented layout/offset scheduling keys cannot
-be injected through this map. Existing Vector lowering and dimensional limits
+keys, task/stage markers and internal layout/version controls cannot be injected
+through this map. Pipelined alone accepts a boolean `enable_offset` consumed by
+constraint planning. Existing Vector lowering and dimensional limits
 remain in force.
 
 `Persistent` requires positive integer domain extents, wave size and group size,
@@ -69,13 +70,11 @@ uses int64; returned coordinates retain the domain's integer dtype. Symbolic
 arguments must satisfy the positive-domain, worker-range and representability
 contracts at runtime.
 
-`num_stages=0` keeps Persistent wave execution serial. In this migration stage,
-positive Persistent stages can only be attached to a provably unguarded, exactly
-one-full-wave domain with divisible grouping. Guarded, partial or multi-wave
-combinations, including symbolic inputs for which these conditions cannot be
-proved, are rejected with a diagnostic directing callers to use zero stages.
-Annotation transport and single-wave checks do not establish
-cross-wave pipelining support.
+`num_stages=0` keeps Persistent wave execution serial. Legacy positive stages
+require a provably unguarded, exactly one-full-wave domain with divisible
+grouping. The calibrated constraint subset below additionally supports static
+guarded wave loops. It predicates each operation with its logical tile's
+validity and verifies actual per-worker coverage after pipeline expansion.
 
 ## Ascend Task and Stage markers
 
@@ -85,12 +84,16 @@ float16/float32 Vector call: a supported single-row GM/UB copy, managed fill or
 managed add. Multi-call bodies, internal control flow, nested tasks, manual
 synchronization, Cube tasks and compound helpers are rejected. `Task` accepts
 optional `latency` and `ii` keywords for signature compatibility, but values other
-than `None` are rejected until a planner consumes them.
+than `None` remain unsupported; supply calibrated costs through the model below.
 
-`with T.Stage(0):` surrounds complete explicit tasks and records stage zero.
-It cannot be placed inside Task or Parallel. Nonzero stages, offset scheduling,
-legacy stage/order combinations, and enclosing positive `num_stages` are rejected;
-the existing planner cannot silently redefine an explicit zero stage.
+`with T.Stage(n):` surrounds complete explicit tasks. The builder requires a
+nonnegative constant signed int32 value and rejects booleans. It cannot be
+placed inside Task or Parallel. Legacy retains its Stage(0)-only contract.
+Nonzero stages require a supported constraint candidate and explicit
+`annotations={"enable_offset": True}`; outside a positive candidate they are
+rejected. Source reads retain their imperative meaning, so conflicting manual
+stages report an unsatisfiable plan. With any explicit Stage in a candidate,
+unmarked units are stage zero; Task alone does not freeze automatic staging.
 
 The compiler checks marker structure before frontend rewrites, then validates and
 consumes supported markers after lowering operations and before scheduling or
@@ -112,7 +115,7 @@ pass_configs = {
 }
 ```
 
-This subset requires A3 AscendC/auto, static serial loops, and at least one
+The single-stage subset requires A3 AscendC/auto, static serial loops, and at least one
 `T.Pipelined(..., num_stages=1)` candidate. It supports audited float16/float32
 full, aligned GM/UB copies and Vector fill/add. Use a separate full short tile
 for a static aligned tail; dynamic padding DMA is outside this subset.
@@ -135,3 +138,46 @@ when used; legacy does not load it. The strategy participates in the existing
 compilation cache key.
 Verification expands at most 4096 hardware task instances and 65536 control
 visits per trace; larger traces report a limit error.
+
+## Calibrated multi-stage constraint pipelines
+
+Load a measured A3 cost artifact and pass its complete content to the compiler:
+
+```python
+cost_model = tilelang.transform.load_ascend_pipeline_cost_model("a3-costs.json")
+pass_configs[tilelang.PassConfigKey.TL_ASCEND_PIPELINE_COST_MODEL] = cost_model
+```
+
+`T.Pipelined(..., num_stages=2)` or `3` enables the supported modulo path.
+The number is a buffer-version search cap. Actual buffer versions can differ;
+the compiler validates and records the materialized versions, strides and bytes.
+Single-row, contiguous float16/float32 UB buffers must be loop-owned, fully
+written before reads in each iteration, and have 32-byte aligned version sizes.
+External UB inputs, shared writable UB and cross-iteration accumulation are
+outside this subset. A full in-place update after that iteration's full write
+must pass the same producer and physical-slot checks.
+
+The profile matches exact operation/dtype/count/geometry and contains measured
+effective nanosecond costs including issue and synchronization overhead. It is
+not a raw instruction timing guarantee. The loader checks artifact/schema/hash;
+planning rejects missing operation geometry. Use the loader's `expected_identity`
+argument to check a deployment's SoC/CANN/bisheng/flags. The S5 NPU entries check
+those fields against their actual worker before compilation; ordinary planning
+does not discover the runtime device. The full content and digest participate in
+the existing cache key; a filename alone cannot identify a model.
+
+Automatic multi-stage planning enables offsets by default. Explicit
+`enable_offset=False` restricts stages to zero. Manual stages are bounded by a
+separate staging horizon of 64 and the expansion limits, rather than by the
+requested version cap. A zero-trip candidate is emitted as a verified no-op;
+it does not prove a physical multi-buffer allocation was executed.
+
+Static guarded `Persistent` waves use the same audited Vector subset and cost
+model. Group padding and the last partial wave remain guarded independently
+for every operation. This does not enable Cube or arbitrary stateful helpers.
+Managed Vector mask requirements are checked on the actual selected instruction
+sequence, with one mask state per Vector domain rather than per buffer version.
+
+Use `scripts/ascend_migration/s5_run_pipeline_npu.py --calibrate-profile` to
+generate an artifact with `msprof op`. The migration plan records the complete
+command, measurement policy, actual verification results and supported scope.
