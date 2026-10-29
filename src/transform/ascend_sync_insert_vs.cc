@@ -28,6 +28,7 @@
 #include <tvm/tir/utils.h>
 
 #include "../op/ascend.h"
+#include "./common/ascend_sync_a3.h"
 #include "./common/operation_config.h"
 
 #include "tir/transforms/ir_utils.h"
@@ -51,6 +52,9 @@ public:
       return f;
     }
 
+    ICHECK(!f->GetAttr<ObjectRef>(kAscendS7LocalSync).defined())
+        << "A3 local synchronization already owns this kernel; legacy "
+           "generator cannot run twice";
     arith::Analyzer analyzer;
     AscendSyncInsertVS mutator(&analyzer, target, platform);
 

@@ -1090,3 +1090,125 @@ mask 合同继续保持每个 Vector 域一份状态。
 
 仅 A3 验收，不重校准 S5 成本或新增性能门槛。结果与边界记入迁移计划，提交推送后
 等待审核，不启动 S7。
+
+## 17. S7：A3 事件生成与固定 C/V workspace 握手
+
+### 17.1 选择与生成所有权
+
+新增 `tl.ascend_sync_strategy="legacy"|"a3"`，默认 legacy。它与已有 planner
+选择正交，但首片只开放两种明确合同：constraint+a3 沿 S6 已审计的 Vector 路径
+替换核内生成器；legacy planner+a3 沿固定、显式 C/V、静态 serial、N1 workspace
+路径替换跨核握手。后者保留旧核内同步和 VS 保护，不开放混合流水重排。
+未知 strategy、平台/后端不匹配、不完整的同步/内存规划配置和超出合同的输入明确拒绝。
+
+Vector 路径只运行新核内生成器，保留最终独立 constraint verifier。固定 C/V 路径
+只由新 handoff 生成器负责 workspace ready/release，CombineCV 不再为这些依赖生成
+旧 cross 通知；旧核内/VS 只负责其原来的域。未建模的 VS/标量或 opaque effects
+不得因新 strategy 被静默移除。默认 legacy 的 Pass 顺序、缓存身份与生成行为保持。
+
+### 17.2 A3 能力来源与事件分配
+
+本机 CANN9.1 的 `__NPU_ARCH__=2201` 定义 QUE_MAX_EVENT=8，核内 ID 为0–7，
+按 core kind、物理 core instance 和有向 PIPE pair 独立分池；先验证该 core 的 HardEvent 合法性，再按
+同时活跃区间分配，显式 ID 先预留。有请求但可用池为空、未知/符号 ID、越界、重复活跃占用和
+预算耗尽均给出诊断，不能模8复用仍活跃的槽。分配器是生成器实际使用的共享合同，
+只读分配入口可检验7/8/9个重叠区间，不能把总 set 数称为活跃峰值。
+首片只读请求的 core=1 表示 Vector kind，instance 为非负物理实例（默认0）；
+src/dst 为不同的 MTE2/V/MTE3，begin/end 为非负半开活跃区间，可选 fixed_id 和
+reserved_ids。其它 core kind/PIPE 尚未审计时拒绝，不能把 C 上无效的 Vector event
+当成已生成硬件同步。
+空请求列表合法并返回空 allocations/domains，不制造 zero-trip 事件。
+
+跨核采用 A3 mode2，用户池保守取0–10；11–14由 SyncAll 使用，15按当前工具链
+保留。硬件16计数器、用户可分配11个、单计数器深度15是三个不同预算。首片只接管
+一个 GM channel，固定 READY0/RELEASE1；已有手写 cross 协议全部拒绝，不混合管理或
+声称已支持为任意显式协议预留后合并。未知隐式库占用拒绝。不同 mode 不构成独立 ID bank，
+wait 在该平台不能按 mode/consumer PIPE 再分域，不假定不同 ID 通知完成顺序。
+
+主仓参考提交采用的 mode4/16-bank 不适用于 DAV_C220：本机编码截断 mode 的高位。
+能力依据包括本机 kernel_macros/kernel_event/block_sync 实现和
+[稳定 CANN900 文档](https://www.hiascend.com/doc_center/source/en/CANNCommunityEdition/900/API/ascendcopapi/atlasascendc_api_07_0273.html)、
+[CrossCoreSetFlag](https://asc.gitcode.com/api/SIMD-API/基础API/同步控制/核间同步/CrossCoreSetFlag%28ISASI%29.html) 与
+[CrossCoreWaitFlag](https://asc.gitcode.com/api/SIMD-API/基础API/同步控制/核间同步/CrossCoreWaitFlag%28ISASI%29.html)。
+不迁入950的VF、spill或容量假设。
+
+### 17.3 最终物理依赖与核内生成
+
+新核内生成器位于 AscendMemoryPlanning 后，读取最终 address_map/size_map、实际
+allocation/version/pitch 和调用区间，重建 RAW/WAR/WAW 及物理地址复用边。
+早期 canonical graph 继续用于值/epoch 身份证明，不能代替实际物理 hazard。
+生成器保持已给定的任务发射顺序，以保守 set/wait/barrier 证明 completion，不承担
+新的排程优化。只读最终 verifier 再解释实际事件和任务，检查合法域、配对、活跃
+占用、覆盖和退出未消费 token，拒绝元数据与实际地址/事件不符。
+多 Vector 实例之间只允许共享只读 GM，或可证明不相交的写入区间；实际跨实例 GM
+hazard 明确拒绝。核内事件不能充当跨 Vector 实例同步，该范围不由 S6 的逐核证明推导。
+
+核内 flag 是 binary 状态，Set 不阻塞 source PIPE，Wait 仅在 destination PIPE 执行时
+清除状态。IR 中相邻 Set/Wait 不能证明 source 下次 Set 前 destination 已清零。
+因此首版每个跨 PIPE Set→Wait 后增加真实 `PipeBarrier<PIPE_ALL>()`，其官方语义是
+全部 PIPE 的先前接口完成后才允许后续执行；事件租约到这个 fence 才归还。
+最终 S7 独立 lease 检查将 Wait 记为已排队，只有 ALL fence 才 retire 已匹配 Wait 的
+token；未消费 Set 不能借 barrier 清除，同 PIPE barrier 不能代替 ALL，未归还即再
+Set 或退出必须拒绝。生成计划的 issue interval 不是硬件完成时间。
+此保守方案会串行化同步边界，不承诺提高吞吐。依据为官方
+[SetFlag/WaitFlag](https://asc.gitcode.com/api/SIMD-API/基础API/同步控制/核内同步/SetFlag-WaitFlag%28ISASI%29.html) 和
+[PipeBarrier](https://asc.gitcode.com/api/SIMD-API/基础API/同步控制/核内同步/PipeBarrier%28ISASI%29.html)，
+原文和本机SDK摘录保留在S7硬件证据目录。
+
+### 17.4 固定 workspace 协议与联合验证
+
+`AscendPrepareSyncHandoff(target, platform)` 在 OptimizeForTarget 第一次 allocation
+location 更新后、CrossCorePipeline/CombineCV 前保存受审计的源 workspace 与参与者
+身份，拒绝 positive mixed pipeline。`AscendInsertSyncHandoff(target, platform)` 位于
+最终 MemoryPlanning、旧核内/VS 后，依据实际 GM Var、字节区间和控制生成协议。
+`AscendVerifySyncHandoff(target, platform)` 在最后 Simplify 后、ResourceScopeVerify
+前联合解释 C 与两个 V 的实际事件，不把每核独立的 S6 检查称为跨核证明。
+三个接口均为旧 FFI PrimFuncPass，legacy strategy 返回原函数。
+
+首片使用真实 cv_1_2 映射、group-local mode2、单 GM channel 和单物理 slot。每次生产后在真实 writer
+PIPE 上通知 READY；所有 consumer 在读取前等 READY，并在最后一次 GM 读取完成后
+通知 RELEASE；producer 在通知 READY 后立即等待 RELEASE，再执行下一条源任务。
+这个保守形式不跨 round 重叠，确保下次覆写前已经消费完成。两个 V 的通知须聚合后 C 才能继续，
+C 的通知须覆盖两个 V。正向 C→V 与反向 V→C 均不能由通知名字推导完成关系。
+首轮空 slot 不制造虚假 READY/free token；首次写入前不等 RELEASE，末次消费后
+producer 自然 drain RELEASE；零次路径不发事件。guard 必须使完整参与者一致地进入/退出协议，
+部分 sid 参与、未知动态控制或无法证明的 workspace footprint 明确拒绝。
+非空 handoff 必须有 `tir.noalias=True`，由 caller 保证不同 GM 参数的实际存储不相交；
+不同 Var/名字本身不是参数地址独立性证明。
+Vector GM↔UB rectangle保守限制rows<=4095，以满足本机DataCopyPad blockCount硬件域；
+某些UBGM flat分支可转单block也不在首片额外放宽。Cube GM2L1/FIX仍用各自审计条件，
+此数不是全部DMA引擎的统一行上限。template、dtype与runtime几何在建effect前严格核对。
+全部 GM 副作用还须核对 group/actor 之间的区间：跨 group 的 RAW/WAR/WAW 均拒绝；
+同 group 非 channel 的跨 actor 写冲突也拒绝，只读共享与可证明不相交的输出允许。
+区间集合只合并真实相交或相邻部分，不用含空洞的 hull 误判交错但不相交的输出。
+
+显式 C/V scope 是同时执行的两类硬件流，可以各自含独立的静态 serial loop。
+首片声明固定 FIFO 合同：同一 GM channel 按各 actor 的 occurrence ordinal 配对
+round，要求 C 与两个 V 的次数、完整字节覆盖、guard 和 source/final 流内顺序一致。
+祖先 loop/activation 身份仍完整保留；不能把整个 AST 的先后遍历顺序当成跨核完成关系，
+也不能把独立流的不同 loop Var 名称当成轮次匹配证据。
+首片还要求配对端全部祖先迭代的数值坐标序列一致（忽略 loop ID/Var 名称）。
+同次数但 C 仅执行偶数轮、V 仅执行奇数轮，或不同 min/嵌套 epoch，不做 FIFO 跨 epoch
+重配，必须拒绝；一般 offset FIFO 关系不在此步开放。
+
+最终验证独立重建生产→读取、全部读取→覆写，核对 cid/vid、round/activation、字节
+范围、通知的 PIPE 完成快照、计数器有界与退出 drain。存储的 PASS、channel 列表和
+早期 logical edge 不是证明。已白名单审计的复合 C helper 仍靠既有核内保护与保守边界，不能
+伪装为单 PIPE 操作。并发 stream 测试只用 mode2，不引入 mode0 全局 barrier。
+
+### 17.5 构建、验收与停止点
+
+S7 实现、测试和 runner 分工；唯一 native build owner 在所有运行进程退出后重建，
+新 source/SO manifest 冻结并核验后才进行正式 native 与 A3 执行。
+三个入口为 s7_check_event_budget.py、s7_check_handoff_ir.py、s7_run_sync_stress_npu.py。
+覆盖事件上限与显式冲突、最终物理 alias、ready/release 故障注入、初始化/drain、
+guard/zero-trip，以及 A3 长流水、多 core、重复 launch 与两个真实 stream 的独立
+输入/output/workspace。设备进程设置整体超时；非法协议只做 native 负例。
+双stream验证使用本机公开ExternalEvent，每stream一独立闭门，先wait并提交原目标
+batch与done event，确认两侧调用返回且done/stream均未完成后由第三stream释放。
+两门在任何wait前构造，done资源提前materialize；前轮目标完成后才复用自动复位的门。
+异常路径finally释放并保存live metadata，worker-only关闭PER_STREAM_QUEUE与launch
+blocking，不改变目标kernel或任务规模。此验收证明start-gated同时pending提交，
+不推导自然提交窗口或硬件执行时间重叠。精确安装版源码与真实单轮验证见计划S7记录。
+S5 成本模型复用，不新增性能调优或重校准，不执行 A2 测试。
+最终记录实际支持边界、构建身份与结果，提交推送后等待审核，不启动 S8。

@@ -96,6 +96,40 @@ def AscendVerifyConstraintSync(target: tvm.target.Target, platform: str):
     return _ffi_api.AscendVerifyConstraintSync(target, platform)  # type: ignore
 
 
+def AscendInsertSyncA3(target: Target, platform: str):
+    """Generate completion events from final physical Vector dependencies on A3.
+
+    Only the audited constraint/a3 route owns this domain. Existing final
+    constraint verification independently checks the generated events.
+    """
+    return _ffi_api.AscendInsertSyncA3(target, platform)  # type: ignore
+
+
+def AllocateAscendSyncEvents(intervals, platform: str = "A3") -> tvm.ir.Map:
+    """Allocate A3 event slots for explicit half-open live intervals without changing IR.
+
+    Requests describe core, directed source/destination PIPE, begin/end and
+    optional fixed IDs or reserved IDs. Invalid domains and exhausted pools
+    are diagnosed by the same allocator used by the native generator.
+    """
+    return _ffi_api.AllocateAscendSyncEvents(intervals, platform)  # type: ignore
+
+
+def AscendPrepareSyncHandoff(target: Target, platform: str):
+    """Audit fixed C/V workspace ownership before partitioning and synchronization."""
+    return _ffi_api.AscendPrepareSyncHandoff(target, platform)  # type: ignore
+
+
+def AscendInsertSyncHandoff(target: Target, platform: str):
+    """Generate A3 mode2 workspace ready/release after final memory planning."""
+    return _ffi_api.AscendInsertSyncHandoff(target, platform)  # type: ignore
+
+
+def AscendVerifySyncHandoff(target: Target, platform: str):
+    """Independently verify final joint C/V workspace completion and event drain."""
+    return _ffi_api.AscendVerifySyncHandoff(target, platform)  # type: ignore
+
+
 def AscendValidateScheduleHints():
     """Check Task/Stage structure before frontend legalization can erase it."""
     return _ffi_api.AscendValidateScheduleHints()  # type: ignore

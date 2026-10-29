@@ -59,12 +59,13 @@ Vector 指令选择、mask 合法化、Persistent 参数/partial-wave 保护及 
 | S3 | Parallel/Pipelined/Persistent 接口与安全性 | 循环接口、域保护、受限 Task/Stage 和三个入口已交付 | native 117 + 29、兼容回归 170、runner 44 项通过；A3 9 项、1000 次 launch/golden 通过 | 用户已明确授权 S4 |
 | S4 | 单核约束规划与同步协议验证（M1） | opt-in constraint、最终协议验证和三个入口已交付 | 原生 45 + 50、兼容 170 + 117 + 29、runner 77 项通过；A3 8 项、800 次 launch/golden 通过 | 用户已明确授权 S5 |
 | S5 | 跨迭代流水与多缓冲（M2） | A3有效成本、实际版本/配置证明及guarded波流水已交付 | 校准32、原生234、兼容411项通过；A3 26用例/2600次launch与golden、4组性能已记录 | 用户已明确授权S6 |
-| S6 | owner/epoch、别名与生命周期（M3） | canonical storage与source/final epoch bridge已交付 | 正式原生61+49、全部兼容/CLI通过；A3 20用例、2000次launch/golden通过 | 本次S6提交，等待用户审核 |
-| S7 | A2/A3 新同步生成器（M4） | 未开始 | 未验证 | 未提交 |
+| S6 | owner/epoch、别名与生命周期（M3） | canonical storage与source/final epoch bridge已交付 | 正式原生61+49、全部兼容/CLI通过；A3 20用例、2000次launch/golden通过 | 用户已明确授权S7 |
+| S7 | A2/A3 新同步生成器（M4） | A3核内生成器与固定C/V workspace握手已交付 | 正式native70+60、兼容与CLI214通过；A3 20用例、3200次launch/golden通过 | 本步提交，待用户审核 |
 | S8 | 完整自动调度与混合 C/V 接管（M5） | 未开始 | 未验证 | 未提交 |
 
-当前停止点：S6实现与A3验收已完成，本次更新计划并提交推送后等待用户审核。
-S7 尚未获得执行授权。
+当前授权范围：S7；实现与A3验收已完成，随本步提交交付，推送结果见最终报告。
+交付后停在S7等待用户审核。
+S8 尚未获得执行授权。
 实施状态与验证状态分列：“已实现”不等于“native/NPU 验收通过”。
 
 ## 4. 分步交付与验收
@@ -996,4 +997,181 @@ migration_python=/tmp/ascend-migration-s2/venv/bin/python
 本次仅提交S6实现、永久测试、三个入口及相关文档，保留legacy默认；临时模型、
 manifest、原始JSON/日志与二进制保留在 `/tmp/ascend-migration-s6/` 或既有S5目录。
 推送至 `erhsh/codex/ascend-a2a3-scheduler-migration` 后停止，等待用户审核。
-S7新同步生成器尚未获得执行授权，S5已记录的性能退化不在本步调优范围。
+S6交付时S7新同步生成器尚未获得执行授权；当前授权与进展见第3、13节。
+S5已记录的性能退化不在S6调优范围。
+
+## 13. S7 实施记录
+
+### 13.1 本步合同
+
+用户已明确授权S7，仅在A3验收，交付后提交推送并停下等待审核。设计与实施骨架
+分别见技术参考第17节、pass-impl-skeleton的S7节。固定源码/主仓参考与之前步骤一致。
+
+新增同步选择 `tl.ascend_sync_strategy="a3"`，默认仍legacy。constraint+a3负责已审计
+Vector核内依赖；legacy planner+a3负责固定explicit-C/V的GM workspace ready/release，
+保留旧核内/VS保护，不接管S8混合流水与排程。新缓存同步ABI只进入a3策略产物。
+核内池为每个合法Vector实例/有向PIPE域8个ID；跨核mode2用户池0–10，系统/工具链
+保留11–15，硬件计数器深度15。事件预算与能力来源见技术参考，不按位宽推可用池。
+
+核内生成器以最终MP地址/大小重建物理RAW/WAR/WAW，保持现有任务顺序。每个跨PIPE
+Set→Wait后加真实PIPE_ALL fence；独立final verifier到fence才归还binary flag租约，
+不把IR中相邻Wait当作硬件已清零。未匹配Wait的Set不能借ALL清除，单PIPE barrier
+不能代替ALL；缺ALL、迟ALL、错误barrier和复用活跃ID均有真实因果负例。
+这是保守首片，不承诺吞吐提升；S5成本不重校准，既有性能退化不在本步调优。
+
+跨核首片为真实cv_1_2、单GM channel、N1固定物理slot、静态serial FIFO。Producer
+写后在MTE3/FIX通知READY0，立即等待RELEASE1；consumer等READY、在最后GM读的MTE2
+完成后释放，两个V必须完整参与。无初始虚假token，零轮不发协议事件，末轮自然drain。
+源码和最终IR分别重建actor/group/epoch/字节区间与实际通知；不信plan/PASS字段。
+只读共享与不相交输出允许，其余跨group/非channel跨actor写冲突明确拒绝。
+Expert默认映射只在精确two-AIV轴证实时规范化显式cv_1_2，最终仍严格核映射；
+不同迭代坐标/参与guard、positive mixed pipeline、手写cross协议和未知隐式flag使用拒绝。
+非空handoff要求`tir.noalias=True`，caller须保证不同GM参数实际不别名。
+
+四种GM copy helper的完整template/dtype与runtime几何均已核对。Vector GM↔UB搬运
+保守要求rows<=4095，符合本机DataCopyPad blockCount域；UBGM某些flat分支虽可用单
+block，首片也不额外放宽。Cube GM2L1/FIX按各自审计条件，不将此数冒充全部引擎上限。
+4095/4096正负例均来自正常T.copy lowering，UB声明预算均约139KB合法，正例核对
+actual size_map/Allocate>=131040B，明确区分内存容量与descriptor合法性。
+内部auto_gm_indices的ready与未知entry输入另做native
+正负例；正式设备矩阵使用显式caller workspace，不冒称隐藏workspace自动生成路径已验收。
+
+### 13.2 最终构建身份
+
+`/tmp/ascend-migration-s7/native-build.json` 记录并校验168个native构建输入：
+source SHA256 `c1d82dcb61aa370dd6ac3e4dabdb2c42147d42249199cdfc9b19924599f50d09`；
+module SHA256 `a01644f4182f94496efb7e2b5c892bd1cf90b7e720662ff4893013c06fac279a`。
+TVM/runtime SHA仍为`79912ad7…`/`a98401d8…`，TVM固定基线与两项patch保持。
+225个Python输入冻结SHA256为
+`215c850a3e8aed86257024390f897a275a38dcebd964bd70f1c9aaff73db80a2`。
+正式native/设备均匹配上述构建和Python输入。
+报告保留实施起点`e34c8891`上的dirty工作区身份；最终提交与验收的关联以已核验的
+源码、Python输入及实际加载库为准，不把报告中的旧HEAD当作最终S7提交号。
+
+硬件原文、SDK/helper实际文件路径和SHA留在`hardware-evidence/`；前期失败日志和
+`diagnostic-89c94b6d/`、`diagnostic-fc5eb220/`保留，不当作最终验收。
+fc5/2dde构建的三项正常形状A3 pilot已实际3compile/3launch/3golden，输出摘要均等于
+golden、147968个canary元素检查通过；均single stream，且不叠加最终压力次数。
+
+### 13.3 正式设备矩阵
+
+20个worker使用同kernel逐轮刷新输入/标签和workspace scratch：Vector 0/1/3短循环，
+257轮的实际N1/2/3与1/8 workers；GM v2c/c2v为17轮×4组单slot；双stream分别使用
+513轮Vector×8 workers和17轮GM×1组。16普通case各100次，4双stream case每轮
+两stream×两独立buffer batch、各400次。正式20/20项全部PASS，20次真实冷编译、
+3200次attempted/completed/golden，0fail/skip。
+
+最终报告`sync-stress-npu-aggregate.json`是两批正式证据的只读汇总，不代表额外设备
+执行：前17项来自`sync-stress-before-trace-timeout.json`的真实PASS行（120秒预算），
+后三项来自`formal-last-three.json`（300秒预算）。两批源码/库/225个Python输入一致，
+20项case JSON保持原字节，原TIMEOUT报告不改写；公开`compare_pairs`完整复核通过。
+最终汇总SHA256为`3d3438d115c456fda35f60b474100b82be254ddcb8efb4054a1fa5a603953c36`。
+
+`root-device-audit.json`另从原始汇总逐项核对：1600条严格跨策略记录、400个双门
+pending窗口及其真实先后顺序均通过；3200次完整输出摘要和1200次workspace摘要均
+等于各自golden，44902400个未写canary元素通过检查。该只读审计不增加设备次数。
+14个Vector worker实际flags为`[-O2]`，与S5成本模型匹配；6个GM worker沿用legacy
+planner，实际flags为`[-O3, --cce-auto-sync=off]`，不应用S5 constraint成本。各策略
+配对的实际flags一致，不将GM握手验证表述为成本校准或性能测量。
+设备为逻辑0、实际SoC`Ascend910_9362`，torch2.7.1+cpu、torch_npu2.7.1.post4、
+CANN9.1.0；真实Bisheng SHA仍为`7ffc97205a0582ce00a9ec163530696bf3971b24669c43c1c02cc9c7b56f541f`。
+
+Vector配对旧/新自动核内生成器；GM配对已证明正确的手写legacy mode2双向握手与
+新生成器。两者GM的旧auto-cross均关闭，避免将缺release的旧单向协议发设备。
+native另以小写workspace名先证旧auto-cross确会插通知，再证新owner启用时不会叠加。
+实际A/B/O/workspace地址独立。双stream各使用一个独立`ExternalEvent`启动门，先wait，
+再提交原目标batch与各自done event；两侧host调用均返回、done/stream查询均未完成后，
+第三普通stream分别record释放两门，再同步目标并检查golden。每门每轮只一次wait，
+前轮目标完成后复用；本机ValueWait后的ValueWrite0自动复位已按安装版源码核对，
+不把noop reset当成关闭门，也不预先record gate。只有lazy done event预record。
+此证据范围是start-gated、两目标队列同时已提交且未完成，不主张自然窗口或硬件时间重叠。
+两个环境开关`PER_STREAM_QUEUE=0`、`ASCEND_LAUNCH_BLOCKING=0`只在独立双stream worker
+导入runtime前设置，不修改共享配置或`TASK_QUEUE_ENABLE`。单stream报告不作并发结论。
+
+本机torch_npu为2.7.1.post4，安装版本声明git提交
+`d99d6cda7b9ab4370e7c03f697302760b231538a`。
+精确源码、安装文件、CANN真实符号与队列排序证据留在`external-event-audit.json`和
+`stream-gate-audit.json`。Cython获取`.npu_stream`先flush普通stream的CPU提交队列，
+使Torch的device wait先于direct RT launch入队；flush不等同设备同步。
+只使用公开的[ExternalEvent wait-before-record API](https://www.hiascend.com/document/detail/en/Pytorch/2600/apiref/torchnpuCustomapi/docs/en/custom_APIs/torch_npu-npu/torch_npu-npu-ExternalEvent%28%29.record%28%29.md)，不新增设备kernel或mode0核间barrier。
+
+### 13.4 正式 CPU 结果
+
+最终构建与Python冻结身份下，两个S7公开入口和受影响的旧阶段回归均实际通过，0skip。
+`cpu-validation-summary.json`保留全部真实命令、各入口JSON及JUnit/日志路径；
+入口之间可能有交集，不将所有行相加冒充唯一测试数。
+
+| 正式入口/检查 | 实际结果 |
+| --- | --- |
+| s7_check_event_budget | PASS70：allocator33 + local23 + cache14 |
+| s7_check_handoff_ir | PASS60：handoff50 + ownership10 |
+| S1 legacy native | PASS104 |
+| S2 task IR | PASS170 |
+| S3 loop / domain | PASS129 / 29 |
+| S4 pipeline / sync | PASS45 / 50 |
+| S5 versions | PASS235 |
+| S6 owner / lifecycle | PASS61 / 49 |
+| S1–S7 CLI host | PASS214 |
+
+16个变更Python文件ruff lint、11个新增Python文件format100、6个新增/owned C++文件
+clang-format及git diff--check均通过；其它共享C++按改动hunk检查，不扩面重排旧文件。
+独立只读末审核对了默认legacy、Python/C++路由、FFI注册、缓存ABI和保留旧VS保护，
+未发现待修源码问题；设备结果单列，不由CPU通过推导。
+
+并发驱动补充后重验两个S7公开入口与全部CLI；214个编译器/旧阶段Python输入及
+native构建均字节未变，旧阶段回归保留同一c1d82dcb/a01644f4的实际通过记录。
+
+### 13.5 并发观察的诊断记录
+
+首轮未加启动门的正式执行前16个single-stream worker全部PASS，共1600条已保存
+launch/golden记录；`streams_vector_legacy`完成400次调用，但100个查询窗口没有
+同时pending，父入口FAIL并停止，后三项未执行。该失败回调未return，原始报告没有
+golden_checks/rounds，不能把推断的断言经过补写成400条已保存golden证据。
+原始JSON/日志保留为`sync-stress-before-pending-depth.*`。
+
+驱动改为同一个live metadata对象交给既有run_worker catch，异常时保留已采集的
+handles、窗口与逐轮记录，不改共享runner。随后原fixture repeat3实际诊断保存12条
+golden/hash，三次窗口均为stream complete=[true,false]。诊断沿用原core/batch/trip，
+pending门禁保留。普通query会先flush hostqueue，短kernel的自然待完成窗口不能仅靠
+顺序提交保证，因此用标准双门控制提交窗口。
+
+最终双门方案的single-round设备验证：Vector legacy、GM legacy/a3各1次真实编译，
+各4次目标调用/golden，两个done/stream在释放前均false；释放与post-sync顺序、
+逐call摘要、canary均已独立核对。共3compile/12launch不叠正式；上述早期三项正常
+形状pilot也另列。
+
+加门后的正式执行前17项PASS并保存2000条launch/golden，第18项
+`streams_vector_a3`在120.415秒总进程预算处TIMEOUT/124，后两项未执行。
+18项都已确认真实Bisheng编译；日志已越过最终IR证据采集，进入输入buffer分配。
+worker只在callback返回或异常时落盘，超时报告中的0次快照不能证明实际零调用，
+也不能据此判为设备死锁。该批原始证据保留为
+`sync-stress-before-trace-timeout.*`及`worker-timeout-summary.json`。
+
+保持原用例与120秒限制的临时包装诊断另保留为`phase-diagnostic.json`：runtime
+准备10.24秒结束，compile到104.07秒才返回，sync证据采集到106.09秒，最终输出
+trace到116.43秒，首次目标提交在116.58秒。随后submit与golden检查持续前进。
+30/60/90秒堆栈及`phase-observer.json`的CPU状态支持编译/检查耗时判断；
+诊断不计正式launch/golden，也不把host时间当作kernel性能。正式补跑总进程预算
+使用300秒，涵盖冷编译、证据采集与100轮验证；源码、输入规模、事件协议、
+pending/数值门禁不变。该Vector用例原入口实际134.519秒PASS，另外两项GM用例
+分别40.376/38.325秒PASS。前17项在完整Python/native冻结身份一致下复用，保留
+原始批次、命令和报告SHA；最终公开`compare_pairs`已检查完整20项，结果见13.3节。
+
+### 13.6 复核入口与交付边界
+
+```bash
+source set_env.sh
+export TL_ASCEND_MIGRATION_BUILD_MANIFEST=/tmp/ascend-migration-s7/native-build.json
+
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s7_check_event_budget.py --platform a3 --output /tmp/ascend-migration-s7/review-event-budget.json
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s7_check_handoff_ir.py --platform a3 --output /tmp/ascend-migration-s7/review-handoff-ir.json
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s7_run_sync_stress_npu.py --platform a3 --device 0 --seed 0 --repeat 100 --timeout 300 --cost-profile /tmp/ascend-migration-s5/a3-effective-cost-model.json --output /tmp/ascend-migration-s7/review-sync-stress.json
+```
+
+manifest须由当前源码显式构建并核验，方法沿用技术参考第11.5节；上述本机路径不是
+仓库自带产物，入口不会自动编译或安装依赖。压力入口每case独立进程与缓存目录，
+真实Bisheng记录、实际配置/库、最终IR、逐次输入/输出/workspace摘要、NaN canary、
+提交/查询/释放/同步顺序均保留在输出及artifacts中。
+
+本步只交付S7实现、永久测试、三个入口和四份文档；不提交JSON、日志、模型和二进制。
+交付后等待用户审核与明确的S8指令，不自动推进完整混合C/V排程。

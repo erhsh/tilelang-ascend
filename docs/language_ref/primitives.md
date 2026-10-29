@@ -234,3 +234,45 @@ An internal constraint compiler ABI participates in the memory/disk cache key so
 older artifacts cannot bypass the lifecycle checks during a compiler upgrade.
 Legacy cache keys retain their existing format. See the migration plan's S6
 record and its owner, lifecycle and A3 reuse validation entries for evidence.
+
+## Opt-in A3 synchronization
+
+`PassConfigKey.TL_ASCEND_SYNC_STRATEGY` selects `"legacy"` (default) or `"a3"`.
+The A3 option requires the AscendC backend and A3 platform. With the constraint
+configuration above, add:
+
+```python
+pass_configs[tilelang.PassConfigKey.TL_ASCEND_SYNC_STRATEGY] = "a3"
+```
+
+This selects the new local event generator for the audited Vector subset.
+It reads final physical addresses and sizes, accounts for storage reuse, and
+preserves the planner's task order. The independent final dependency and
+lifetime verifier still runs. Unknown effects, scalar/VS effects and manual
+event ambiguity remain outside this Vector contract.
+The first generator places an all-pipeline barrier after each cross-pipeline
+set/wait pair. An IR-adjacent wait alone does not establish that the hardware
+flag was cleared before reuse. The final verifier checks fence-based lease
+return separately from token pairing. These conservative fences serialize
+synchronization boundaries; this option makes no throughput improvement claim.
+
+With the legacy planner, the A3 strategy instead selects fixed explicit C/V
+workspace ready/release handoffs. That path retains established local and VS
+protection and requires static serial control, one GM channel, one workspace slot and the
+audited C-to-two-V mapping. Positive mixed pipelines require a later migration
+stage. A consumer release must complete before the next workspace overwrite;
+production notification alone is insufficient.
+Nonempty handoffs require `T.func_attr({"tir.noalias": True})`; the caller must
+provide distinct storage for different GM parameters.
+Vector GM/UB handoff copies use full dense rectangles with at most 4095 rows,
+a conservative subset of the A3 DataCopyPad descriptor range. Cube transfers
+retain their separately audited geometry requirements.
+
+Local event slots are allocated within an A3 directed PIPE domain, with eight
+slots per admitted domain. Cross-core handoffs use group-local mode2 and the
+conservative user pool 0–10. The first cross-core implementation uses READY0
+and RELEASE1 and rejects existing manual cross-core protocols or unknown
+implicit flag users. Unproved participation, unsupported domains and budget
+exhaustion report an error. No event spill or mode4 mapping is introduced.
+The synchronization contract has a separate internal cache ABI for A3 artifacts.
+See the migration plan's S7 record for the exact validated scope and commands.

@@ -41,6 +41,14 @@ class PassConfigKey(str, Enum):
     TL_ASCEND_AUTO_SYNC_VS = "tl.ascend_auto_sync_vs"
     """Enable/disable TileLang AscendSyncInsertVS pass. Default value setted dynamically according target"""
 
+    TL_ASCEND_SYNC_STRATEGY = "tl.ascend_sync_strategy"
+    """Select legacy (default) or the opt-in A3 synchronization generator.
+
+    With the constraint planner, ``a3`` owns audited Vector dependencies.
+    With the legacy planner, it owns fixed explicit C/V workspace handoffs;
+    established local and VS protection follows its existing configuration.
+    """
+
     TL_ASCEND_MEMORY_PLANNING = "tl.ascend_memory_planning"
     """Enable/disable TileLang AscendMemoryPlanning pass. Default: False"""
 

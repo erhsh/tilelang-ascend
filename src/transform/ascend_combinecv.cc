@@ -19,6 +19,7 @@
 #include "../op/ascend.h"
 #include "../op/builtin.h"
 #include "./common/ascend_resource.h"
+#include "./common/ascend_sync_handoff.h"
 #include "./common/ascend_vector_mask.h"
 #include "./common/collector.h"
 #include "./common/operation_config.h"
@@ -380,7 +381,8 @@ public:
       if (cube_sps.size() != vec_sps.size()) {
         LOG(FATAL) << "Mismatch in sync points between cube and vec for "
                       "workspace "
-                   << ws << ": " << "cube has " << cube_sps.size() << ", "
+                   << ws << ": "
+                   << "cube has " << cube_sps.size() << ", "
                    << "vec has " << vec_sps.size();
       }
 
@@ -601,7 +603,6 @@ private:
 };
 
 namespace {
-
 
 bool IsContextDependentResourceCall(const CallNode *call) {
   if (call->op.same_as(ascend_datacachecleanandinvalid_experiment())) {
@@ -1046,6 +1047,11 @@ public:
     AscendResourceScopeVerifier::Verify(f, false);
     substituter.is_auto_cross_core_sync_ =
         ctx->GetConfig<Bool>(ascendAutoCrossCoreSync, Bool(false)).value();
+    // The fixed A3 handoff route owns both ready and release. Its prepared
+    // source is required; never layer the old name-based cross notifications.
+    if (ctx->GetConfig<String>("tl.ascend_sync_strategy", String("legacy")).value() == "a3" &&
+        HasAscendSyncHandoff(f))
+      substituter.is_auto_cross_core_sync_ = false;
 
     fptr->body = substituter.VisitStmt(f->body);
     return f;

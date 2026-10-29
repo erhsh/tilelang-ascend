@@ -197,3 +197,47 @@ S3 循环接口、S4 planner 接管及后续同步生成仍不在本步实施。
   构建由唯一owner负责，链接期间不加载workspace库。新manifest冻结后运行owner、
   lifecycle两个native入口及reuse A3入口，记录逐轮随机scratch/golden和真实IR证据；
   更新计划并提交推送后停在S6，不进入S7。
+
+## S7 实施骨架：A3新同步生成器与固定workspace协议
+
+确认依据：用户明确授权S7；本节落实pass-design第17节，完成后提交推送并等待审核。
+
+- `tl.ascend_sync_strategy` 注册String，值legacy(default)/a3。root维护Python
+  pass_config、phase、wrapper和缓存ABI；`a3`路径加入固定内部同步ABI盐，legacy
+  默认key字节保持。constraint+a3只开放已有受审计Vector域；legacy planner+a3
+  只开放固定explicit-C/V serial handoff，未覆盖输入明确拒绝。
+- 新核内生成器由`ascend_sync_a3.cc`及必要common header承载，复用
+  ascend_constraint_sync的最终任务/物理区间解释；构建入口
+  `AscendInsertSyncA3(Target,String)`，旧FFI注册`tl.transform.AscendInsertSyncA3`。
+  `AllocateAscendSyncEvents(Array<Map<String,ObjectRef>>,String)->Map`为共享分配器的
+  显式只读入口。记录有向core/PIPE事件域、活跃起止、显式预留和分配结果；不改输入IR。
+  生成保守完成关系，不改变现有planner/injector次数或任务排序。
+- allocator按A3合法core/有向pair验证、预留显式槽后分配0–7，禁止活跃冲突与模复用。
+  每跨PIPE Set→Wait 后增加真实PIPE_ALL fence，租约到ALL才归还；独立S7检查器不能
+  把IR中的Wait当成已执行的清零。未wait token不借ALL清除，同PIPE barrier不能代替ALL。
+  新local只在constraint+a3负责已审计域，phase跳过旧SyncInsert；VS未覆盖效果必须
+  拒绝或保留原保护，不能无条件关闭。末端仍执行独立AscendVerifyConstraintSync。
+- 新`ascend_sync_handoff.cc`和`common/ascend_sync_handoff.h`负责固定跨核路径。
+  三个旧FFI/同名Python wrapper均接收(Target,String)：
+  `AscendPrepareSyncHandoff`、`AscendInsertSyncHandoff`、`AscendVerifySyncHandoff`。
+  Prepare使用StmtExprVisitor审计source/control/参与者，再以StmtExprMutator保留
+  身份；Insert根据最终MP数据生成ready/release；Verifier只读重建joint trace。
+  helper按source ownership、physical span、event operation分工，不信任单独PASS字段。
+- Prepare位于OptimizeForTarget第一次PlanAndUpdateBufferAllocationLocation之后、
+  CrossCorePipeline之前；在CombineCV中仅对新cross ownership抑制旧通知。
+  Insert位于MemoryPlanning→旧local→旧VS后；Verify位于末Simplify后、
+  ResourceScopeVerify前。所有TIR改写仍在Selection/MaskLegalize前；legacy为identity。
+- handoff私有function attrs保存稳定source/GM owner/participant provenance，
+  经现有lowering传递，最终实际Var/range/guard/round重新核验；缺少/陈旧facts拒绝。
+  mode2只支持cv_1_2、N1单slot和完整uniform参与；ready绑定写PIPE，release绑定最后
+  GM读PIPE。首写不等待free，末次producer drain，zero无事件；两个V聚合不可省略。
+  事件用户池0–10，首片单channel固定READY0/RELEASE1，手写cross协议保守拒绝；
+  不混管显式ID，未知隐式占用拒绝，11–15保守不分配。
+  不按mode或wait端PIPE拆成虚假bank，不从跨ID发射次序推completion。
+- 构建由唯一owner负责；C++修改期间不声称native已通过，链接期间所有runtime退出。
+  新manifest核验后先导入/最小lowering冒烟，再由独立测试责任人执行native及三个入口。
+  测试包含独立allocator边界、实际IR故障注入和A3长循环/多core/重复/双stream，
+  不将legacy CV兼容执行计入新cross握手。A2测试跳过，S8混合规划不纳入。
+  双stream由两个独立ExternalEvent闭门对齐提交，done/stream均pending后第三stream
+  释放并同步；同一live参数dict保留异常现场。该控制只在验证worker内，不改kernel，
+  不用mode0或sleep估时，不将pending证据称为硬件时间重叠。
