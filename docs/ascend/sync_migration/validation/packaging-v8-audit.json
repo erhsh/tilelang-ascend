@@ -1,0 +1,143 @@
+{
+  "checkpoint": "upstream-1c0f402e-legacy-v8",
+  "overall_status": "passed",
+  "scope": "frozen current compiler and packaging sources; actual clean wheel and PEP660 editable builds",
+  "source_manifest_sha256": "6f38084fc49e495c7ba2c36126871be8d789fad1768ef0629fee2a1d27001b91",
+  "source_manifest_entries": 41510,
+  "audit_workspace": "/tmp/ascend-sync-wheel-audit-20261030-044320-3562830",
+  "frozen_input": "/tmp/ascend-sync-final-artifact-input-20261030-043901-3551783",
+  "audit_driver_sha256": "0120d21b0809a7b8352005a0b2443286b88091063037736d0ad3abae13b0fdc6",
+  "original_tvm_protection": {
+    "before_after_equal": true,
+    "head": "c2921fdaf795b1103d21abc962e83a209c7258d7",
+    "status": "M python/tvm/tir/buffer.py\n M src/runtime/logging.cc",
+    "numstat": "6\t1\tpython/tvm/tir/buffer.py\n3\t1\tsrc/runtime/logging.cc",
+    "files": {
+      "python/tvm/tir/buffer.py": "fb23d7766c78fd7a7846d6374bf92a11e3cfe433181770eda8b2ad90e37e1118",
+      "src/runtime/logging.cc": "91465eb81d6db9410b0fb37d4e98df29e73637ce9eaf1ccbc75590252f2a729c"
+    },
+    "diff_hash": "7ba16a9c14fba41f3626a5edc92dbd3c6691f2d5567da22a8aec036b4dd7c655"
+  },
+  "wheel": {
+    "real_clean_build": true,
+    "all_four_native_libs_runpath": [
+      "$ORIGIN",
+      "$ORIGIN",
+      "$ORIGIN",
+      "$ORIGIN"
+    ],
+    "native_and_python_cache_abi": "upstream-1c0f402e-legacy-v8",
+    "positive_and_negative_native_z3_queries": "passed",
+    "python_z3_imported": false,
+    "actual_native_origins_checked": true,
+    "notices_installed_sha256": {
+      "licenses/tvm/LICENSE": "3e57d4708a79f30291b31caf0eb72171702acfc4c53669877d279ac1b56fd8f5",
+      "licenses/tvm/NOTICE": "967cd2fb97712c43271e2b1c4f636c4d8823898869f0f76f65bf8a3232584f0f",
+      "licenses/ascend_sync/NOTICE": "967cd2fb97712c43271e2b1c4f636c4d8823898869f0f76f65bf8a3232584f0f",
+      "licenses/z3/LICENSE.txt": "e617cad2ab9347e3129c2b171e87909332174e17961c5c3412d0799469111337"
+    },
+    "postbuild_source_verification": {
+      "verified_entries": 41510,
+      "changed_entries": [],
+      "parent_manifest_sha256": "6f38084fc49e495c7ba2c36126871be8d789fad1768ef0629fee2a1d27001b91"
+    },
+    "artifact": {
+      "build_path": "/tmp/ascend-sync-wheel-audit-20261030-044320-3562830/wheel-source/dist/tilelang-0.1.4-cp311-cp311-linux_aarch64.whl",
+      "path": "/tmp/ascend-sync-wheel-audit-20261030-044320-3562830/wheel-source-not-on-import-path/dist/tilelang-0.1.4-cp311-cp311-linux_aarch64.whl",
+      "sha256": "299fd0e2ef84517245049170c59e3a083bea551709434a9ec4c9e833bf1342dc"
+    },
+    "notices_zip_bytes_verified": true
+  },
+  "editable": {
+    "real_clean_build": true,
+    "all_four_native_libs_runpath": [
+      "$ORIGIN",
+      "$ORIGIN",
+      "$ORIGIN",
+      "$ORIGIN"
+    ],
+    "native_and_python_cache_abi": "upstream-1c0f402e-legacy-v8",
+    "positive_and_negative_native_z3_queries": "passed",
+    "python_z3_imported": false,
+    "actual_native_origins_checked": true,
+    "notices_installed_sha256": {
+      "licenses/tvm/LICENSE": "3e57d4708a79f30291b31caf0eb72171702acfc4c53669877d279ac1b56fd8f5",
+      "licenses/tvm/NOTICE": "967cd2fb97712c43271e2b1c4f636c4d8823898869f0f76f65bf8a3232584f0f",
+      "licenses/ascend_sync/NOTICE": "967cd2fb97712c43271e2b1c4f636c4d8823898869f0f76f65bf8a3232584f0f",
+      "licenses/z3/LICENSE.txt": "e617cad2ab9347e3129c2b171e87909332174e17961c5c3412d0799469111337"
+    },
+    "postbuild_source_verification": {
+      "verified_entries": 41510,
+      "changed_entries": [],
+      "parent_manifest_sha256": "6f38084fc49e495c7ba2c36126871be8d789fad1768ef0629fee2a1d27001b91"
+    },
+    "real_pth_and_direct_url_checked": true
+  },
+  "command_elapsed_seconds": [
+    {
+      "log": "wheel-patch-preflight.log",
+      "seconds": 2.1
+    },
+    {
+      "log": "wheel-patch-preflight.log",
+      "seconds": 0.0
+    },
+    {
+      "log": "wheel-build.log",
+      "seconds": 313.2
+    },
+    {
+      "log": "wheel-install.log",
+      "seconds": 4.5
+    },
+    {
+      "log": "wheel-verify.log",
+      "seconds": 8.5
+    },
+    {
+      "log": "editable-patch-preflight.log",
+      "seconds": 0.0
+    },
+    {
+      "log": "editable-patch-preflight.log",
+      "seconds": 0.0
+    },
+    {
+      "log": "editable-build-install.log",
+      "seconds": 290.8
+    },
+    {
+      "log": "editable-verify.log",
+      "seconds": 9.4
+    }
+  ],
+  "build_environment": {
+    "source": "/tmp/ascend-sync-final-artifact-input-20261030-043901-3551783/source",
+    "protected_original": "/mnt/workspace/developer/workspace/git/github/erhsh/tilelang-ascend",
+    "input_manifest": "/tmp/ascend-sync-final-artifact-input-20261030-043901-3551783/source-manifest.json",
+    "input_manifest_sha256": "6f38084fc49e495c7ba2c36126871be8d789fad1768ef0629fee2a1d27001b91",
+    "input_manifest_entries": 41510,
+    "input_manifest_generated_cache_entries": 0,
+    "python": "/home/developer/workspace/git/github/erhsh/tilelang-ascend/.venv/bin/python",
+    "mode": "both",
+    "z3_root": "/mnt/workspace/developer/.local/lib/python3.12/site-packages/z3",
+    "logical_cpu_count": 40,
+    "expected_setup_jobs": 20,
+    "retained_ld_library_path": "/home/developer/Ascend/cann-9.1.0/tools/simulator/Ascend910B1/lib:/home/developer/Ascend/cann/tools/msdebug/lib:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:/opt/buildtools/python-3.12.9/lib:/home/developer/Ascend/cann-9.1.0/lib64:/home/developer/Ascend/cann-9.1.0/lib64/plugin/opskernel:/home/developer/Ascend/cann-9.1.0/lib64/plugin/nnengine:/home/developer/Ascend/cann-9.1.0/opp/built-in/op_impl/ai_core/tbe/op_tiling/lib/linux/aarch64:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:/opt/buildtools/python-3.12.9/lib:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:/opt/buildtools/python-3.12.9/lib:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:/opt/buildtools/python-3.12.9/lib:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver",
+    "use_llvm": false,
+    "reuse_original_cmake_build": false,
+    "expected_engine_abi": "upstream-1c0f402e-legacy-v8"
+  },
+  "isolated_build_adjustments": {
+    "wheel": {
+      "CMAKE_DISABLE_FIND_PACKAGE_GTest": true,
+      "reason": "TVM optional GTest AUTO discovery found incompatible imported targets",
+      "source_files_modified": false
+    },
+    "editable": {
+      "CMAKE_DISABLE_FIND_PACKAGE_GTest": true,
+      "reason": "TVM optional GTest AUTO discovery found incompatible imported targets",
+      "source_files_modified": false
+    }
+  }
+}

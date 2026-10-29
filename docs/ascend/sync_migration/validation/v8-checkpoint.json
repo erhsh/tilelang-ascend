@@ -1,0 +1,150 @@
+{
+  "engine_cache_abi": "upstream-1c0f402e-legacy-v8",
+  "source_snapshot": {
+    "manifest_sha256": "6f38084fc49e495c7ba2c36126871be8d789fad1768ef0629fee2a1d27001b91",
+    "manifest_entries": 41510,
+    "manifest": "/tmp/ascend-sync-final-artifact-input-20261030-043901-3551783/source-manifest.json",
+    "scope": "native/Python/package build closure; excludes docs and tests"
+  },
+  "host": {
+    "passed": 1035,
+    "skipped": 1,
+    "xfailed": 2,
+    "subtests_passed": 30,
+    "elapsed_seconds": 129.28,
+    "log": "/tmp/ascend-sync-v8-full-host.log",
+    "files": [
+      "testing/python/language/test_ascend_upstream_sync_codegen_matrix.py",
+      "testing/python/language/test_ascend_upstream_sync_composite.py",
+      "testing/python/language/test_ascend_upstream_sync_composite_loop.py",
+      "testing/python/language/test_ascend_upstream_sync_cross_core.py",
+      "testing/python/language/test_ascend_upstream_sync_cross_core_loop.py",
+      "testing/python/language/test_ascend_upstream_sync_cube_pipeline.py",
+      "testing/python/language/test_ascend_upstream_sync_dynamic_pipeline.py",
+      "testing/python/language/test_ascend_upstream_sync_guards.py",
+      "testing/python/language/test_ascend_upstream_sync_helper_effects.py",
+      "testing/python/language/test_ascend_upstream_sync_insert.py",
+      "testing/python/language/test_ascend_upstream_sync_persistent.py",
+      "testing/python/language/test_ascend_upstream_sync_persistent_pipeline.py",
+      "testing/python/language/test_ascend_upstream_sync_physical_rings.py",
+      "testing/python/language/test_ascend_upstream_sync_pipeline.py",
+      "testing/python/language/test_ascend_upstream_sync_policy.py",
+      "testing/python/language/test_ascend_upstream_sync_pto_composite.py",
+      "testing/python/language/test_ascend_upstream_sync_pto_composite_protocol.py",
+      "testing/python/language/test_ascend_upstream_sync_runtime_contract.py",
+      "testing/python/language/test_ascend_upstream_sync_runtime_contract_cache_compile.py",
+      "testing/python/language/test_ascend_upstream_sync_snapshot.py",
+      "testing/python/language/test_ascend_upstream_sync_tail_copy.py",
+      "testing/python/language/test_ascend_upstream_sync_wave_seal.py",
+      "testing/python/language/test_ascend_z3_proof_service.py",
+      "testing/python/language/test_ascend_pipeline_ring_provenance.py",
+      "testing/python/language/test_ascend_sync_insert.py",
+      "testing/python/language/test_ascend_sync_insert_one_trip.py",
+      "testing/python/language/test_tilelang_ascend_language_persistent.py",
+      "testing/python/test_ascend_runtime_contract.py",
+      "testing/python/test_ascend_sync_cache_abi.py",
+      "testing/python/cache/test_ascend_runtime_contract_cache.py",
+      "testing/python/test_native_runtime_packaging.py"
+    ],
+    "xfail_reason": "Exact pre-existing A5 AscendC tl.ascend_abs lowering error; legacy baseline reproduces it."
+  },
+  "device": {
+    "passed": 75,
+    "elapsed_seconds": 322.17,
+    "log": "/tmp/ascend-sync-v8-full-device.log",
+    "files": [
+      "testing/python/language/test_ascend_upstream_sync_composite_device.py",
+      "testing/python/language/test_ascend_upstream_sync_control_device.py",
+      "testing/python/language/test_ascend_upstream_sync_cross_core_device.py",
+      "testing/python/language/test_ascend_upstream_sync_cross_core_loop_device.py",
+      "testing/python/language/test_ascend_upstream_sync_cube_pipeline_device.py",
+      "testing/python/language/test_ascend_upstream_sync_device.py",
+      "testing/python/language/test_ascend_upstream_sync_persistent_device.py",
+      "testing/python/language/test_ascend_upstream_sync_persistent_pipeline_device.py",
+      "testing/python/language/test_ascend_upstream_sync_pipeline_device.py",
+      "testing/python/language/test_ascend_upstream_sync_pto_device.py",
+      "testing/python/language/test_ascend_upstream_sync_tail_copy_device.py",
+      "testing/python/language/test_ascend_upstream_sync_wave_seal_device.py"
+    ],
+    "platform": "A3",
+    "device": "Ascend910_9362",
+    "targets": [
+      "ascendc",
+      "pto"
+    ],
+    "cce_auto_sync": false,
+    "scope_note": "74 migrated-path cases plus one independent wave-seal primitive with ordinary/VS disabled; no A2/A5 device execution."
+  },
+  "legacy_vs": {
+    "passed": 101,
+    "elapsed_seconds": 383.9,
+    "log": "/tmp/ascend-sync-v8-legacy-vs-full.log",
+    "files": [
+      "testing/python/language/test_ascend_sync_insert_vs.py"
+    ],
+    "scope": "Complete compile/IR suite without marker filtering; no NPU kernel execution; independent of host file set."
+  },
+  "z3_off": {
+    "three_target_build": "passed",
+    "build_log": "/tmp/ascend-sync-v8-off-build.log",
+    "host": {
+      "passed": 326,
+      "skipped": 712,
+      "subtests_passed": 30,
+      "elapsed_seconds": 2.87,
+      "log": "/tmp/ascend-sync-v8-off-host.log",
+      "scope": "Same host files as ON."
+    },
+    "device": {
+      "passed": 1,
+      "skipped": 74,
+      "elapsed_seconds": 5.71,
+      "log": "/tmp/ascend-sync-v8-off-device.log",
+      "scope": "Only the independent wave-seal primitive executes; migrated synchronization kernels skip."
+    }
+  },
+  "restored_on": {
+    "three_target_build": "passed",
+    "build_log": "/tmp/ascend-sync-v8-restored-on-build.log",
+    "tests_passed": 125,
+    "tests_skipped": 1,
+    "elapsed_seconds": 22.66,
+    "test_log": "/tmp/ascend-sync-v8-restored-on-tests.log",
+    "scope": "Native proof service, cache ABI, PTO profile/protocol; subsequent full A3 device suite also passed."
+  },
+  "native_install": {
+    "result": "passed_with_supplementary_limitation",
+    "metadata": "cmake-install-v8.json",
+    "scope": "Compiler native closure, ABI8 proof service, exact four license/notice texts; standalone runtime-only loading is a separately recorded failed supplementary check, reproduced on v6."
+  },
+  "performance": {
+    "metadata": "a3-performance-v8.json",
+    "cases": 4,
+    "scope": "Both engines, correctness verified, CCE auto-sync off; host-submitted NPU-event batch timing includes launch gaps, does not isolate device execution latency."
+  },
+  "packaging": {
+    "result": "passed",
+    "metadata": "packaging-v8-audit.json",
+    "scope": "ABI8 frozen native/Python/package closure: actual clean wheel and independent PEP660 editable build, install, native origins, Z3 queries, ABI and exact four notices verified."
+  },
+  "format": {
+    "result": "passed",
+    "python_lint_files": 52,
+    "new_python_format_files": 43,
+    "new_cpp_format_files": 40,
+    "log": "/tmp/ascend-sync-v8-style.log",
+    "license_exception": "Only the canonical Z3 LICENSE line-ending-space check is disabled by a path-specific .gitattributes entry; official source hash verified unchanged."
+  },
+  "default_backend": "legacy",
+  "tvm": {
+    "head": "c2921fdaf795b1103d21abc962e83a209c7258d7",
+    "original_dirty_numstat": "6\t1\tpython/tvm/tir/buffer.py\n3\t1\tsrc/runtime/logging.cc",
+    "original_changes_excluded_from_commit": true,
+    "files_sha256": {
+      "python/tvm/tir/buffer.py": "fb23d7766c78fd7a7846d6374bf92a11e3cfe433181770eda8b2ad90e37e1118",
+      "src/runtime/logging.cc": "91465eb81d6db9410b0fb37d4e98df29e73637ce9eaf1ccbc75590252f2a729c"
+    },
+    "diff_sha256": "7ba16a9c14fba41f3626a5edc92dbd3c6691f2d5567da22a8aec036b4dd7c655"
+  },
+  "completion_scope": "Opt-in migrated engine checkpoint. S3/S4 remain partially certified; S5 default switch and deletion of legacy algorithms not performed."
+}

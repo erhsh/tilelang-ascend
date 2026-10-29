@@ -48,6 +48,9 @@ def load_module_from_path(module_name, path):
 
 
 envs = load_module_from_path("env", os.path.join(ROOT_DIR, PACKAGE_NAME, "env.py"))
+native_runtime = load_module_from_path(
+    "tilelang_native_runtime_packaging", os.path.join(ROOT_DIR, PACKAGE_NAME, "_native_runtime.py")
+)
 
 CUDA_HOME = envs.CUDA_HOME
 ROCM_HOME = envs.ROCM_HOME
@@ -365,7 +368,7 @@ def patch_libs(libpath):
     if not patchelf_path:
         logger.warning("patchelf is not installed, which is required for auditwheel to work for compatible wheels.")
         return
-    subprocess.run([patchelf_path, "--set-rpath", "$ORIGIN", libpath])
+    subprocess.run([patchelf_path, "--set-rpath", "$ORIGIN", libpath], check=True)
 
 
 class TileLangBuilPydCommand(build_py):
@@ -481,6 +484,7 @@ class TileLangBuilPydCommand(build_py):
             "3rdparty/tvm/CONTRIBUTORS.md",
             "3rdparty/tvm/KEYS",
             "3rdparty/tvm/LICENSE",
+            "3rdparty/tvm/NOTICE",
             "3rdparty/tvm/README.md",
             "3rdparty/tvm/mypy.ini",
             "3rdparty/tvm/pyproject.toml",
@@ -705,6 +709,33 @@ class CMakeBuild(build_ext):
         for ext in self.extensions:
             self.build_cmake(ext)
 
+        # CMake records only this build's enabled dependencies. An empty OFF
+        # manifest must win over any native libraries left by an earlier build.
+        # The just-configured binary directory is authoritative. An output
+        # directory can also contain a stale manifest from a different build.
+        potential_dirs = [self.build_temp]
+        potential_dirs.extend(
+            os.path.dirname(self.get_ext_fullpath(ext.name)) for ext in self.extensions
+        )
+        potential_dirs.extend([self.build_lib, os.path.join(ROOT_DIR, "build")])
+        copied_runtime_files = native_runtime.copy_native_runtime_files(
+            potential_dirs,
+            [
+                os.path.join(self.build_lib, PACKAGE_NAME, "lib"),
+                os.path.join(ROOT_DIR, PACKAGE_NAME, "lib"),
+            ],
+            required=(
+                os.environ.get("USE_ASCEND_SYNC_Z3", "").strip().lower()
+                in ("1", "on", "true", "yes", "y")
+            ),
+        )
+        for runtime_file in copied_runtime_files:
+            logger.info(f"Copied native runtime dependency to {runtime_file}")
+        native_runtime.copy_native_notices(
+            ROOT_DIR,
+            [os.path.join(self.build_lib, PACKAGE_NAME), os.path.join(ROOT_DIR, PACKAGE_NAME)],
+        )
+
         # To make it works with editable install,
         # we need to copy the lib*.so files to the tilelang/lib directory
         import glob
@@ -713,6 +744,17 @@ class CMakeBuild(build_ext):
         if os.path.exists(PACKAGE_NAME):
             target_lib_dir = os.path.join(PACKAGE_NAME, "lib")
             for file in files:
+                # Native sidecars are copied only through the manifest and
+                # remain available at the paths recorded by CMake.
+                if os.path.basename(file) == "libz3.so":
+                    continue
+                if os.path.basename(file) in {
+                    "libtvm.so",
+                    "libtvm_runtime.so",
+                    "libtilelang.so",
+                    "libtilelang_module.so",
+                }:
+                    patch_libs(file)
                 if not os.path.exists(target_lib_dir):
                     os.makedirs(target_lib_dir)
                 shutil.copy(file, target_lib_dir)
@@ -741,6 +783,11 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             f"-DPYTHON_EXECUTABLE={sys.executable}",
         ]
+        # setup.py has no generic CMAKE_ARGS mechanism. Preserve CMake's default
+        # unless the caller explicitly configures the optional proof service.
+        for variable in ("USE_ASCEND_SYNC_Z3", "Z3_ROOT"):
+            if variable in os.environ:
+                cmake_args.append(f"-D{variable}={os.environ[variable]}")
 
         # Create the temporary build directory (if it doesn't exist).
         build_temp = os.path.abspath(self.build_temp)

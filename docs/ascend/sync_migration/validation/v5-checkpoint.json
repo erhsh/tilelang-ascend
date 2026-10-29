@@ -1,0 +1,39 @@
+{
+  "engine_cache_abi": "upstream-1c0f402e-legacy-v5",
+  "build_targets": [
+    "tilelang",
+    "tilelang_module",
+    "tilelang_static"
+  ],
+  "host": {
+    "passed": 944,
+    "skipped": 1,
+    "xfailed": 2,
+    "subtests_passed": 30,
+    "elapsed_seconds": 72.6,
+    "log": "/tmp/ascend-sync-v5-full-host.log"
+  },
+  "device": {
+    "passed": 65,
+    "elapsed_seconds": 258.98,
+    "log": "/tmp/ascend-sync-v5-full-device.log",
+    "hardware": "Ascend910_9362",
+    "platform": "A3",
+    "targets": [
+      "ascendc",
+      "pto"
+    ],
+    "cce_auto_sync": false,
+    "note": "Includes one independently synchronized wave-seal primitive test with TileLang ordinary/VS disabled; does not certify Persistent+SIP integration."
+  },
+  "known_codegen_limit": {
+    "platform": "A5",
+    "target": "ascendc",
+    "operation": "tl.ascend_abs",
+    "legacy_reproduction_log": "/tmp/ascend-sync-a5-ascendc-legacy-baseline.log",
+    "note": "Only this exact pre-existing codegen error is xfailed; synchronization failures are not suppressed."
+  },
+  "scope": "Whole v5 file lists are recorded at the start of both logs and in implementation-status.md. Later source changes are not covered by this checkpoint.",
+  "default_backend": "legacy",
+  "git_commit_created": false
+}

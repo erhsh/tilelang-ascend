@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "status": "passed_with_supplementary_limitation",
+  "validated_scope": "fresh CMake install compiler native closure, ABI8 proof service, 4 notices",
+  "prefix": "/tmp/ascend-sync-v8-install-k9dxfd_a",
+  "engine_abi": "upstream-1c0f402e-legacy-v8",
+  "compiler": {
+    "counterexample_rejected": true,
+    "engine_abi": "upstream-1c0f402e-legacy-v8",
+    "loaded_native_origins": {
+      "libtilelang_module.so": "/tmp/ascend-sync-v8-install-k9dxfd_a/lib/libtilelang_module.so",
+      "libtvm.so": "/tmp/ascend-sync-v8-install-k9dxfd_a/lib/libtvm.so",
+      "libz3.so.4.15": "/tmp/ascend-sync-v8-install-k9dxfd_a/lib/libz3.so.4.15"
+    },
+    "proof_positive": true,
+    "python_z3_imported": false
+  },
+  "notices_sha256": {
+    "tvm/LICENSE": "3e57d4708a79f30291b31caf0eb72171702acfc4c53669877d279ac1b56fd8f5",
+    "tvm/NOTICE": "967cd2fb97712c43271e2b1c4f636c4d8823898869f0f76f65bf8a3232584f0f",
+    "ascend_sync/NOTICE": "967cd2fb97712c43271e2b1c4f636c4d8823898869f0f76f65bf8a3232584f0f",
+    "z3/LICENSE.txt": "e617cad2ab9347e3129c2b171e87909332174e17961c5c3412d0799469111337"
+  },
+  "elf": {
+    "libtvm.so": {
+      "sha256": "0b355e907f353e931ece46800a1ff4b6bda686dda495323ab982e57e2ffd8e58",
+      "dynamic_log": "/tmp/ascend-sync-v8-install-k9dxfd_a/libtvm.so.dynamic.txt"
+    },
+    "libtvm_runtime.so": {
+      "sha256": "b97c00141d15839788ba6199377ff0bf78a4fad5fb98cf12d5309e62483c38fd",
+      "dynamic_log": "/tmp/ascend-sync-v8-install-k9dxfd_a/libtvm_runtime.so.dynamic.txt"
+    },
+    "libtilelang.so": {
+      "sha256": "85e079024ba1e9fd8b3cc15baaf1679ae236b41c463ff87135dcba4410e894bc",
+      "dynamic_log": "/tmp/ascend-sync-v8-install-k9dxfd_a/libtilelang.so.dynamic.txt"
+    },
+    "libtilelang_module.so": {
+      "sha256": "54dd5a46062b20e6ebfebbf8d00c4312ef7995dc13433fb78fa0908cfc6dfcb3",
+      "dynamic_log": "/tmp/ascend-sync-v8-install-k9dxfd_a/libtilelang_module.so.dynamic.txt"
+    }
+  },
+  "supplementary_runtime_only": {
+    "status": "failed_also_reproduced_on_v6",
+    "scope": "loading libtilelang.so without the compiler libtvm.so",
+    "results": {
+      "v8": {
+        "returncode": 1,
+        "stderr_log": "/tmp/ascend-sync-v8-install-k9dxfd_a/v8-supplementary-runtime-only.stderr.txt",
+        "undefined_symbol": "_ZTIN3tvm6script10ir_builder18IRBuilderFrameNodeE"
+      },
+      "v6": {
+        "returncode": 1,
+        "stderr_log": "/tmp/ascend-sync-v8-install-k9dxfd_a/v6-supplementary-runtime-only.stderr.txt",
+        "undefined_symbol": "_ZTIN3tvm6script10ir_builder18IRBuilderFrameNodeE"
+      }
+    }
+  },
+  "source_changes": [],
+  "builds_performed": 0,
+  "install_log": "/tmp/ascend-sync-v8-install-closure-verified.log"
+}

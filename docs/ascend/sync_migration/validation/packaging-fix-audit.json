@@ -1,0 +1,54 @@
+{
+  "checkpoint": "v4-packaging-fix",
+  "overall_status": "passed",
+  "scope": "frozen v4 compiler plus only four approved packaging-file changes; current original v6 compiler not audited",
+  "derived_manifest_sha256": "dee91d77d0f8b12e11631a29df600ab7829283df724cca0be6db1674bbcd44c2",
+  "derivation_record": "/tmp/ascend-sync-v4-packaging-fix-input-20261030-040549-3481208/derivation.json",
+  "derived_manifest_entries": 41508,
+  "original_v4_manifest_entries_verified": 41513,
+  "original_cython_generated_entries_excluded": 6,
+  "wheel": {
+    "real_clean_bdist_wheel": true,
+    "build_seconds": 295.9,
+    "install_seconds": 4.4,
+    "native_verification_seconds": 8.0,
+    "artifact": {
+      "build_path": "/tmp/ascend-sync-wheel-audit-20261030-040638-3482248/wheel-source/dist/tilelang-0.1.4-cp311-cp311-linux_aarch64.whl",
+      "path": "/tmp/ascend-sync-wheel-audit-20261030-040638-3482248/wheel-source-not-on-import-path/dist/tilelang-0.1.4-cp311-cp311-linux_aarch64.whl",
+      "sha256": "e3a8b38a10f19ca93bab0d3352f00abeb7ac929ab2d1c88ffb8a37c6ece3633c"
+    },
+    "notices_zip_and_installed_bytes_match": true
+  },
+  "editable": {
+    "real_verbose_pep660_clean_build_install": true,
+    "build_install_seconds": 285.5,
+    "native_verification_seconds": 9.2,
+    "real_pth_and_direct_url_checked": true,
+    "swallowed_customization_warning_detected": false,
+    "notices_source_package_hashes_match": true
+  },
+  "both_modes": {
+    "all_four_native_libs_runpath_exactly_origin": true,
+    "original_source_and_z3_root_runpath_absent": true,
+    "filtered_import_native_origins_checked": true,
+    "z3_true_and_negative_queries_passed": true,
+    "native_and_python_engine_cache_abi": "upstream-1c0f402e-legacy-v4",
+    "postbuild_source_hash_changed_entries": []
+  },
+  "original_tvm_protection": {
+    "before_after_equal": true,
+    "head": "c2921fdaf795b1103d21abc962e83a209c7258d7",
+    "numstat": "6\t1\tpython/tvm/tir/buffer.py\n3\t1\tsrc/runtime/logging.cc",
+    "files": {
+      "python/tvm/tir/buffer.py": "fb23d7766c78fd7a7846d6374bf92a11e3cfe433181770eda8b2ad90e37e1118",
+      "src/runtime/logging.cc": "91465eb81d6db9410b0fb37d4e98df29e73637ce9eaf1ccbc75590252f2a729c"
+    },
+    "diff_hash": "7ba16a9c14fba41f3626a5edc92dbd3c6691f2d5567da22a8aec036b4dd7c655"
+  },
+  "only_build_environment_adjustment": "CMAKE_DISABLE_FIND_PACKAGE_GTest=ON via isolated toolchain; LLVM off, Ascend/Z3 on, no network or original build reuse",
+  "native_cmake_install_command_executed_in_this_audit": false,
+  "repository_files_modified_by_auditor": false,
+  "reproduction_script": "/tmp/ascend-sync-v4-packaging-fix-input-20261030-040549-3481208/reproduce-audit.sh",
+  "prior_original_v4_editable_failure_retained": "/tmp/ascend-sync-wheel-audit-20261030-034959-3451864/editable-outcome.json",
+  "scope_note": "Derived v4 compiler source plus four packaging changes; this is packaging verification, not verification of the v6 compiler."
+}
