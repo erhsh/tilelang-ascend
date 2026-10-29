@@ -28,7 +28,7 @@
 namespace tvm {
 namespace tl {
 bool HasAscendSyncHandoff(const tir::PrimFunc &function) {
-  return function->GetAttr<tir::PrimFunc>(kAscendS7HandoffSource).defined();
+  return function->GetAttr<tir::PrimFunc>(kAscendHandoffSource).defined();
 }
 namespace {
 using namespace tir;
@@ -197,10 +197,10 @@ private:
       return GetRef<Stmt>(evaluate);
     Stmt result = GetRef<Stmt>(evaluate);
     for (auto it = loops_.rbegin(); it != loops_.rend(); ++it)
-      result =
-          AttrStmt(IntImm(DataType::Int(64), it->first), kAscendS7HandoffIter,
-                   cast(DataType::Int(64), it->second), result);
-    return AttrStmt(IntImm(DataType::Int(64), sites++), kAscendS7HandoffTask,
+      result = AttrStmt(IntImm(DataType::Int(64), it->first),
+                        kAscendHandoffIteration,
+                        cast(DataType::Int(64), it->second), result);
+    return AttrStmt(IntImm(DataType::Int(64), sites++), kAscendHandoffTaskId,
                     Integer(1), result);
   }
   int next_loop_{0};
@@ -451,7 +451,7 @@ private:
         }
         actor_ = -1;
         bindings_ = saved;
-      } else if (attribute->attr_key == kAscendS7HandoffTask) {
+      } else if (attribute->attr_key == kAscendHandoffTaskId) {
         int previous = site_;
         site_ =
             Constant(Downcast<PrimExpr>(attribute->node), "handoff task ID");
@@ -459,7 +459,7 @@ private:
             << "Malformed handoff task marker";
         Walk(attribute->body);
         site_ = previous;
-      } else if (attribute->attr_key == kAscendS7HandoffIter) {
+      } else if (attribute->attr_key == kAscendHandoffIteration) {
         int64_t id =
             Constant(Downcast<PrimExpr>(attribute->node), "handoff loop ID");
         ICHECK(!iterations_.count(id)) << "Duplicate handoff iteration marker";
@@ -788,7 +788,7 @@ public:
 
 private:
   Stmt VisitStmt_(const AttrStmtNode *attribute) final {
-    if (attribute->attr_key != kAscendS7HandoffTask)
+    if (attribute->attr_key != kAscendHandoffTaskId)
       return StmtExprMutator::VisitStmt_(attribute);
     int id = Constant(Downcast<PrimExpr>(attribute->node), "handoff task ID");
     auto role = roles_.find(id);
@@ -1061,12 +1061,12 @@ PrimFunc Prepare(PrimFunc function) {
   source.CopyOnWrite()->body = marker(function->body);
   BuildContract(source);
   PrimFunc result = source;
-  return WithAttr(result, kAscendS7HandoffSource, source);
+  return WithAttr(result, kAscendHandoffSource, source);
 }
 PrimFunc Insert(PrimFunc function) {
-  auto source = function->GetAttr<PrimFunc>(kAscendS7HandoffSource);
+  auto source = function->GetAttr<PrimFunc>(kAscendHandoffSource);
   ICHECK(source.defined()) << "Missing prepared handoff source";
-  ICHECK(!function->GetAttr<Record>(kAscendS7HandoffPlan).defined())
+  ICHECK(!function->GetAttr<Record>(kAscendHandoffPlan).defined())
       << "Repeated handoff generation";
   Contract contract = BuildContract(source.value());
   PrimFunc result = function;
@@ -1079,17 +1079,17 @@ PrimFunc Insert(PrimFunc function) {
               {"user_event_count", Integer(11)},
               {"counter_depth", Integer(15)},
               {"channel_count", Integer(contract.storage.defined() ? 1 : 0)}};
-  return WithAttr(result, kAscendS7HandoffPlan, plan);
+  return WithAttr(result, kAscendHandoffPlan, plan);
 }
 PrimFunc Verify(PrimFunc function) {
-  auto source = function->GetAttr<PrimFunc>(kAscendS7HandoffSource);
+  auto source = function->GetAttr<PrimFunc>(kAscendHandoffSource);
   ICHECK(source.defined() &&
-         function->GetAttr<Record>(kAscendS7HandoffPlan).defined())
+         function->GetAttr<Record>(kAscendHandoffPlan).defined())
       << "Missing actual handoff source/generation contract";
   ICHECK(!HasAscendSyncHandoff(source.value()))
       << "Recursive handoff source contract";
   Contract contract = BuildContract(source.value());
-  Record metadata = function->GetAttr<Record>(kAscendS7HandoffPlan).value();
+  Record metadata = function->GetAttr<Record>(kAscendHandoffPlan).value();
   for (auto field : std::vector<std::pair<const char *, int64_t>>{
            {"schema_version", 1},
            {"mode", 2},

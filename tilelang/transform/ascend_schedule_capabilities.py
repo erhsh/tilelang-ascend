@@ -1,14 +1,14 @@
 """Host-only A3 scheduling contracts, independent of TileLang/TVM and solvers.
 
 The budgets below describe the existing AscendC backend, not measured hardware
-capacity. A2's existing compiler path is unaffected by this explicit M0 model.
+capacity. A2's existing compiler path is unaffected by this explicit A3 model.
 """
 
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 
 
-_FIRST_SLICE_ROUTES = (
+_AUDITED_VECTOR_ROUTES = (
     ("global", "shared.ub", "MTE2"),
     ("shared.ub", "shared.ub", "V"),
     ("shared.ub", "global", "MTE3"),
@@ -88,13 +88,11 @@ class PlatformCapabilities:
     def validate(self) -> None:
         """Check the internal consistency of a capability description."""
         if self.platform != "A3" or self.backend != "ascendc":
-            raise CapabilityError("This M0 capability profile describes A3 AscendC only")
+            raise CapabilityError("This capability profile describes A3 AscendC only")
         if len({pool.scope for pool in self.pools}) != len(self.pools):
             raise CapabilityError("Memory pool scopes must be unique")
         if {pool.scope for pool in self.pools} != set(_POOL_OWNERS):
-            raise CapabilityError(
-                "The A3 profile requires exactly the five known local memory pools"
-            )
+            raise CapabilityError("The A3 profile requires exactly the five known local memory pools")
         for pool in self.pools:
             if pool.owner != _POOL_OWNERS[pool.scope]:
                 raise CapabilityError(f"Invalid owner {pool.owner!r} for memory pool {pool.scope}")
@@ -105,11 +103,8 @@ class PlatformCapabilities:
         if len(set(self.routes)) != len(self.routes):
             raise CapabilityError("Copy routes must be unique")
         for route in self.routes:
-            if (
-                route.owner != "V"
-                or (route.src_scope, route.dst_scope, route.pipe) not in _FIRST_SLICE_ROUTES
-            ):
-                raise CapabilityError(f"Unsupported first-slice owner/pipe: {route!r}")
+            if route.owner != "V" or (route.src_scope, route.dst_scope, route.pipe) not in _AUDITED_VECTOR_ROUTES:
+                raise CapabilityError(f"Unsupported Vector owner/pipe: {route!r}")
             for scope in (route.src_scope, route.dst_scope):
                 if scope != "global" and self.pool(scope).owner != route.owner:
                     raise CapabilityError(f"Route crosses incompatible local owners: {route!r}")
@@ -117,11 +112,7 @@ class PlatformCapabilities:
         if len(set(keys)) != len(keys):
             raise CapabilityError("Local event domains must be unique")
         for domain in self.local_event_domains:
-            if (
-                domain.owner != "V"
-                or domain.src_pipe == domain.dst_pipe
-                or {domain.src_pipe, domain.dst_pipe} - {"MTE2", "V", "MTE3"}
-            ):
+            if domain.owner != "V" or domain.src_pipe == domain.dst_pipe or {domain.src_pipe, domain.dst_pipe} - {"MTE2", "V", "MTE3"}:
                 raise CapabilityError(f"Unsupported local event domain: {domain!r}")
             if not domain.declared_ids or len(set(domain.declared_ids)) != len(domain.declared_ids):
                 raise CapabilityError("Declared event IDs must be nonempty and unique")
@@ -129,11 +120,9 @@ class PlatformCapabilities:
                 if _integer(event_id, "declared event ID") >= 8:
                     raise CapabilityError("A3 dav-2201 toolchain declares local event IDs 0..7")
         if self.timing_model is not None:
-            raise CapabilityError("A3 latency/II calibration is not available in M0")
+            raise CapabilityError("This capability profile does not provide a latency/II timing model")
 
-    def validate_allocation(
-        self, scope: str, size_bytes: int, offset_bytes: int = 0, versions: int = 1
-    ) -> int:
+    def validate_allocation(self, scope: str, size_bytes: int, offset_bytes: int = 0, versions: int = 1) -> int:
         """Return the physical byte count or reject an out-of-budget allocation.
 
         ``size_bytes`` must already include each version's layout padding and
@@ -150,19 +139,16 @@ class PlatformCapabilities:
         physical_bytes = ((size + alignment - 1) // alignment) * alignment * count
         if offset + physical_bytes > pool.budget_bytes:
             raise CapabilityError(
-                f"{scope} allocation needs [{offset}, {offset + physical_bytes}) bytes, "
-                f"exceeding compiler budget {pool.budget_bytes}"
+                f"{scope} allocation needs [{offset}, {offset + physical_bytes}) bytes, exceeding compiler budget {pool.budget_bytes}"
             )
         return physical_bytes
 
     def validate_route(self, owner: str, src_scope: str, dst_scope: str, pipe: str) -> None:
         route = Route(owner, src_scope, dst_scope, _pipe(pipe))
         if route not in self.routes:
-            raise CapabilityError(f"Route is unsupported by the first-slice A3 model: {route!r}")
+            raise CapabilityError(f"Route is unsupported by the audited A3 Vector model: {route!r}")
 
-    def available_event_ids(
-        self, owner: str, src_pipe: str, dst_pipe: str, reserved_ids: Iterable[int] = ()
-    ) -> tuple[int, ...]:
+    def available_event_ids(self, owner: str, src_pipe: str, dst_pipe: str, reserved_ids: Iterable[int] = ()) -> tuple[int, ...]:
         """Subtract audited reservations in one core instance and directed domain.
 
         This operation does not infer event liveness or prove that unreported
@@ -183,9 +169,7 @@ class PlatformCapabilities:
                     raise CapabilityError(f"Reserved event ID {event_id} is outside domain {key!r}")
                 reserved.add(event_id)
         except TypeError as error:
-            raise CapabilityError(
-                "reserved_ids must be an iterable of integer event IDs"
-            ) from error
+            raise CapabilityError("reserved_ids must be an iterable of integer event IDs") from error
         return tuple(event_id for event_id in domain.declared_ids if event_id not in reserved)
 
     def validate_event_id(
@@ -201,7 +185,7 @@ class PlatformCapabilities:
             raise CapabilityError(f"Event ID {event_id} is unavailable or reserved in this domain")
 
     def validate_cross_core_event(self) -> None:
-        raise CapabilityError("Cross-core flag banks and allocatable IDs are unaudited in M0")
+        raise CapabilityError("Cross-core flag banks and allocatable IDs are unaudited in this profile")
 
     def to_dict(self) -> dict:
         return {
@@ -233,12 +217,9 @@ _A3 = PlatformCapabilities(
         MemoryPool("wmma.matrix_b", "C", 65536),
         MemoryPool("wmma.accumulator", "C", 131072),
     ),
-    routes=tuple(Route("V", *route) for route in _FIRST_SLICE_ROUTES),
+    routes=tuple(Route("V", *route) for route in _AUDITED_VECTOR_ROUTES),
     local_event_domains=tuple(
-        LocalEventDomain("V", src, dst)
-        for src in ("MTE2", "V", "MTE3")
-        for dst in ("MTE2", "V", "MTE3")
-        if src != dst
+        LocalEventDomain("V", src, dst) for src in ("MTE2", "V", "MTE3") for dst in ("MTE2", "V", "MTE3") if src != dst
     ),
     evidence=(
         Evidence(
@@ -249,7 +230,7 @@ _A3 = PlatformCapabilities(
         Evidence(
             "compiler_contract",
             "src/transform/common/operation_config.h; src/transform/ascend_combinecv.cc",
-            "First-slice routes use explicit Vector ownership independently of PIPE names",
+            "Audited routes use explicit Vector ownership independently of PIPE names",
         ),
         Evidence(
             "sdk_declaration",
@@ -273,6 +254,6 @@ _A3 = PlatformCapabilities(
 def get_capabilities(platform: str = "A3") -> PlatformCapabilities:
     """Return the explicit A3 profile without altering any legacy target path."""
     if not isinstance(platform, str) or platform.upper() != "A3":
-        raise CapabilityError(f"No audited M0 capability profile for {platform!r}; expected A3")
+        raise CapabilityError(f"No audited capability profile for {platform!r}; expected A3")
     _A3.validate()
     return _A3

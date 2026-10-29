@@ -192,7 +192,7 @@ public:
 
   Record Build(bool include_dependencies = true) {
     ICHECK(!HasAscendScheduleHints(function_->body) || platform_ == "A3")
-        << "Task/Stage analysis is supported only for A3 in S3";
+        << "Task/Stage analysis is supported only for A3";
     ValidateAscendScheduleHintStructure(function_);
     Walk(function_->body, -1);
     Array<ObjectRef> task_records, storage_records, group_records, dependencies;
@@ -426,11 +426,11 @@ private:
         Walk(attr->body, group);
         --task_hint_depth_;
         ICHECK_EQ(groups_[group].members.size(), 1U)
-            << "T.Task requires exactly one audited hardware call in S3";
+            << "T.Task requires exactly one audited hardware call";
         group_parent_ = parent;
         return;
       }
-      if (attr->attr_key == kAscendS5TaskHint) {
+      if (attr->attr_key == kAscendPipelineTaskHint) {
         // CombineCV can leave a metadata wrapper around the empty opposite
         // core branch. It is not a task and must not acquire a phantom ID.
         if (const auto *empty = attr->body.as<EvaluateNode>()) {
@@ -439,15 +439,15 @@ private:
         }
         ICHECK(attr->node.as<runtime::MapNode>() &&
                attr->value.dtype() == DataType::Int(32) && is_one(attr->value))
-            << "Malformed S5 task metadata";
+            << "Malformed pipeline task metadata";
         auto metadata = Downcast<Map<String, ObjectRef>>(attr->node);
         ICHECK(metadata.size() == 1 && metadata.count("stage"))
-            << "Unsupported S5 task metadata fields";
+            << "Unsupported pipeline task metadata fields";
         const auto *stage = metadata["stage"].as<IntImmNode>();
         ICHECK(stage && stage->dtype == DataType::Int(64) &&
                stage->value >= 0 &&
                stage->value <= std::numeric_limits<int32_t>::max())
-            << "Malformed S5 task stage";
+            << "Malformed pipeline task stage";
         int parent = group_parent_;
         if (group < 0 || !groups_[group].statement.same_as(statement)) {
           if (group >= 0)
@@ -462,7 +462,7 @@ private:
         Walk(attr->body, group);
         --task_hint_depth_;
         ICHECK_EQ(groups_[group].members.size(), 1U)
-            << "S5 task metadata must wrap one audited hardware call";
+            << "Pipeline task metadata must wrap one audited hardware call";
         manual_stage_ = previous;
         group_parent_ = parent;
         return;
@@ -800,10 +800,11 @@ PrimExpr PromoteAscendStorageIndex(PrimExpr expression,
   ICHECK(dtype.is_scalar() && !dtype.is_bool() &&
          ((dtype.is_int() && dtype.bits() <= 64) ||
           (dtype.is_uint() && dtype.bits() < 64)))
-      << "Unsupported S6 pointer integer index";
+      << "Unsupported storage pointer integer index";
   ScheduleIndexPromoter promoter(proof_domains);
   PrimExpr result = promoter(expression);
-  ICHECK(result.dtype() == DataType::Int(64)) << "S6 index must remain int64";
+  ICHECK(result.dtype() == DataType::Int(64))
+      << "Storage index must remain int64";
   return result;
 }
 

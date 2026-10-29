@@ -44,11 +44,11 @@ public:
             ->GetConfig<String>(kAscendSyncStrategy, String("legacy"))
             .value();
     bool has_local_sync =
-        function_->GetAttr<ObjectRef>(kAscendS7LocalSync).defined();
+        function_->GetAttr<ObjectRef>(kAscendLocalSyncPlan).defined();
     ICHECK(sync_strategy != "a3" || has_local_sync)
         << "A3 constraint synchronization requires the new local generator";
     strict_local_leases_ = sync_strategy == "a3" || has_local_sync;
-    auto attribute = function_->GetAttr<Record>(kAscendS4Manifest);
+    auto attribute = function_->GetAttr<Record>(kAscendConstraintPlan);
     ICHECK(attribute.defined()) << "Missing constraint source manifest";
     Record manifest = attribute.value();
     int64_t schema = Downcast<Integer>(manifest["schema_version"])->value;
@@ -58,7 +58,7 @@ public:
     lifetimes_enabled_ = schema == 3;
     Record source_graph = Downcast<Record>(manifest["source_graph"]);
     PrimFunc source_function = Downcast<PrimFunc>(manifest["source_function"]);
-    ICHECK(!source_function->GetAttr<Record>(kAscendS4Manifest).defined())
+    ICHECK(!source_function->GetAttr<Record>(kAscendConstraintPlan).defined())
         << "Recursive constraint source manifest";
     if (lifetimes_enabled_) {
       ICHECK(manifest.count("lifetime_contract"))
@@ -104,15 +104,16 @@ public:
         IterVar axis = Downcast<IterVar>(domain["iter_var"]);
         int64_t extent = StaticInteger(domain["extent"], "launch extent");
         std::string tag = axis->thread_tag;
-        ICHECK(!tag.empty() && extent > 0) << "Invalid S5 static launch domain";
+        ICHECK(!tag.empty() && extent > 0)
+            << "Invalid pipeline static launch domain";
         auto previous = domains.find(tag);
         if (previous != domains.end()) {
           ICHECK_EQ(previous->second, extent)
-              << "Conflicting S5 launch domains";
+              << "Conflicting pipeline launch domains";
           continue;
         }
         ICHECK(extent <= int64_t(kTaskLimit / cases.size()))
-            << "S5 launch-case verification limit exceeded (4096)";
+            << "Pipeline launch-case verification limit exceeded (4096)";
         domains[tag] = extent;
         std::vector<LaunchCase> expanded;
         for (const LaunchCase &binding : cases) {
@@ -285,28 +286,30 @@ private:
   int64_t StaticInteger(const ObjectRef &object, const char *field) {
     const auto *value = object.as<IntImmNode>();
     ICHECK(value && value->dtype.is_int() && value->dtype.bits() <= 64)
-        << "Non-static S5 version metadata: " << field;
+        << "Non-static pipeline version metadata: " << field;
     return value->value;
   }
   int64_t ShapeBytes(const ObjectRef &object, int bytes, const char *field,
                      bool logical) {
     Array<PrimExpr> shape = Downcast<Array<PrimExpr>>(object);
-    ICHECK(!shape.empty()) << "Empty S5 version shape: " << field;
+    ICHECK(!shape.empty()) << "Empty pipeline version shape: " << field;
     int64_t product = bytes;
     for (size_t i = 0; i < shape.size(); ++i) {
       int64_t extent = StaticInteger(shape[i], field);
       ICHECK(extent > 0 && extent <= kAscendA2A3UBBudget / product)
-          << "S5 version shape exceeds the native UB budget";
+          << "Pipeline version shape exceeds the native UB budget";
       if (logical && i + 1 < shape.size())
         ICHECK_EQ(extent, 1)
-            << "S5 versioned UB must be one contiguous logical row";
+            << "Pipeline versioned UB must be one contiguous logical row";
       product *= extent;
     }
     return product;
   }
   void LoadVersionRemaps(const Record &source_graph) {
-    auto attribute = function_->GetAttr<Array<ObjectRef>>(kAscendS5BufferRemap);
-    ICHECK(attribute.defined()) << "Missing actual S5 buffer remap metadata";
+    auto attribute =
+        function_->GetAttr<Array<ObjectRef>>(kAscendPipelineBufferRemap);
+    ICHECK(attribute.defined())
+        << "Missing actual pipeline buffer remap metadata";
     for (const ObjectRef &item : attribute.value()) {
       Record record = Downcast<Record>(item);
       auto number = [&](const char *field) {
@@ -319,7 +322,7 @@ private:
           pointer ? pointer->element_type.as<PrimTypeNode>() : nullptr;
       ICHECK(element && (element->dtype == DataType::Float(16) ||
                          element->dtype == DataType::Float(32)))
-          << "S5 version remap requires float16/float32 UB storage";
+          << "Pipeline version remap requires float16/float32 UB storage";
       int64_t count = number("versions"),
               stride = number("version_stride_bytes"),
               span = number("version_span_bytes"),
@@ -327,29 +330,30 @@ private:
       ICHECK(count >= 1 && count <= 3 && stride > 0 && span > 0 &&
              span <= stride && stride % 32 == 0 && total > 0 &&
              total <= kAscendA2A3UBBudget && __int128(count) * stride == total)
-          << "Invalid S5 physical version geometry";
+          << "Invalid pipeline physical version geometry";
       int64_t logical_bytes =
           ShapeBytes(record["logical_shape"], element->dtype.bytes(),
                      "logical_shape", true);
       int64_t physical_bytes =
           ShapeBytes(record["physical_shape"], element->dtype.bytes(),
                      "physical_shape", false);
-      ICHECK_EQ(physical_bytes, total) << "S5 physical shape/total mismatch";
+      ICHECK_EQ(physical_bytes, total)
+          << "Pipeline physical shape/total mismatch";
       int64_t offset = number("logical_elem_offset");
       ICHECK(offset >= 0 &&
              __int128(offset) * element->dtype.bytes() + logical_bytes <= span)
-          << "S5 logical elem_offset/region exceeds one physical version";
+          << "Pipeline logical elem_offset/region exceeds one physical version";
       int64_t loop = number("loop_id"), origin = number("selector_origin");
       auto loops = Downcast<Array<ObjectRef>>(source_graph["loops"]);
       ICHECK(loop >= 0 && size_t(loop) < loops.size())
-          << "Invalid S5 remap loop identity";
+          << "Invalid pipeline remap loop identity";
       Record owner = Downcast<Record>(loops[loop]);
       ICHECK_EQ(StaticInteger(owner["min"], "source loop minimum"), origin)
-          << "S5 version selector origin differs from its source loop";
+          << "Pipeline version selector origin differs from its source loop";
       for (const VersionRemap &old : remaps_)
         ICHECK(!old.logical.same_as(logical) ||
                (old.loop != loop && old.versions == 1 && count == 1))
-            << "Unsupported overlapping/nested S5 version ownership";
+            << "Unsupported overlapping/nested pipeline version ownership";
       int64_t begin = offset * element->dtype.bytes();
       remaps_.push_back({logical, physical, loop, count, stride, span, total,
                          origin, begin, begin + logical_bytes});
@@ -375,10 +379,11 @@ private:
                Downcast<String>(storage["scope"]) == "shared.ub" &&
                Equal(Downcast<PrimExpr>(storage["capacity_bytes"]),
                      IntImm(DataType::Int(64), remap.total)))
-            << "Actual allocation shape does not match the S5 version remap";
+            << "Actual allocation shape does not match the pipeline version "
+               "remap";
         found = true;
       }
-      ICHECK(found) << "Missing actual S5 version allocation";
+      ICHECK(found) << "Missing actual pipeline version allocation";
     }
   }
   bool Iteration(const Key &key, int64_t loop, int64_t *value) const {
@@ -399,7 +404,7 @@ private:
       versioned |= remap.versions > 1;
       int64_t iteration;
       if (Iteration(key, remap.loop, &iteration)) {
-        ICHECK(!found) << "Ambiguous S5 version remap";
+        ICHECK(!found) << "Ambiguous pipeline version remap";
         found = &remap;
       }
     }
@@ -454,7 +459,7 @@ private:
       const Effect &physical_read = final[final_consumer].reads[operand];
       ICHECK_EQ(physical_read.scope, "shared.ub")
           << "Internal GM workspace lifetime materialization is unsupported";
-      int64_t storage = StaticInteger(record.at("storage_id"), "storage id");
+      int64_t storage = StaticInteger(record.at("storage_id"), "Storage id");
       ICHECK(storage >= 0 && size_t(storage) < storages.size());
       Record allocation = Downcast<Record>(storages[storage]);
       ICHECK(
@@ -549,7 +554,8 @@ private:
           continue;
         ICHECK(Equal(read.begin, Integer(remap->logical_begin)) &&
                Equal(read.end, Integer(remap->logical_end)))
-            << "S5 versioned reads must cover one fixed whole logical region";
+            << "Pipeline versioned reads must cover one fixed whole logical "
+               "region";
         auto definition = writer.find(read.data.get());
         ICHECK(definition != writer.end())
             << "Versioned UB read has no source full writer";
@@ -575,14 +581,15 @@ private:
                                        physical_read.physical_begin.value() &&
                                    physical_read.physical_end.value() <=
                                        write.physical_end.value()))
-                << "S5 versioned read observes the wrong reaching writer or "
+                << "Pipeline versioned read observes the wrong reaching writer "
+                   "or "
                    "overwritten slot";
             matched = true;
             break;
           }
         }
-        ICHECK(matched)
-            << "S5 versioned read observes an uninitialized physical slot";
+        ICHECK(matched) << "Pipeline versioned read observes an uninitialized "
+                           "physical slot";
       }
       for (const Effect &write : source[index].writes) {
         const VersionRemap *remap = Remap(write, keys[index]);
@@ -590,7 +597,8 @@ private:
           continue;
         ICHECK(Equal(write.begin, Integer(remap->logical_begin)) &&
                Equal(write.end, Integer(remap->logical_end)))
-            << "S5 versioned writes must cover one fixed whole logical region";
+            << "Pipeline versioned writes must cover one fixed whole logical "
+               "region";
         writer[write.data.get()] = index;
       }
     }
@@ -647,7 +655,7 @@ private:
         if (remap) {
           int64_t iteration;
           ICHECK(Iteration(key, remap->loop, &iteration))
-              << "Missing S5 iteration identity";
+              << "Missing pipeline iteration identity";
           __int128 normalized = __int128(iteration) - remap->origin;
           int64_t slot =
               int64_t((normalized % remap->versions + remap->versions) %
@@ -658,7 +666,8 @@ private:
           ICHECK(sizes.defined() && sizes.value().count(expected_data) &&
                  analyzer_.CanProve(sizes.value()[expected_data] >=
                                     Integer(remap->total)))
-              << "Actual allocation does not contain the S5 version remap";
+              << "Actual allocation does not contain the pipeline version "
+                 "remap";
         }
         ICHECK(expected_data.same_as(right[i].data) &&
                left[i].scope == right[i].scope &&

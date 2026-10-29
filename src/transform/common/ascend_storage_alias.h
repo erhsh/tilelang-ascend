@@ -8,12 +8,14 @@
 namespace tvm {
 namespace tl {
 
-constexpr const char *kAscendS6AliasProvenance =
-    "tl.ascend_s6_alias_provenance";
-constexpr const char *kAscendS6ViewProvenance = "tl.ascend_s6_view_provenance";
-constexpr const char *kAscendS6SourceData = "tl.ascend_s6_source_data";
-constexpr const char *kAscendS6OriginalParameters =
-    "tl.ascend_s6_original_parameters";
+constexpr const char *kAscendStorageAliasProvenance =
+    "tl.ascend_storage_alias_provenance";
+constexpr const char *kAscendStorageViewProvenance =
+    "tl.ascend_storage_view_provenance";
+constexpr const char *kAscendStorageSourceData =
+    "tl.ascend_storage_source_data";
+constexpr const char *kAscendStorageOriginalParameters =
+    "tl.ascend_storage_original_parameters";
 
 // Internal COW helper; the public pass invokes it only in constraint mode.
 tir::PrimFunc CanonicalizeAscendStorageAliases(tir::PrimFunc function);

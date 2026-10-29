@@ -28,7 +28,7 @@ PrimExpr CheckedAscendStorageByteOffset(PrimExpr elements, int64_t bytes) {
     __int128 value = __int128(constant->value) * bytes;
     ICHECK(value >= std::numeric_limits<int64_t>::min() &&
            value <= std::numeric_limits<int64_t>::max())
-        << "S6 byte offset/extent multiplication exceeds signed int64";
+        << "Storage byte offset/extent multiplication exceeds signed int64";
     return IntImm(DataType::Int(64), static_cast<int64_t>(value));
   }
   return elements * IntImm(DataType::Int(64), bytes);
@@ -39,7 +39,7 @@ PrimExpr AddAscendStorageByteOffsets(PrimExpr left, PrimExpr right) {
     __int128 value = __int128(a->value) + b->value;
     ICHECK(value >= std::numeric_limits<int64_t>::min() &&
            value <= std::numeric_limits<int64_t>::max())
-        << "S6 byte/index offset addition exceeds signed int64";
+        << "Storage byte/index offset addition exceeds signed int64";
     return IntImm(DataType::Int(64), static_cast<int64_t>(value));
   }
   return left + right;
@@ -50,7 +50,7 @@ using Record = Map<String, ObjectRef>;
 
 int64_t ElementBytes(DataType dtype) {
   ICHECK(dtype.is_scalar() && dtype.bits() > 0 && dtype.bits() % 8 == 0)
-      << "Unsupported S6 sub-byte/vector pointer dtype";
+      << "Unsupported storage sub-byte/vector pointer dtype";
   return dtype.bytes();
 }
 PrimExpr Wide(PrimExpr value) { return PromoteAscendStorageIndex(value); }
@@ -58,18 +58,18 @@ PrimExpr Wide(PrimExpr value) { return PromoteAscendStorageIndex(value); }
 void ValidatePhysicalExtent(DataType dtype, const Array<PrimExpr> &shape) {
   int64_t product = 1;
   int64_t bytes = (int64_t(dtype.bits()) * dtype.lanes() + 7) / 8;
-  ICHECK(bytes > 0) << "Invalid S6 physical allocation dtype";
+  ICHECK(bytes > 0) << "Invalid storage physical allocation dtype";
   for (const PrimExpr &extent : shape) {
     const auto *constant = extent.as<IntImmNode>();
     if (!constant)
       return; // Symbolic domains remain symbolic and fail closed later.
     ICHECK(constant->dtype.is_int() && constant->value > 0 &&
            constant->value <= std::numeric_limits<int64_t>::max() / product)
-        << "S6 physical allocation extent/product exceeds signed int64";
+        << "Storage physical allocation extent/product exceeds signed int64";
     product *= constant->value;
   }
   ICHECK(product <= std::numeric_limits<int64_t>::max() / bytes)
-      << "S6 physical allocation byte extent exceeds signed int64";
+      << "Storage physical allocation byte extent exceeds signed int64";
 }
 
 struct Root {
@@ -124,7 +124,7 @@ using BoundsMap = std::unordered_map<const VarNode *, IntegerBounds>;
 IntegerBounds CheckedBounds(__int128 lower, __int128 upper) {
   ICHECK(lower >= std::numeric_limits<int64_t>::min() &&
          upper <= std::numeric_limits<int64_t>::max() && lower <= upper)
-      << "S6 original index arithmetic exceeds signed int64 before "
+      << "Storage original index arithmetic exceeds signed int64 before "
          "normalization";
   return {true, static_cast<int64_t>(lower), static_cast<int64_t>(upper)};
 }
@@ -136,7 +136,7 @@ IntegerBounds OriginalBounds(const PrimExpr &expression,
   if (const auto *constant = expression.as<IntImmNode>()) {
     ICHECK(constant->dtype.is_int() || constant->dtype.is_bool() ||
            (constant->dtype.is_uint() && constant->dtype.bits() < 64))
-        << "Unsupported S6 integer literal";
+        << "Unsupported storage integer literal";
     return {true, constant->value, constant->value};
   }
   if (const auto *variable = expression.as<VarNode>()) {
@@ -148,13 +148,13 @@ IntegerBounds OriginalBounds(const PrimExpr &expression,
     DataType dtype = cast_node->dtype;
     ICHECK(dtype.is_int() || dtype.is_bool() ||
            (dtype.is_uint() && dtype.bits() < 64))
-        << "Unsupported S6 index cast";
+        << "Unsupported storage index cast";
     if (value.known && !dtype.is_bool() && dtype.bits() < 64) {
       int64_t lower = dtype.is_uint() ? 0 : -(int64_t(1) << (dtype.bits() - 1));
       int64_t upper =
           (int64_t(1) << (dtype.bits() - (dtype.is_uint() ? 0 : 1))) - 1;
       ICHECK(value.lower >= lower && value.upper <= upper)
-          << "Unsupported lossy S6 index cast before normalization";
+          << "Unsupported lossy storage index cast before normalization";
     }
     return dtype.is_bool() ? IntegerBounds{true, 0, 1} : value;
   }
@@ -175,7 +175,7 @@ IntegerBounds OriginalBounds(const PrimExpr &expression,
   }
   if (const auto *call = expression.as<CallNode>()) {
     ICHECK(call->op.same_as(builtin::if_then_else()) && call->args.size() == 3)
-        << "Unsupported call in original S6 index";
+        << "Unsupported call in original storage index";
     return OriginalBounds(Select(call->args[0], call->args[1], call->args[2]),
                           domains);
   }
@@ -202,10 +202,10 @@ IntegerBounds OriginalBounds(const PrimExpr &expression,
       return CheckedBounds(std::max(al, bl), std::max(ah, bh));
     if (op == "/" || op == "//" || op == "%" || op == "mod") {
       ICHECK(!(bl <= 0 && bh >= 0))
-          << "Possible zero divisor in original S6 index";
+          << "Possible zero divisor in original storage index";
       ICHECK(
           !(al == std::numeric_limits<int64_t>::min() && bl <= -1 && bh >= -1))
-          << "S6 original index division exceeds signed int64";
+          << "Storage original index division exceeds signed int64";
       if (op == "%" || op == "mod") {
         __int128 magnitude = std::max(bl < 0 ? -bl : bl, bh < 0 ? -bh : bh);
         return CheckedBounds(op == "mod" && bl > 0 ? 0 : -magnitude + 1,
@@ -224,28 +224,29 @@ IntegerBounds OriginalBounds(const PrimExpr &expression,
     }
     return {true, 0, 1};
   };
-#define S6_BOUNDS_NODE(Type, Op)                                               \
+#define STORAGE_BOUNDS_NODE(Type, Op)                                          \
   if (const auto *node = expression.as<Type##Node>())                          \
   return binary(node->a, node->b, Op)
-  S6_BOUNDS_NODE(Add, "+");
-  S6_BOUNDS_NODE(Sub, "-");
-  S6_BOUNDS_NODE(Mul, "*");
-  S6_BOUNDS_NODE(Div, "/");
-  S6_BOUNDS_NODE(FloorDiv, "//");
-  S6_BOUNDS_NODE(Mod, "%");
-  S6_BOUNDS_NODE(FloorMod, "mod");
-  S6_BOUNDS_NODE(Min, "min");
-  S6_BOUNDS_NODE(Max, "max");
-  S6_BOUNDS_NODE(EQ, "bool");
-  S6_BOUNDS_NODE(NE, "bool");
-  S6_BOUNDS_NODE(LT, "bool");
-  S6_BOUNDS_NODE(LE, "bool");
-  S6_BOUNDS_NODE(GT, "bool");
-  S6_BOUNDS_NODE(GE, "bool");
-  S6_BOUNDS_NODE(And, "bool");
-  S6_BOUNDS_NODE(Or, "bool");
-#undef S6_BOUNDS_NODE
-  LOG(FATAL) << "Unsupported expression in original S6 index: " << expression;
+  STORAGE_BOUNDS_NODE(Add, "+");
+  STORAGE_BOUNDS_NODE(Sub, "-");
+  STORAGE_BOUNDS_NODE(Mul, "*");
+  STORAGE_BOUNDS_NODE(Div, "/");
+  STORAGE_BOUNDS_NODE(FloorDiv, "//");
+  STORAGE_BOUNDS_NODE(Mod, "%");
+  STORAGE_BOUNDS_NODE(FloorMod, "mod");
+  STORAGE_BOUNDS_NODE(Min, "min");
+  STORAGE_BOUNDS_NODE(Max, "max");
+  STORAGE_BOUNDS_NODE(EQ, "bool");
+  STORAGE_BOUNDS_NODE(NE, "bool");
+  STORAGE_BOUNDS_NODE(LT, "bool");
+  STORAGE_BOUNDS_NODE(LE, "bool");
+  STORAGE_BOUNDS_NODE(GT, "bool");
+  STORAGE_BOUNDS_NODE(GE, "bool");
+  STORAGE_BOUNDS_NODE(And, "bool");
+  STORAGE_BOUNDS_NODE(Or, "bool");
+#undef STORAGE_BOUNDS_NODE
+  LOG(FATAL) << "Unsupported expression in original storage index: "
+             << expression;
   return {};
 }
 class AliasCanonicalizer : public StmtExprMutator {
@@ -273,7 +274,7 @@ public:
       Var canonical = root.data;
       std::string desired = name(root);
       if (counts[desired] > 1)
-        desired += "__tl_s6_" + std::to_string(index);
+        desired += "__tl_storage_" + std::to_string(index);
       if (desired != root.data->name_hint) {
         canonical = Var(desired, root.data->type_annotation);
         renamed_.Set(root.data, canonical);
@@ -285,11 +286,13 @@ public:
       source_data_.Set(canonical, root.data);
     }
     if (auto aliases =
-            function->GetAttr<Array<ObjectRef>>(kAscendS6AliasProvenance))
+            function->GetAttr<Array<ObjectRef>>(kAscendStorageAliasProvenance))
       aliases_ = aliases.value();
-    if (auto views = function->GetAttr<Array<Buffer>>(kAscendS6ViewProvenance))
+    if (auto views =
+            function->GetAttr<Array<Buffer>>(kAscendStorageViewProvenance))
       views_ = views.value();
-    if (auto source = function->GetAttr<Map<Var, Var>>(kAscendS6SourceData))
+    if (auto source =
+            function->GetAttr<Map<Var, Var>>(kAscendStorageSourceData))
       for (const auto &entry : source.value())
         source_data_.Set(entry.first, entry.second);
   }
@@ -310,9 +313,9 @@ public:
     Map<String, ObjectRef> attrs = result->attrs.defined()
                                        ? result->attrs->dict
                                        : Map<String, ObjectRef>();
-    attrs.Set(kAscendS6AliasProvenance, aliases_);
-    attrs.Set(kAscendS6SourceData, source_data_);
-    attrs.Set(kAscendS6ViewProvenance, views_);
+    attrs.Set(kAscendStorageAliasProvenance, aliases_);
+    attrs.Set(kAscendStorageSourceData, source_data_);
+    attrs.Set(kAscendStorageViewProvenance, views_);
     RemapMetadata(&attrs);
     return WithAttrs(result, attrs);
   }
@@ -328,7 +331,7 @@ private:
                   origin = OriginalBounds(base, domains_);
     if (require_known)
       ICHECK(index.known && origin.known)
-          << "S6 pointer alias requires a known bounded integer domain";
+          << "Storage pointer alias requires a known bounded integer domain";
     if (!index.known || !origin.known)
       return;
     IntegerBounds scaled = CheckedBounds(__int128(index.lower) * bytes,
@@ -341,7 +344,7 @@ private:
     for (const auto &entry : bindings_)
       PostOrderVisit(entry.second.byte_offset, [&](const ObjectRef &node) {
         ICHECK(!node.same_as(variable))
-            << "S6 pointer alias captures a shadowed integer variable";
+            << "Storage pointer alias captures a shadowed integer variable";
       });
     auto old = domains_.find(variable.get());
     std::optional<IntegerBounds> saved;
@@ -379,7 +382,7 @@ private:
     if (found != bindings_.end())
       return found->second;
     ICHECK(roots_.count(variable.get()))
-        << "Unknown S6 pointer root: " << variable;
+        << "Unknown storage pointer root: " << variable;
     return {renamed_.Get(variable).value_or(variable),
             IntImm(DataType::Int(64), 0)};
   }
@@ -389,24 +392,24 @@ private:
     const auto *pointer = value.as<CallNode>();
     ICHECK(pointer && pointer->op.same_as(builtin::tvm_access_ptr()) &&
            pointer->args.size() == 5)
-        << "Unknown/opaque S6 pointer alias expression";
+        << "Unknown/opaque storage pointer alias expression";
     const auto *annotation = pointer->args[0].as<CallNode>();
     ICHECK(annotation &&
            annotation->op.same_as(Op::Get("tir.type_annotation")) &&
            annotation->args.empty())
-        << "Malformed S6 pointer type annotation";
+        << "Malformed storage pointer type annotation";
     const auto *variable = pointer->args[1].as<VarNode>();
-    ICHECK(variable) << "Malformed S6 pointer root";
+    ICHECK(variable) << "Malformed storage pointer root";
     // Removing a binding must not discard evaluation of hidden memory/state.
     const auto *mask = pointer->args[4].as<IntImmNode>();
     ICHECK(mask && mask->dtype.is_int() && mask->value >= 1 && mask->value <= 3)
-        << "Unsupported S6 pointer alias access mask";
+        << "Unsupported storage pointer alias access mask";
     AliasBinding binding = Resolve(GetRef<Var>(variable));
     CheckBytes(pointer->args[2], ElementBytes(pointer->args[0].dtype()),
                binding.byte_offset, true);
     PrimExpr extent = IndexWide(pointer->args[3]);
     ICHECK(!analyzer_.CanProve(extent < 0))
-        << "Invalid S6 pointer alias extent";
+        << "Invalid storage pointer alias extent";
     binding.byte_offset = analyzer_.Simplify(AddAscendStorageByteOffsets(
         binding.byte_offset, CheckedAscendStorageByteOffset(
                                  IndexWide(pointer->args[2]),
@@ -434,7 +437,7 @@ private:
     int64_t bytes = ElementBytes(buffer->dtype);
     ICHECK(analyzer_.CanProve(
         floormod(binding.byte_offset, IntImm(DataType::Int(64), bytes)) == 0))
-        << "S6 alias byte offset is not divisible by its view dtype";
+        << "Storage alias byte offset is not divisible by its view dtype";
     Buffer result = buffer;
     auto *node = result.CopyOnWrite();
     node->data = binding.root;
@@ -448,21 +451,21 @@ private:
   }
   PrimExpr VisitExpr_(const VarNode *variable) final {
     ICHECK(!bindings_.count(variable))
-        << "S6 pointer alias escapes an audited access_ptr/view";
+        << "Storage pointer alias escapes an audited access_ptr/view";
     Var value = GetRef<Var>(variable);
     return renamed_.Get(value).value_or(value);
   }
   PrimExpr VisitExpr_(const CallNode *call) final {
     if (!call->op.same_as(builtin::tvm_access_ptr()))
       return StmtExprMutator::VisitExpr_(call);
-    ICHECK_EQ(call->args.size(), 5U) << "Malformed S6 access_ptr";
+    ICHECK_EQ(call->args.size(), 5U) << "Malformed storage access_ptr";
     const auto *annotation = call->args[0].as<CallNode>();
     ICHECK(annotation &&
            annotation->op.same_as(Op::Get("tir.type_annotation")) &&
            annotation->args.empty())
-        << "Malformed S6 pointer type annotation";
+        << "Malformed storage pointer type annotation";
     const auto *data = call->args[1].as<VarNode>();
-    ICHECK(data) << "Malformed S6 access_ptr root";
+    ICHECK(data) << "Malformed storage access_ptr root";
     AliasBinding binding = Resolve(GetRef<Var>(data));
     OriginalBounds(call->args[3], domains_);
     bool rewritten = !binding.root.same_as(GetRef<Var>(data)) ||
@@ -478,7 +481,7 @@ private:
         AddAscendStorageByteOffsets(binding.byte_offset, own_bytes));
     ICHECK(analyzer_.CanProve(
         floormod(byte_offset, IntImm(DataType::Int(64), bytes)) == 0))
-        << "S6 alias byte offset is not divisible by the consumer dtype";
+        << "Storage alias byte offset is not divisible by the consumer dtype";
     Array<PrimExpr> args = call->args;
     args.Set(1, binding.root);
     args.Set(2, analyzer_.Simplify(
@@ -515,7 +518,7 @@ private:
                         [&] { return StmtExprMutator::VisitStmt_(statement); });
     }
     ICHECK(!roots_.count(statement->var.get()))
-        << "S6 pointer binding cannot shadow a physical storage Var";
+        << "Storage pointer binding cannot shadow a physical storage Var";
     AliasBinding binding = Parse(statement->value);
     auto previous = bindings_.find(statement->var.get());
     bool shadowed = previous != bindings_.end();
@@ -554,7 +557,7 @@ private:
     if (attribute->attr_key != "thread_extent")
       return StmtExprMutator::VisitStmt_(attribute);
     const auto *iterator = attribute->node.as<IterVarNode>();
-    ICHECK(iterator) << "Malformed S6 launch iterator";
+    ICHECK(iterator) << "Malformed storage launch iterator";
     const auto *extent = attribute->value.as<IntImmNode>();
     IntegerBounds range;
     if (extent && extent->value > 0)
@@ -578,14 +581,15 @@ private:
              match->source->region.size() == 1 &&
              analyzer_.CanProve(target->shape[0] ==
                                 match->source->region[0]->extent))
-          << "S6 match_buffer requires an exact dense one-dimensional binding";
+          << "Storage match_buffer requires an exact dense one-dimensional "
+             "binding";
       AliasBinding binding = Resolve(source->data);
       IntegerBounds source_offset =
                         OriginalBounds(source->elem_offset, domains_),
                     region_min =
                         OriginalBounds(match->source->region[0]->min, domains_);
       ICHECK(source_offset.known && region_min.known)
-          << "S6 match_buffer requires a bounded source region";
+          << "Storage match_buffer requires a bounded source region";
       IntegerBounds offset =
           CheckedBounds(__int128(source_offset.lower) + region_min.lower,
                         __int128(source_offset.upper) + region_min.upper);
@@ -604,7 +608,7 @@ private:
                              ? std::optional<AliasBinding>()
                              : std::optional<AliasBinding>(old->second)});
       ICHECK(!roots_.count(target->data.get()))
-          << "S6 match_buffer cannot rebind a physical storage Var";
+          << "Storage match_buffer cannot rebind a physical storage Var";
       bindings_[target->data.get()] = binding;
       views_.push_back(RewriteBuffer(target));
       aliases_.push_back(Record{{"data", target->data},
@@ -639,11 +643,12 @@ private:
         if (const auto *variable = entry.first.as<VarNode>()) {
           AliasBinding binding = Resolve(GetRef<Var>(variable));
           ICHECK(is_zero(binding.byte_offset))
-              << "S6 layout metadata cannot target an offset pointer alias";
+              << "Storage layout metadata cannot target an offset pointer "
+                 "alias";
           mapped.Set(binding.root, entry.second);
         } else {
           ICHECK(entry.first.as<BufferNode>())
-              << "Malformed S6 layout metadata key";
+              << "Malformed storage layout metadata key";
           mapped.Set(RewriteBuffer(Downcast<Buffer>(entry.first)),
                      entry.second);
         }
@@ -670,11 +675,11 @@ private:
     return result;
   }
   void RemapMetadata(Map<String, ObjectRef> *attrs) {
-    if (auto original = attrs->Get(kAscendS6OriginalParameters)) {
+    if (auto original = attrs->Get(kAscendStorageOriginalParameters)) {
       Array<Var> values;
       for (const Var &data : Downcast<Array<Var>>(original.value()))
         values.push_back(renamed_.Get(data).value_or(data));
-      attrs->Set(kAscendS6OriginalParameters, values);
+      attrs->Set(kAscendStorageOriginalParameters, values);
     }
     for (const char *key : {"address_map", "size_map"}) {
       auto value = attrs->Get(key);
@@ -698,11 +703,11 @@ private:
             ICHECK(!found || (root.root.same_as(candidate.root) &&
                               analyzer_.CanProve(root.byte_offset ==
                                                  candidate.byte_offset)))
-                << "Ambiguous S6 alias metadata binding";
+                << "Ambiguous storage alias metadata binding";
             root = candidate;
             found = true;
           }
-          ICHECK(found) << "Unknown or stale S6 storage metadata owner";
+          ICHECK(found) << "Unknown or stale storage metadata owner";
         }
         ICHECK(is_zero(root.byte_offset))
             << "Address metadata cannot target an offset pointer alias";
@@ -720,7 +725,7 @@ private:
                                 result;
       for (const auto &entry : map) {
         ICHECK(roots_.count(entry.first.get()))
-            << "S6 shape metadata names unknown or stale storage";
+            << "Storage shape metadata names unknown or stale storage";
         result.Set(renamed_.Get(entry.first).value_or(entry.first),
                    entry.second);
       }
@@ -758,7 +763,7 @@ public:
 private:
   void Register(const Var &data, ObjectRef allocation) {
     ICHECK(!sites.count(data.get()))
-        << "S6 storage has multiple physical allocation sites";
+        << "Storage has multiple physical allocation sites";
     sites.emplace(data.get(), Info{next_site_++, loops_, allocation});
   }
   void VisitStmt_(const ForNode *loop) final {
@@ -792,36 +797,38 @@ PrimFunc RemapAscendStorageMetadata(PrimFunc function,
   Map<String, ObjectRef> attrs = function->attrs->dict;
   auto mapped = [&](Var data) { return replacements.Get(data).value_or(data); };
   if (auto original =
-          function->GetAttr<Array<Var>>(kAscendS6OriginalParameters)) {
+          function->GetAttr<Array<Var>>(kAscendStorageOriginalParameters)) {
     Array<Var> values;
     for (const Var &data : original.value())
       values.push_back(mapped(data));
-    attrs.Set(kAscendS6OriginalParameters, values);
+    attrs.Set(kAscendStorageOriginalParameters, values);
   }
-  if (auto source = function->GetAttr<Map<Var, Var>>(kAscendS6SourceData)) {
+  if (auto source =
+          function->GetAttr<Map<Var, Var>>(kAscendStorageSourceData)) {
     Map<Var, Var> result;
     for (const auto &entry : source.value())
       result.Set(mapped(entry.first), entry.second);
-    attrs.Set(kAscendS6SourceData, result);
+    attrs.Set(kAscendStorageSourceData, result);
   }
   if (auto aliases =
-          function->GetAttr<Array<ObjectRef>>(kAscendS6AliasProvenance)) {
+          function->GetAttr<Array<ObjectRef>>(kAscendStorageAliasProvenance)) {
     Array<ObjectRef> result;
     for (const ObjectRef &item : aliases.value()) {
       Record alias = Downcast<Record>(item);
       alias.Set("root", mapped(Downcast<Var>(alias.at("root"))));
       result.push_back(alias);
     }
-    attrs.Set(kAscendS6AliasProvenance, result);
+    attrs.Set(kAscendStorageAliasProvenance, result);
   }
-  if (auto views = function->GetAttr<Array<Buffer>>(kAscendS6ViewProvenance)) {
+  if (auto views =
+          function->GetAttr<Array<Buffer>>(kAscendStorageViewProvenance)) {
     Array<Buffer> result;
     for (Buffer view : views.value()) {
       if (replacements.count(view->data))
         view.CopyOnWrite()->data = mapped(view->data);
       result.push_back(view);
     }
-    attrs.Set(kAscendS6ViewProvenance, result);
+    attrs.Set(kAscendStorageViewProvenance, result);
   }
   for (const char *key : {"address_map", "size_map"}) {
     if (auto values = function->GetAttr<Map<Var, PrimExpr>>(key)) {
@@ -847,9 +854,10 @@ Map<String, ObjectRef> BuildAscendStorageCatalog(PrimFunc function,
                                                  Record graph) {
   AllocationSites sites;
   sites(function->body);
-  auto sources = function->GetAttr<Map<Var, Var>>(kAscendS6SourceData)
+  auto sources = function->GetAttr<Map<Var, Var>>(kAscendStorageSourceData)
                      .value_or(Map<Var, Var>());
-  auto original = function->GetAttr<Array<Var>>(kAscendS6OriginalParameters);
+  auto original =
+      function->GetAttr<Array<Var>>(kAscendStorageOriginalParameters);
   std::unordered_set<const VarNode *> external;
   if (original.defined())
     for (const Var &data : original.value())
@@ -880,7 +888,7 @@ Map<String, ObjectRef> BuildAscendStorageCatalog(PrimFunc function,
     storages.push_back(result);
   }
   if (auto provenance =
-          function->GetAttr<Array<ObjectRef>>(kAscendS6AliasProvenance)) {
+          function->GetAttr<Array<ObjectRef>>(kAscendStorageAliasProvenance)) {
     for (const ObjectRef &item : provenance.value()) {
       Record alias = Downcast<Record>(item);
       Var root = Downcast<Var>(alias["root"]);
@@ -920,7 +928,8 @@ Map<String, ObjectRef> BuildAscendStorageCatalog(PrimFunc function,
         PrimExpr stride = Wide(buffer->strides[i]);
         PrimExpr term;
         if (const auto *constant = stride.as<IntImmNode>()) {
-          ICHECK(constant->value >= 0) << "Unsupported negative S6 view stride";
+          ICHECK(constant->value >= 0)
+              << "Unsupported negative storage view stride";
           term = constant->value == 0
                      ? IntImm(DataType::Int(64), 0)
                      : CheckedAscendStorageByteOffset(count, constant->value);
@@ -946,7 +955,8 @@ Map<String, ObjectRef> BuildAscendStorageCatalog(PrimFunc function,
   };
   for (const auto &entry : function->buffer_map)
     add_view(entry.second);
-  if (auto declared = function->GetAttr<Array<Buffer>>(kAscendS6ViewProvenance))
+  if (auto declared =
+          function->GetAttr<Array<Buffer>>(kAscendStorageViewProvenance))
     for (const Buffer &buffer : declared.value())
       add_view(buffer);
   PostOrderVisit(function->body, [&](const ObjectRef &node) {
@@ -970,7 +980,7 @@ Map<String, ObjectRef> BuildAscendStorageCatalog(PrimFunc function,
 
 Map<String, ObjectRef> AnalyzeAscendStorageOwners(PrimFunc function,
                                                   String platform) {
-  ICHECK_EQ(platform, "A3") << "S6 storage owner analysis supports A3 only";
+  ICHECK_EQ(platform, "A3") << "Storage owner analysis supports A3 only";
   PrimFunc canonical = CanonicalizeAscendStorageAliases(function);
   Record graph = AnalyzeAscendScheduleEffects(canonical, platform);
   return BuildAscendStorageCatalog(canonical, graph);

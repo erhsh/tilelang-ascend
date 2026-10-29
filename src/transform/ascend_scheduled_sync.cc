@@ -81,7 +81,7 @@ public:
 
 private:
   Stmt VisitStmt_(const AttrStmtNode *node) final {
-    if (node->attr_key != kAscendS8Task)
+    if (node->attr_key != kAscendAutoScheduleTaskId)
       return StmtMutator::VisitStmt_(node);
     int64_t id = IntegerValue(node->node);
     ICHECK(seen_.insert(id).second) << "Repeated static auto task marker";
@@ -110,7 +110,7 @@ tir::transform::Pass AscendInsertScheduledSync(Target target, String platform) {
   auto pass = [=](PrimFunc function, IRModule, tvm::transform::PassContext) {
     if (!Enabled(target, platform))
       return function;
-    ICHECK(!function->GetAttr<ObjectRef>(kAscendS8Sync).defined())
+    ICHECK(!function->GetAttr<ObjectRef>(kAscendAutoScheduleSyncPlan).defined())
         << "Scheduled synchronization already generated";
     Record proof = VerifyAscendAutoMapping(function);
     Record contract = Downcast<Record>(proof.at("contract"));
@@ -118,7 +118,7 @@ tir::transform::Pass AscendInsertScheduledSync(Target target, String platform) {
     result.CopyOnWrite()->body =
         Emitter(Downcast<Record>(contract.at("channel")))(function->body);
     return WithAttr(
-        result, kAscendS8Sync,
+        result, kAscendAutoScheduleSyncPlan,
         Record{{"schema_version", Integer(1)},
                {"local_policy", String("all_task_boundaries")},
                {"cross_policy", String("mode2_fixed_n1_ready_release")},

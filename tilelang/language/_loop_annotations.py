@@ -18,8 +18,8 @@ _RESERVED_KEYS = frozenset(
         "tl_cross_interval",
         "tl.ascend_task",
         "tl.ascend_stage",
-        "tl.ascend_s5_loop_id",
-        "tl.ascend_s5_versions",
+        "tl.ascend_pipeline_loop_id",
+        "tl.ascend_pipeline_versions",
         "tl.ascend_persistent_guard",
         "enable_offset",
         "parallel_loop_layout",
@@ -27,9 +27,7 @@ _RESERVED_KEYS = frozenset(
 )
 
 
-def loop_annotations(
-    annotations: Mapping[str, Any] | None, *, allow_offset: bool = False
-) -> dict[str, Any]:
+def loop_annotations(annotations: Mapping[str, Any] | None, *, allow_offset: bool = False) -> dict[str, Any]:
     """Copy metadata; scheduling keys require their dedicated supported API."""
     if annotations is None:
         return {}
@@ -44,9 +42,13 @@ def loop_annotations(
                 raise TypeError("Pipelined enable_offset must be bool")
             continue
         if key in _RESERVED_KEYS or key.startswith(
-            ("software_pipeline_", "tl.ascend_s6_", "tl.ascend_s7_", "tl.ascend_s8_")
-        ):
-            raise ValueError(
-                f"loop annotation {key!r} is reserved; use its dedicated supported API"
+            (
+                "software_pipeline_",
+                "tl.ascend_storage_",
+                "tl.ascend_handoff_",
+                "tl.ascend_local_sync_",
+                "tl.ascend_auto_schedule",
             )
+        ):
+            raise ValueError(f"loop annotation {key!r} is reserved; use its dedicated supported API")
     return result

@@ -62,17 +62,18 @@ static void ValidateLoopAnnotations(const Map<String, ObjectRef> &annotations,
           << "enable_offset must be boolean";
       continue;
     }
-    ICHECK(key != kAscendPersistentGuard && key != kAscendS5LoopId &&
-           key != kAscendS5Versions && key != "num_stages" &&
+    ICHECK(key != kAscendPersistentGuard && key != kAscendPipelineLoopId &&
+           key != kAscendPipelineVersions && key != "num_stages" &&
            key != "tl_pipeline_order" && key != "tl_pipeline_stage" &&
            key != "tl_pipeline_sync" && key != "tl_pipeline_group" &&
            key != "tl_cross_interval" && key != "tl.ascend_task" &&
            key != "tl.ascend_stage" && key != "enable_offset" &&
            key != "parallel_loop_layout" &&
            key.rfind("software_pipeline_", 0) != 0 &&
-           key.rfind("tl.ascend_s6_", 0) != 0 &&
-           key.rfind("tl.ascend_s7_", 0) != 0 &&
-           key.rfind("tl.ascend_s8_", 0) != 0)
+           key.rfind("tl.ascend_storage_", 0) != 0 &&
+           key.rfind("tl.ascend_handoff_", 0) != 0 &&
+           key.rfind("tl.ascend_local_sync_", 0) != 0 &&
+           key.rfind("tl.ascend_auto_schedule", 0) != 0)
         << "Loop annotation '" << key
         << "' is reserved; use its dedicated supported API";
   }

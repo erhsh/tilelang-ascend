@@ -98,15 +98,15 @@ void Context(Target target, String platform) {
          !flag("tl.ascend_auto_sync_vs", false) &&
          !flag("tl.ascend_auto_cross_core_sync", false) &&
          !ctx->GetConfig<DictAttrs>(kAscendPipelineCostModel).defined())
-      << "Auto requires a3 sync, memory/CV ownership, no old cross/VS or S5 "
-         "cost model";
+      << "Auto requires a3 sync and memory/CV ownership; legacy cross/VS sync "
+         "and constraint cost models are not supported";
 }
 
 class Source {
 public:
   explicit Source(PrimFunc input)
       : function(CanonicalizeAscendStorageAliases(input)) {
-    ICHECK(!function->GetAttr<ObjectRef>(kAscendS8Schedule).defined())
+    ICHECK(!function->GetAttr<ObjectRef>(kAscendAutoSchedule).defined())
         << "Auto source already carries an owned schedule";
     for (const Var &param : function->params)
       if (function->buffer_map.count(param))
@@ -123,7 +123,7 @@ public:
     }
     Array<Var> original;
     if (auto declared =
-            function->GetAttr<Array<Var>>(kAscendS6OriginalParameters))
+            function->GetAttr<Array<Var>>(kAscendStorageOriginalParameters))
       original = declared.value();
     else
       for (const Var &param : function->params)
@@ -226,7 +226,8 @@ private:
       int64_t id = loops.size();
       loop_ids[n] = id;
       int64_t minimum = I(n->min), extent = I(n->extent);
-      ICHECK(extent >= 0 && extent <= kAscendS8ControlLimit &&
+      ICHECK(extent >= 0 &&
+             extent <= kAscendAutoScheduleControlExpansionLimit &&
              n->loop_var.dtype().is_int() &&
              (n->loop_var.dtype().bits() == 32 ||
               n->loop_var.dtype().bits() == 64))
@@ -309,7 +310,7 @@ private:
     return EvaluateAscendLifetimeInteger(expr, bindings);
   }
   void Execute(Stmt stmt) {
-    ICHECK(++controls <= kAscendS8ControlLimit)
+    ICHECK(++controls <= kAscendAutoScheduleControlExpansionLimit)
         << "Auto control expansion budget exceeded";
     if (const auto *n = stmt.as<SeqStmtNode>()) {
       for (Stmt s : n->seq)
@@ -414,7 +415,7 @@ private:
                  Num(effect.at("end")) <= Num(storage.at("capacity_bytes")))
               << "Auto source footprint exceeds its real allocation";
         }
-      ICHECK_LT(tasks.size(), kAscendS8TaskLimit)
+      ICHECK_LT(tasks.size(), kAscendAutoScheduleTaskLimit)
           << "Auto finite task budget exceeded";
       tasks.push_back(task);
     }
@@ -705,7 +706,7 @@ int64_t Slot(const R &task, int64_t clock, int64_t minimum, int64_t versions) {
 }
 PrimFunc Schedule(PrimFunc f, Target target, String platform) {
   Context(target, platform);
-  ICHECK(!f->GetAttr<ObjectRef>(kAscendS8Schedule).defined())
+  ICHECK(!f->GetAttr<ObjectRef>(kAscendAutoSchedule).defined())
       << "Repeated auto planning";
   R source = AnalyzeAscendAutoSource(f);
   f = Downcast<PrimFunc>(source.at("source_function"));
@@ -911,8 +912,8 @@ PrimFunc Schedule(PrimFunc f, Target target, String platform) {
              {"solution", best_solution},
              {"selected_versions", best_versions},
              {"materialized", Bool(false)}};
-  f = WithAttr(f, kAscendS8BufferRemap, best_layout);
-  return WithAttr(f, kAscendS8Schedule, manifest);
+  f = WithAttr(f, kAscendAutoScheduleBufferRemap, best_layout);
+  return WithAttr(f, kAscendAutoSchedule, manifest);
 }
 } // namespace
 
@@ -927,15 +928,15 @@ tir::transform::Pass AscendAutoSchedule(Target target, String platform) {
 tir::transform::Pass AscendPrepareAutoSchedule(Target target) {
   auto pass = [target](tir::PrimFunc f, IRModule, tvm::transform::PassContext) {
     Context(target, "A3");
-    ICHECK(!f->GetAttr<ObjectRef>(kAscendS8Prepared).defined())
+    ICHECK(!f->GetAttr<ObjectRef>(kAscendAutoSchedulePrepared).defined())
         << "Stale auto preparation";
     Array<tir::Var> parameters;
     for (const tir::Var &p : f->params)
       if (f->buffer_map.count(p))
         parameters.push_back(f->buffer_map[p]->data);
-    f = WithAttr(f, kAscendS6OriginalParameters, parameters);
+    f = WithAttr(f, kAscendStorageOriginalParameters, parameters);
     f = CanonicalizeAscendStorageAliases(f);
-    return WithAttr(f, kAscendS8Prepared, Bool(true));
+    return WithAttr(f, kAscendAutoSchedulePrepared, Bool(true));
   };
   return tir::transform::CreatePrimFuncPass(pass, 0,
                                             "tl.AscendPrepareAutoSchedule", {});

@@ -112,7 +112,7 @@ private:
       for (const Stmt &child : seq->seq)
         Walk(child);
     } else if (const auto *attr = statement.as<AttrStmtNode>()) {
-      if (attr->attr_key == kAscendS4Task) {
+      if (attr->attr_key == kAscendConstraintTaskId) {
         const auto *id = attr->node.as<IntImmNode>();
         ICHECK(id && id->dtype == DataType::Int(64) && id->value >= 0 &&
                size_t(id->value) < units_.size() &&
@@ -125,7 +125,7 @@ private:
         ICHECK_EQ(calls.size(), before + 1)
             << "Constraint task marker must contain exactly one hardware call";
         active_task_ = -1;
-      } else if (attr->attr_key == kAscendS4Iter) {
+      } else if (attr->attr_key == kAscendConstraintIteration) {
         const auto *id = attr->node.as<IntImmNode>();
         ICHECK(id && id->dtype == DataType::Int(64) && id->value >= 0 &&
                attr->value.dtype().is_int() && attr->value.dtype().bits() <= 64)
@@ -150,12 +150,12 @@ private:
         Map<Var, PrimExpr> saved = bindings_;
         auto coordinate = launch_case_.find(axis->thread_tag);
         ICHECK(!strict_launch_ || coordinate != launch_case_.end())
-            << "Unmapped S5 physical launch domain";
+            << "Unmapped pipeline physical launch domain";
         if (coordinate != launch_case_.end()) {
           ICHECK(coordinate->second.second == extent &&
                  coordinate->second.first >= 0 &&
                  coordinate->second.first < extent)
-              << "S5 launch domain changed after planning";
+              << "Pipeline launch domain changed after planning";
           bindings_.Set(axis->var,
                         IntImm(axis->var.dtype(), coordinate->second.first));
         } else if (extent == 1)

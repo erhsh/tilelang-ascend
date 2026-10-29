@@ -75,10 +75,10 @@ public:
     ICHECK(
         ctx->GetConfig<String>("tl.ascend_pipeline_planner", String("legacy"))
                 .value() != "auto" &&
-        !f->GetAttr<ObjectRef>("tl.ascend_s8_schedule").defined())
+        !f->GetAttr<ObjectRef>("tl.ascend_auto_schedule").defined())
         << "The auto scheduler owns this kernel; legacy synchronization cannot "
            "run";
-    ICHECK(!f->GetAttr<ObjectRef>(kAscendS7LocalSync).defined())
+    ICHECK(!f->GetAttr<ObjectRef>(kAscendLocalSyncPlan).defined())
         << "A3 local synchronization already owns this kernel; legacy "
            "generator cannot run twice";
     auto preprocessed = syncInserter.PreprocessUnrollForLoops(f->body);

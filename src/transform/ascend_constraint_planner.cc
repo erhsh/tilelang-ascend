@@ -209,7 +209,7 @@ private:
       std::string key = annotation.first;
       ICHECK(key != "tl_pipeline_order" && key != "tl_pipeline_stage" &&
              key != "tl_pipeline_sync" && key != "tl_pipeline_group" &&
-             key != kAscendS5LoopId && key != kAscendS5Versions &&
+             key != kAscendPipelineLoopId && key != kAscendPipelineVersions &&
              key.rfind("software_pipeline_", 0) != 0)
           << "Constraint planner rejects manual pipeline controls: " << key;
       if (key == "tl_cross_interval") {
@@ -431,13 +431,14 @@ int64_t BufferBytes(const Buffer &buffer) {
   ICHECK(buffer->strides.empty() && is_zero(buffer->elem_offset) &&
          (buffer->shape.size() == 1 ||
           (buffer->shape.size() == 2 && is_one(buffer->shape[0]))))
-      << "S5 versioned UB requires one contiguous 1D/1xL logical row without "
+      << "Pipeline versioned UB requires one contiguous 1D/1xL logical row "
+         "without "
          "views";
   int64_t bytes = buffer->dtype.bytes();
   for (const PrimExpr &extent : buffer->shape)
     bytes *= StaticInteger(extent, "UB extent");
   ICHECK(bytes % 32 == 0)
-      << "S5 physical version stride must be 32-byte aligned";
+      << "Pipeline physical version stride must be 32-byte aligned";
   return bytes;
 }
 
@@ -462,13 +463,14 @@ std::pair<int64_t, int64_t> TaskCost(const Record &task,
   else if (operation == "tl.ascend_add")
     kind = "add";
   else
-    LOG(FATAL) << "Unsupported S5 cost operation: " << operation;
+    LOG(FATAL) << "Unsupported pipeline cost operation: " << operation;
   const auto *pointer = call->args[1].as<CallNode>();
-  ICHECK(pointer && pointer->args.size() == 5) << "Malformed S5 cost pointer";
+  ICHECK(pointer && pointer->args.size() == 5)
+      << "Malformed pipeline cost pointer";
   DataType dtype = pointer->args[0].dtype();
   int64_t count = StaticInteger(call->args[dma ? 5 : 3], "operation count");
   ICHECK(count > 0 && count <= kAscendA2A3UBBudget / dtype.bytes())
-      << "Invalid S5 operation count";
+      << "Invalid pipeline operation count";
   int64_t bytes = count * dtype.bytes();
   int matches = 0;
   int64_t latency = 0, interval = 0;
@@ -487,17 +489,18 @@ std::pair<int64_t, int64_t> TaskCost(const Record &task,
     interval = IntegerField(record, "ii");
     ICHECK(latency > 0 && interval > 0 && latency <= 1000000000 &&
            interval <= 1000000000)
-        << "Invalid S5 calibrated latency/issue interval";
+        << "Invalid pipeline calibrated latency/issue interval";
   }
-  ICHECK_EQ(matches, 1) << "S5 cost profile requires exactly one matching "
-                           "operation/dtype/count/geometry record";
+  ICHECK_EQ(matches, 1)
+      << "Pipeline cost profile requires exactly one matching "
+         "operation/dtype/count/geometry record";
   return {latency, interval};
 }
 
 void VerifyModulo(const Record &problem, const Record &result) {
   const auto *verify = runtime::Registry::Get("tl.ascend.verify_schedule");
-  ICHECK(verify)
-      << "S5 requires the explicitly registered independent schedule verifier";
+  ICHECK(verify) << "Pipeline requires the explicitly registered independent "
+                    "schedule verifier";
   Record checked = (*verify)(problem, result);
   const auto *valid = checked.at("valid").as<IntImmNode>();
   ICHECK(valid && valid->dtype.is_bool() && valid->value)
@@ -507,15 +510,16 @@ void VerifyModulo(const Record &problem, const Record &result) {
 void SolveModuloCandidate(Candidate *candidate, const ConstraintInputs &inputs,
                           const Record &profile) {
   ICHECK_EQ(IntegerField(profile, "schema_version"), 1)
-      << "Unsupported S5 cost schema";
+      << "Unsupported pipeline cost schema";
   ICHECK(Downcast<String>(profile.at("model")) == "a3-effective-op-v1" &&
          Downcast<String>(profile.at("unit")) == "ns" &&
          IntegerField(profile, "quantum_ns") > 0 &&
          Downcast<String>(
              Downcast<Record>(profile.at("identity")).at("platform")) == "A3")
-      << "S5 requires an explicit A3 effective-nanosecond cost profile";
+      << "Pipeline requires an explicit A3 effective-nanosecond cost profile";
   const auto *solve = runtime::Registry::Get("tl.ascend.solve_schedule");
-  ICHECK(solve) << "S5 requires the explicitly registered optional solver";
+  ICHECK(solve)
+      << "Pipeline requires the explicitly registered optional solver";
   const size_t count = candidate->units.size();
   Array<Integer> latencies, intervals, flags, manual;
   std::unordered_map<int, int> local;
@@ -536,7 +540,7 @@ void SolveModuloCandidate(Candidate *candidate, const ConstraintInputs &inputs,
     int64_t stage =
         task.count("manual_stage") ? IntegerField(task, "manual_stage") : 0;
     ICHECK(stage >= 0 && stage <= 64)
-        << "S5 manual stage exceeds the supported staging horizon (64)";
+        << "Pipeline manual stage exceeds the supported staging horizon (64)";
     max_manual = std::max(max_manual, stage);
     has_manual |= task.count("manual_stage") != 0;
     manual.push_back(Integer(stage));
@@ -545,11 +549,11 @@ void SolveModuloCandidate(Candidate *candidate, const ConstraintInputs &inputs,
       StaticInteger(candidate->loop->extent, "candidate trip");
   ICHECK(source_trip <= 4096 / int64_t(count) &&
          source_trip + 2 * max_manual <= 65536 / int64_t(count))
-      << "S5 requested staging window exceeds static expansion limits";
+      << "Pipeline requested staging window exceeds static expansion limits";
   ICHECK(candidate->offset || max_manual == 0)
       << "Nonzero manual Stage requires enable_offset=True";
   ICHECK(upper > 0 && upper <= std::numeric_limits<int32_t>::max())
-      << "S5 cost search bound overflow";
+      << "Pipeline cost search bound overflow";
   Array<Array<Integer>> dependencies, pipe_order, stage_order;
   std::set<std::pair<int, int>> edges;
   for (const ObjectRef &object :
@@ -573,7 +577,7 @@ void SolveModuloCandidate(Candidate *candidate, const ConstraintInputs &inputs,
   for (const Buffer &buffer : candidate->buffers) {
     int64_t bytes = BufferBytes(buffer);
     ICHECK(!buffer_index.count(buffer->data.get()))
-        << "Duplicate S5 allocation ownership";
+        << "Duplicate pipeline allocation ownership";
     buffer_index[buffer->data.get()] = sizes.size();
     sizes.push_back(Integer(bytes));
     own_bytes += bytes;
@@ -608,7 +612,7 @@ void SolveModuloCandidate(Candidate *candidate, const ConstraintInputs &inputs,
   }
   for (size_t b = 0; b < sizes.size(); ++b) {
     ICHECK(!writers[b].empty() && !accesses[b].empty())
-        << "S6 rotating storage must be defined in its owner iteration";
+        << "Rotating storage must be defined in its owner iteration";
     for (int access : accesses[b])
       for (int writer : writers[b])
         dependencies.push_back({Integer(access), Integer(writer),
@@ -643,31 +647,31 @@ void SolveModuloCandidate(Candidate *candidate, const ConstraintInputs &inputs,
     problem.Set("manual_stages", manual);
   Record result = (*solve)(problem);
   ICHECK_EQ(IntegerField(result, "schema_version"), 1)
-      << "Malformed S5 solver schema";
+      << "Malformed pipeline solver schema";
   ICHECK_EQ(Downcast<String>(result.at("status")), "SAT")
-      << "S5 solver did not produce SAT: " << result;
+      << "Pipeline solver did not produce SAT: " << result;
   candidate->starts = Downcast<Array<Integer>>(result.at("start_times"));
   Array<Integer> execution = Downcast<Array<Integer>>(result.at("order"));
   candidate->versions = Downcast<Array<Integer>>(result.at("buffer_versions"));
   ICHECK(candidate->starts.size() == count && execution.size() == count &&
          candidate->versions.size() == sizes.size())
-      << "Malformed S5 solver field size";
+      << "Malformed pipeline solver field size";
   candidate->ii = IntegerField(result, "ii");
-  ICHECK(candidate->ii > 0) << "Invalid S5 II";
+  ICHECK(candidate->ii > 0) << "Invalid pipeline II";
   std::vector<int> ranks(count, -1);
   for (size_t rank = 0; rank < count; ++rank) {
     ICHECK(execution[rank].dtype().is_int() &&
            candidate->starts[rank].dtype().is_int())
-        << "S5 starts/order require signed integer values";
+        << "Pipeline starts/order require signed integer values";
     int64_t id = execution[rank]->value;
     ICHECK(id >= 0 && id < int64_t(count) && ranks[id] < 0)
-        << "S5 order must be a permutation";
+        << "Pipeline order must be a permutation";
     ranks[id] = rank;
   }
   for (size_t i = 0; i < count; ++i) {
     int64_t start = candidate->starts[i]->value;
     ICHECK(start >= 0 && start / candidate->ii <= 64)
-        << "S5 stage exceeds the supported staging horizon (64)";
+        << "Pipeline stage exceeds the supported staging horizon (64)";
     candidate->stages.push_back(Integer(start / candidate->ii));
     candidate->order.push_back(Integer(ranks[i]));
   }
@@ -682,12 +686,12 @@ void SolveModuloCandidate(Candidate *candidate, const ConstraintInputs &inputs,
   for (size_t b = 0; b < candidate->buffers.size(); ++b) {
     const Buffer &buffer = candidate->buffers[b];
     ICHECK(candidate->versions[b].dtype().is_int())
-        << "S5 version count must be an integer";
+        << "Pipeline version count must be an integer";
     int64_t actual = std::max<int64_t>(
         candidate->versions[b]->value,
         ComputeAscendStoragePipelineVersions(buffer->data, info));
     ICHECK(actual >= 1 && actual <= candidate->bound)
-        << "S5 actual injector versions exceed requested bound";
+        << "Pipeline actual injector versions exceed requested bound";
     candidate->versions.Set(b, Integer(actual));
     candidate->version_overrides.Set(buffer->data, Integer(actual));
   }
@@ -705,7 +709,7 @@ void SolveModuloCandidate(Candidate *candidate, const ConstraintInputs &inputs,
   ICHECK(trip <= 4096 / int64_t(count) && max_stage <= 65535 - trip &&
          trip + 2 * int64_t(max_stage) <= 65536 / int64_t(count) &&
          minimum >= lower + max_stage && minimum <= limit - trip - max_stage)
-      << "S5 expanded pipeline exceeds hardware/control or loop-update limits";
+      << "Expanded pipeline exceeds hardware/control or loop-update limits";
 }
 
 void SolveCandidate(Candidate *candidate, const ConstraintInputs &inputs) {
@@ -767,7 +771,8 @@ void SolveCandidate(Candidate *candidate, const ConstraintInputs &inputs) {
     ICHECK_LT(ranks[edge.first], ranks[edge.second])
         << "Constraint solver order reverses an original logical dependency";
   // Only order is consumed by the single-stage bridge. Numeric start times
-  // remain the S2 callback's independently verified abstract scheduling model.
+  // remain the numeric callback's independently verified abstract scheduling
+  // model.
   for (int rank : ranks) {
     candidate->order.push_back(Integer(rank));
     candidate->stages.push_back(Integer(0));
@@ -797,8 +802,8 @@ private:
       annotations.erase(kAscendPersistentGuard);
       annotations.Set(tir::attr::software_pipeline_stage, candidate.stages);
       if (candidate.modulo) {
-        annotations.Set(kAscendS5LoopId, IntImm(DataType::Int(64), id));
-        annotations.Set(kAscendS5Versions, candidate.version_overrides);
+        annotations.Set(kAscendPipelineLoopId, IntImm(DataType::Int(64), id));
+        annotations.Set(kAscendPipelineVersions, candidate.version_overrides);
       }
       annotations.Set(tir::attr::software_pipeline_order, candidate.order);
       result.CopyOnWrite()->annotations = annotations;
@@ -836,13 +841,13 @@ PrimFunc PlanAscendConstraintPipeline(PrimFunc function,
            ->value)
       << "Constraint planner requires auto_sync=true, memory_planning=true, "
          "auto_cross_core_sync=false and auto_sync_vs=false";
-  ICHECK(!function->GetAttr<ObjectRef>(kAscendS4Manifest).defined())
+  ICHECK(!function->GetAttr<ObjectRef>(kAscendConstraintPlan).defined())
       << "Constraint pipeline is already planned";
   ValidateConstraintUBDeclarations(function);
   function = CanonicalizeAscendStorageAliases(function);
   ConstraintInputs inputs(function);
   if (auto facts = function->GetAttr<Array<ObjectRef>>(
-          "tl.ascend_s5_degenerate_candidates")) {
+          kAscendPipelineDegenerateCandidates)) {
     for (const ObjectRef &item : facts.value()) {
       Record fact = Downcast<Record>(item);
       Var variable = Downcast<Var>(fact.at("var"));
@@ -867,14 +872,14 @@ PrimFunc PlanAscendConstraintPipeline(PrimFunc function,
     candidate.modulo |= profile.defined();
     if (candidate.modulo) {
       ICHECK(profile.defined())
-          << "S5 multi-stage/offset/manual Stage requires an explicit "
+          << "Pipeline multi-stage/offset/manual Stage requires an explicit "
              "calibrated cost profile";
       SolveModuloCandidate(&candidate, inputs, profile.value());
       for (size_t b = 0; b < candidate.buffers.size(); ++b) {
         int64_t bytes = BufferBytes(candidate.buffers[b]);
         int64_t extra = candidate.versions[b]->value - 1;
         ICHECK(extra <= (kAscendA2A3UBBudget - reserved) / bytes)
-            << "S5 actual versions exceed whole-kernel UB budget";
+            << "Pipeline actual versions exceed whole-kernel UB budget";
         reserved += extra * bytes;
         Var data = candidate.buffers[b]->data;
         for (const ObjectRef &item : inputs.storages) {
@@ -919,8 +924,8 @@ PrimFunc PlanAscendConstraintPipeline(PrimFunc function,
     manifest.Set("cost_model", profile.value());
   PrimFunc planned = source;
   planned.CopyOnWrite()->body = AnnotationEmitter(inputs)(source->body);
-  planned = WithAttr(planned, kAscendS5BufferRemap, Array<ObjectRef>());
-  return WithAttr(planned, kAscendS4Manifest, manifest);
+  planned = WithAttr(planned, kAscendPipelineBufferRemap, Array<ObjectRef>());
+  return WithAttr(planned, kAscendConstraintPlan, manifest);
 }
 
 // Keep an early record of degenerate requests. Current lowering preserves these
@@ -951,10 +956,9 @@ tir::transform::Pass AscendPrepareConstraintPipeline(Target target) {
     for (const Var &parameter : function->params)
       if (function->buffer_map.count(parameter))
         parameters.push_back(function->buffer_map[parameter]->data);
-    function = WithAttr(function, kAscendS6OriginalParameters, parameters);
+    function = WithAttr(function, kAscendStorageOriginalParameters, parameters);
     if (!facts.empty())
-      function =
-          WithAttr(function, "tl.ascend_s5_degenerate_candidates", facts);
+      function = WithAttr(function, kAscendPipelineDegenerateCandidates, facts);
     return function;
   };
   return tir::transform::CreatePrimFuncPass(

@@ -128,7 +128,7 @@ private:
   Optional<Buffer> RemappedView(const Buffer &view) const {
     if (auto direct = buffer_remap_.Get(view))
       return direct;
-    if (!pipeline_loop_->annotations.count(kAscendS5LoopId) ||
+    if (!pipeline_loop_->annotations.count(kAscendPipelineLoopId) ||
         !buffer_data_to_buffer_.count(view->data))
       return NullOpt;
     Buffer root = buffer_data_to_buffer_.at(view->data);
@@ -208,7 +208,7 @@ private:
         } else {
           offset = new_buffer->strides[0];
         }
-        if (pipeline_loop_->annotations.count(kAscendS5LoopId)) {
+        if (pipeline_loop_->annotations.count(kAscendPipelineLoopId)) {
           int64_t root_bytes = buffer->dtype.bytes();
           int64_t consumer_bytes = call->args[0].dtype().bytes();
           PrimExpr stride_bytes = offset * Integer(root_bytes);
@@ -307,7 +307,7 @@ public:
         predicate_condition_(predicate_condition) {}
 
   std::pair<Stmt, Map<Var, PrimExpr>> BuildPipeline() {
-    auto requested = pipeline_loop_->annotations.Get(kAscendS5Versions);
+    auto requested = pipeline_loop_->annotations.Get(kAscendPipelineVersions);
     Map<Var, Integer> overrides;
     if (requested.defined())
       overrides = Downcast<Map<Var, Integer>>(requested.value());
@@ -316,10 +316,11 @@ public:
     std::unordered_map<Buffer, BufferAccessInfo, ObjectPtrHash, ObjectPtrEqual>
         infos = GetBufferAccessInfo();
     for (const Buffer &buffer : pipeline_allocs_) {
-      int num_versions = pipeline_loop_->annotations.count(kAscendS5LoopId)
-                             ? ComputeAscendStoragePipelineVersions(
-                                   buffer->data, pipeline_info_)
-                             : ComputeBufferVersions(buffer, infos.at(buffer));
+      int num_versions =
+          pipeline_loop_->annotations.count(kAscendPipelineLoopId)
+              ? ComputeAscendStoragePipelineVersions(buffer->data,
+                                                     pipeline_info_)
+              : ComputeBufferVersions(buffer, infos.at(buffer));
       if (overrides.count(buffer->data)) {
         int64_t actual = overrides.at(buffer->data)->value;
         ICHECK(actual >= std::max(1, num_versions) && actual <= 3)
@@ -775,7 +776,7 @@ public:
     if (!injector.version_remaps_.empty()) {
       PrimFuncNode *fptr = func.CopyOnWrite();
       auto fn_attr = fptr->attrs.CopyOnWrite();
-      fn_attr->dict.Set(kAscendS5BufferRemap, injector.version_remaps_);
+      fn_attr->dict.Set(kAscendPipelineBufferRemap, injector.version_remaps_);
     }
     return result;
   }
@@ -876,11 +877,13 @@ private:
     auto f_add_child = [&](const Stmt &child) {
       original_order.push_back(MakeBlock(child, buffer_data_to_buffer_));
     };
-    auto groups = CollectAscendPipelineGroups(GetRef<SeqStmt>(pipeline_body_seq));
+    auto groups =
+        CollectAscendPipelineGroups(GetRef<SeqStmt>(pipeline_body_seq));
     for (const auto &element : groups) {
       if (element.allocation.defined()) {
         pipeline_allocs.push_back(element.allocation);
-        buffer_data_to_buffer_.Set(element.allocation->data, element.allocation);
+        buffer_data_to_buffer_.Set(element.allocation->data,
+                                   element.allocation);
       } else {
         f_add_child(element.statement);
       }
@@ -932,7 +935,7 @@ private:
     for (const auto &[buffer, version] : buffer_versions) {
       collected_buffer_versions_.Set(buffer, version);
     }
-    if (auto identity = op->annotations.Get(kAscendS5LoopId)) {
+    if (auto identity = op->annotations.Get(kAscendPipelineLoopId)) {
       for (const Buffer &logical : pipeline_allocs) {
         int64_t versions =
             Downcast<Integer>(buffer_versions.at(logical->data))->value;
@@ -1022,7 +1025,7 @@ tir::transform::Pass InjectSoftwarePipeline() {
     ICHECK(
         ctx->GetConfig<String>("tl.ascend_pipeline_planner", String("legacy"))
                 .value() != "auto" &&
-        !f->GetAttr<ObjectRef>("tl.ascend_s8_schedule").defined())
+        !f->GetAttr<ObjectRef>("tl.ascend_auto_schedule").defined())
         << "Auto schedule owns version materialization; old injector cannot "
            "run";
     auto *fptr = f.CopyOnWrite();

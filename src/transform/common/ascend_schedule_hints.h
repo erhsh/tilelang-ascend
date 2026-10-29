@@ -19,7 +19,7 @@ void ValidateAscendScheduleHintStructure(const tir::PrimFunc &function);
 void ValidateAscendTaskHintPayload(const tir::AttrStmtNode *hint);
 void ValidateAscendStageHintPayload(const tir::AttrStmtNode *hint);
 
-// The same S2 effect validator serves explicit analysis and S3 single-call
+// The same effect validator serves explicit analysis and single-call
 // hint consumption. A probe retains declaration and lexical scope context.
 Map<String, ObjectRef> AnalyzeAscendSchedule(tir::PrimFunc function,
                                              String platform);

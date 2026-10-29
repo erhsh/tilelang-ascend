@@ -404,7 +404,8 @@ public:
         return;
       IterVar axis = Downcast<IterVar>(attr->node);
       int64_t n = Number(attr->value);
-      ICHECK(n > 0 && n <= kAscendS8TaskLimit) << "Invalid auto launch domain";
+      ICHECK(n > 0 && n <= kAscendAutoScheduleTaskLimit)
+          << "Invalid auto launch domain";
       if (axis->thread_tag == "blockIdx.x") {
         groups = n;
         ++group_axes;
@@ -507,7 +508,7 @@ private:
     Event("TASK", active_);
   }
   void Walk(const Stmt &stmt) {
-    ICHECK_LT(visits_++, size_t(kAscendS8ControlLimit))
+    ICHECK_LT(visits_++, size_t(kAscendAutoScheduleControlExpansionLimit))
         << "Auto final control budget exceeded";
     if (const auto *seq = stmt.as<SeqStmtNode>()) {
       for (const Stmt &s : seq->seq)
@@ -540,7 +541,7 @@ private:
         scope_ = saved;
         return;
       }
-      if (attr->attr_key == kAscendS8Task) {
+      if (attr->attr_key == kAscendAutoScheduleTaskId) {
         ICHECK(active_ < 0 && attr->node.as<IntImmNode>() &&
                Downcast<IntImm>(attr->node)->dtype == DataType::Int(64) &&
                attr->value.dtype() == DataType::Int(32) &&
@@ -669,12 +670,12 @@ AutoRecord InspectAscendAutoFinal(tir::PrimFunc function) {
 }
 
 AutoRecord VerifyAscendAutoMapping(tir::PrimFunc function) {
-  auto attr = function->GetAttr<Record>(kAscendS8Schedule);
+  auto attr = function->GetAttr<Record>(kAscendAutoSchedule);
   ICHECK(attr.defined()) << "Missing auto schedule source contract";
   Record schedule = attr.value();
   ICHECK_EQ(Field(schedule, "schema_version"), 1);
   PrimFunc original = Downcast<PrimFunc>(schedule.at("source_function"));
-  ICHECK(!original->GetAttr<ObjectRef>(kAscendS8Schedule).defined())
+  ICHECK(!original->GetAttr<ObjectRef>(kAscendAutoSchedule).defined())
       << "Recursive auto source contract";
   ICHECK_EQ(original->params.size(), function->params.size())
       << "Auto public parameter ABI changed";
@@ -749,7 +750,8 @@ AutoRecord VerifyAscendAutoMapping(tir::PrimFunc function) {
              Field(allocations.at(data), "capacity_bytes") ==
                  Field(storage, "capacity_bytes"))
           << "Auto caller GM storage capacity/ABI changed";
-  auto remap_attr = function->GetAttr<Array<Record>>(kAscendS8BufferRemap);
+  auto remap_attr =
+      function->GetAttr<Array<Record>>(kAscendAutoScheduleBufferRemap);
   ICHECK(remap_attr.defined()) << "Missing actual auto buffer remap";
   std::set<const VarNode *> physical_owners;
   std::set<const VarNode *> pinned;
@@ -1037,7 +1039,7 @@ void VerifyAscendAutoSyncProtocol(tir::PrimFunc function) {
   Record source = Downcast<Record>(proof.at("source")),
          contract = Downcast<Record>(proof.at("contract")),
          actual = Downcast<Record>(proof.at("actual"));
-  auto sync_attr = function->GetAttr<Record>(kAscendS8Sync);
+  auto sync_attr = function->GetAttr<Record>(kAscendAutoScheduleSyncPlan);
   ICHECK(sync_attr.defined()) << "Missing new scheduled synchronization owner";
   Record metadata = sync_attr.value();
   ICHECK(
@@ -1047,7 +1049,7 @@ void VerifyAscendAutoSyncProtocol(tir::PrimFunc function) {
       Downcast<String>(metadata.at("cross_policy")) ==
           "mode2_fixed_n1_ready_release")
       << "Stale scheduled synchronization metadata";
-  Record schedule = function->GetAttr<Record>(kAscendS8Schedule).value();
+  Record schedule = function->GetAttr<Record>(kAscendAutoSchedule).value();
   if (!Records(source, "tasks").empty()) {
     const auto *numeric =
         tvm::runtime::Registry::Get("tl.ascend.verify_schedule");

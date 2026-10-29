@@ -8,7 +8,7 @@
 namespace tvm {
 namespace tl {
 constexpr const char *kAscendSyncStrategy = "tl.ascend_sync_strategy";
-constexpr const char *kAscendS7LocalSync = "tl.ascend_s7_local_sync";
+constexpr const char *kAscendLocalSyncPlan = "tl.ascend_local_sync_plan";
 // CANN9.1 kernel_macros.h: __NPU_ARCH__=2201 has QUE_MAX_EVENT=8;
 // kernel_tquesync_impl.h checks SetFlag/WaitFlag IDs against that limit.
 constexpr int kAscendA3LocalEventCount = 8;

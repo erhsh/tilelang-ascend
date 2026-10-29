@@ -1043,7 +1043,7 @@ public:
     ICHECK(
         ctx->GetConfig<String>("tl.ascend_pipeline_planner", String("legacy"))
                 .value() != "auto" &&
-        !f->GetAttr<ObjectRef>("tl.ascend_s8_schedule").defined())
+        !f->GetAttr<ObjectRef>("tl.ascend_auto_schedule").defined())
         << "The auto scheduler owns C/V dispatch; legacy CombineCV cannot run";
     PrimFuncNode *fptr = f.CopyOnWrite();
     fptr->body = ContextualResourceResolver()(fptr->body);
@@ -1054,7 +1054,8 @@ public:
         ctx->GetConfig<Bool>(ascendAutoCrossCoreSync, Bool(false)).value();
     // The fixed A3 handoff route owns both ready and release. Its prepared
     // source is required; never layer the old name-based cross notifications.
-    if (ctx->GetConfig<String>("tl.ascend_sync_strategy", String("legacy")).value() == "a3" &&
+    if (ctx->GetConfig<String>("tl.ascend_sync_strategy", String("legacy"))
+                .value() == "a3" &&
         HasAscendSyncHandoff(f))
       substituter.is_auto_cross_core_sync_ = false;
 

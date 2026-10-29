@@ -64,18 +64,17 @@ public:
 private:
   void VisitStmt_(const AttrStmtNode *op) final {
     if (op->attr_key == kAscendPerCoreTaskHint) {
-      LOG(FATAL) << "PerCoreTask is unsupported in S3";
+      LOG(FATAL) << "PerCoreTask is unsupported";
     }
     if (op->attr_key == kAscendTaskHint) {
       ValidateAscendTaskHintPayload(op);
       ICHECK(!task_depth_ && !parallel_depth_)
-          << "Nested/Parallel T.Task is unsupported in S3";
+          << "Nested/Parallel T.Task is unsupported";
       ++task_depth_;
       int previous = task_calls_;
       task_calls_ = 0;
       VisitStmt(op->body);
-      ICHECK_EQ(task_calls_, 1)
-          << "T.Task requires exactly one hardware call in S3";
+      ICHECK_EQ(task_calls_, 1) << "T.Task requires exactly one hardware call";
       task_calls_ = previous;
       --task_depth_;
       ++stage_tasks_;
@@ -109,7 +108,7 @@ private:
 
   void VisitStmt_(const ForNode *op) final {
     ICHECK(!task_depth_ && !stage_depth_)
-        << "Loops inside Task/Stage are unsupported in S3";
+        << "Loops inside Task/Stage are unsupported";
     bool previous = pipeline_conflict_;
     bool previous_offset = offset_context_;
     bool previous_manual = manual_conflict_;
@@ -149,22 +148,22 @@ private:
 
   void VisitStmt_(const IfThenElseNode *op) final {
     ICHECK(!task_depth_ && !stage_depth_)
-        << "Conditions inside Task/Stage are unsupported in S3";
+        << "Conditions inside Task/Stage are unsupported";
     StmtExprVisitor::VisitStmt_(op);
   }
   void VisitStmt_(const WhileNode *op) final {
     ICHECK(!task_depth_ && !stage_depth_)
-        << "Loops inside Task/Stage are unsupported in S3";
+        << "Loops inside Task/Stage are unsupported";
     StmtExprVisitor::VisitStmt_(op);
   }
   void VisitStmt_(const LetStmtNode *op) final {
     ICHECK(!task_depth_ && !stage_depth_)
-        << "Scalar bindings inside Task/Stage are unsupported in S3";
+        << "Scalar bindings inside Task/Stage are unsupported";
     StmtExprVisitor::VisitStmt_(op);
   }
   void VisitStmt_(const BufferStoreNode *op) final {
     ICHECK(!task_depth_ && !stage_depth_)
-        << "Scalar stores inside Task/Stage are unsupported in S3";
+        << "Scalar stores inside Task/Stage are unsupported";
     StmtExprVisitor::VisitStmt_(op);
   }
   void VisitStmt_(const EvaluateNode *op) final {
@@ -222,10 +221,10 @@ private:
       auto graph = AnalyzeAscendSchedule(function, platform_);
       auto tasks = Downcast<Array<ObjectRef>>(graph["tasks"]);
       ICHECK_EQ(tasks.size(), 1U)
-          << "T.Task requires exactly one audited hardware call in S3";
+          << "T.Task requires exactly one audited hardware call";
       if (constraint_ && stage_.defined()) {
         Map<String, ObjectRef> metadata{{"stage", stage_.value()}};
-        return AttrStmt(metadata, kAscendS5TaskHint,
+        return AttrStmt(metadata, kAscendPipelineTaskHint,
                         IntImm(DataType::Int(32), 1), op->body);
       }
       return op->body;
@@ -299,8 +298,7 @@ void ValidateAscendTaskHintPayload(const tir::AttrStmtNode *hint) {
   ICHECK(hint->node.as<runtime::MapNode>())
       << "Malformed T.Task metadata; expected an empty map";
   auto metadata = Downcast<Map<String, ObjectRef>>(hint->node);
-  ICHECK(metadata.empty())
-      << "T.Task metadata/cost overrides are unsupported in S3";
+  ICHECK(metadata.empty()) << "T.Task metadata/cost overrides are unsupported";
 }
 
 void ValidateAscendStageHintPayload(const tir::AttrStmtNode *hint) {
@@ -351,7 +349,7 @@ tvm::transform::Pass AscendLowerScheduleHints(Target target, String platform) {
     }
     String model = target->GetAttr<String>("model", String("")).value();
     ICHECK(platform == "A3" && (model == "ascendc" || model == "auto"))
-        << "Task/Stage hints are supported only for A3 AscendC/auto in S3";
+        << "Task/Stage hints are supported only for A3 AscendC/auto";
     if (has_hints) {
       ValidateAscendScheduleHintStructure(function);
       bool constraint =

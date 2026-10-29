@@ -31,9 +31,9 @@ AUTO_GM_IDX_PATH = "auto_gm_idx.pkl"
 
 # Validation semantics are part of the compiled artifact contract. Git/version
 # alone does not separate dirty-tree upgrades from older constraint artifacts.
-_ASCEND_CONSTRAINT_COMPILER_ABI = 3
-_ASCEND_SYNC_COMPILER_ABI = 1
-_ASCEND_AUTO_COMPILER_ABI = 1
+_ASCEND_CONSTRAINT_COMPILER_ABI = 4
+_ASCEND_SYNC_COMPILER_ABI = 2
+_ASCEND_AUTO_COMPILER_ABI = 2
 
 
 class KernelCache:
@@ -125,9 +125,7 @@ class KernelCache:
         # JITKernel creates a fresh PassContext from pass_configs; an ambient
         # context is not inherited. Keep legacy's key bytes unchanged and do
         # not let caller-supplied configuration override this internal marker.
-        if pass_configs and str(
-            pass_configs.get("tl.ascend_pipeline_planner", "legacy")
-        ) == "constraint":
+        if pass_configs and str(pass_configs.get("tl.ascend_pipeline_planner", "legacy")) == "constraint":
             key_data["ascend_constraint_compiler_abi"] = _ASCEND_CONSTRAINT_COMPILER_ABI
         if pass_configs and str(pass_configs.get("tl.ascend_pipeline_planner", "legacy")) == "auto":
             key_data["ascend_auto_compiler_abi"] = _ASCEND_AUTO_COMPILER_ABI

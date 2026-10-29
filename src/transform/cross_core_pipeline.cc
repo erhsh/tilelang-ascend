@@ -1661,7 +1661,7 @@ tvm::transform::Pass CrossCorePipeline() {
     ICHECK(
         ctx->GetConfig<String>("tl.ascend_pipeline_planner", String("legacy"))
                 .value() != "auto" &&
-        !f->GetAttr<ObjectRef>("tl.ascend_s8_schedule").defined())
+        !f->GetAttr<ObjectRef>("tl.ascend_auto_schedule").defined())
         << "Auto schedule owns core partitioning; old CrossCorePipeline cannot "
            "run";
     auto new_func = CrossCorePipeline::Substitute(std::move(f), ctx);

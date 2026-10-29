@@ -219,7 +219,8 @@ private:
       return;
     }
     ICHECK(node->attr_key == "thread_extent" ||
-           node->attr_key == kAscendS4Task || node->attr_key == kAscendS4Iter)
+           node->attr_key == kAscendConstraintTaskId ||
+           node->attr_key == kAscendConstraintIteration)
         << "Unsupported attribute in A3 local synchronization: "
         << node->attr_key;
     StmtExprVisitor::VisitStmt_(node);
@@ -441,14 +442,15 @@ PrimFunc GenerateLocalSync(PrimFunc function, Target target, String platform,
            ->value)
       << "A3 local sync requires auto_sync/memory planning and a proven "
          "VS-free, non-cross-core owner";
-  ICHECK(!function->GetAttr<ObjectRef>(kAscendS7LocalSync).defined())
+  ICHECK(!function->GetAttr<ObjectRef>(kAscendLocalSyncPlan).defined())
       << "A3 local synchronization is already generated";
   LocalScopeCheck check;
   check(function->body);
-  auto stored = function->GetAttr<Record>(kAscendS4Manifest);
+  auto stored = function->GetAttr<Record>(kAscendConstraintPlan);
   ICHECK(stored.defined() && IntegerValue(stored.value().at("schema_version"),
                                           "manifest schema") == 3)
-      << "A3 local synchronization requires the S6 schema3 source contract";
+      << "A3 local synchronization requires the lifecycle schema 3 source "
+         "contract";
   PrimFunc original = Downcast<PrimFunc>(stored.value().at("source_function"));
   Record lifetime = RebuildAscendLifetimeContract(original);
   Record source_graph = Downcast<Record>(lifetime.at("source_graph"));
@@ -569,7 +571,7 @@ PrimFunc GenerateLocalSync(PrimFunc function, Target target, String platform,
               {"lifetime_model", String("wait_all_fence_before_reuse")}};
   PrimFunc result = function;
   result.CopyOnWrite()->body = LocalEmitter(sites, budget)(function->body);
-  return WithAttr(result, kAscendS7LocalSync, plan);
+  return WithAttr(result, kAscendLocalSyncPlan, plan);
 }
 } // namespace
 

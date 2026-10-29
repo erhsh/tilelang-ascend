@@ -837,8 +837,8 @@ version 轴，不把任务移动到其他迭代；硬件既有的异步完成关
 
 ### 14.3 跨改写的任务身份
 
-内部 `tl.ascend_s4_task` Attr 的 node 为 int64 unit ID，value 为 int32 1；
-`tl.ascend_s4_iter` 的 node 为 int64 loop ID，初始 value 为 int64 迭代表达式；
+内部 `tl.ascend_constraint_task_id` Attr 的 node 为 int64 unit ID，value 为 int32 1；
+`tl.ascend_constraint_iteration` 的 node 为 int64 loop ID，初始 value 为 int64 迭代表达式；
 允许后续合法整数缩位，最终以静态数值匹配原迭代身份。
 迭代表达式必须放在 value，当前 TVM Substitute 不改写普通 Attr 的 node。
 因此 injector、unroll 和索引重写后仍能识别实际任务实例。
@@ -847,7 +847,7 @@ version 轴，不把任务移动到其他迭代；硬件既有的异步完成关
 标量/字符串参数，包括 count 与 fill 值；允许合法整数缩位。首片拒绝跨 dataVar 的
 逻辑 effect remap，不从相同字节 footprint 推导 payload 相同。
 
-函数级 `tl.ascend_s4_manifest` 保存 schema、原始 S2 source_graph、含相同内部标记
+函数级 `tl.ascend_constraint_plan` 保存 schema、原始 source_graph、含相同内部标记
 但不含 manifest 的 source_function 快照和候选的 unit/source_path 映射。快照不
 构成循环引用。这些是编译器内部合同，不是新公开调度注解。
 
@@ -1247,9 +1247,9 @@ Phase2 allocation placement
   → ResourceScopeVerify → InstructionSelection → MaskLegalize → codegen
 ```
 
-新状态统一使用`tl.ascend_s8_`前缀，主合同`tl.ascend_s8_schedule`含原函数、
+新状态统一使用`tl.ascend_auto_schedule`前缀，主合同`tl.ascend_auto_schedule`含原函数、
 storage catalog、逐read源producer、控制域、数字问题/结果和发射实例身份。
-`tl.ascend_s8_buffer_remap`记录实际dataVar、版本数、byte pitch及总容量。
+`tl.ascend_auto_schedule_buffer_remap`记录实际dataVar、版本数、byte pitch及总容量。
 不得发出旧`software_pipeline_*` ABI或让旧injector再次处理同一buffer。
 Python/native均保留新前缀；auto产物增加独立compiler cache ABI，旧键格式不变。
 

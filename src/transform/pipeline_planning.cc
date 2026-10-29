@@ -642,7 +642,7 @@ private:
 tvm::transform::Pass PipelinePlanning() {
   using namespace tir::transform;
   auto pass_func = [=](PrimFunc f, IRModule m, PassContext ctx) {
-    ICHECK(!f->GetAttr<ObjectRef>("tl.ascend_s8_schedule").defined())
+    ICHECK(!f->GetAttr<ObjectRef>("tl.ascend_auto_schedule").defined())
         << "Auto schedule already owns this kernel; old planning cannot run";
     String strategy =
         ctx->GetConfig<String>(kAscendPipelinePlanner, String("legacy"))

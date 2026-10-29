@@ -85,8 +85,8 @@ S3 循环接口、S4 planner 接管及后续同步生成仍不在本步实施。
   `schedulable=false` 或 `exact=false` 直接当成不安全，也不把循环变量替成 0。
   使用 straight solver 与单位排序成本；native 独立复核 SAT、排列和候选单迭代依赖。
   输出 stage 全 0，order 为 solver 执行次序的逆排列；只经过原 injector 一次。
-- `tl.ascend_s4_task` Attr 携带稳定调用 ID，`tl.ascend_s4_iter` 的 value 携带迭代
-  表达式，使 Substitute/unroll 能同步改写。`tl.ascend_s4_manifest` 保存原始 effects、
+- `tl.ascend_constraint_task_id` Attr 携带稳定调用 ID，`tl.ascend_constraint_iteration` 的 value 携带迭代
+  表达式，使 Substitute/unroll 能同步改写。`tl.ascend_constraint_plan` 保存原始 effects、
   storage 与 logical 依赖身份；覆盖候选外的受支持调用和尾部。内部标记不作为新 API。
 - 新 `AscendVerifyConstraintSync(target, platform)` 只在 constraint 下接入，位于
   最后 Simplify 之后、ResourceScopeVerify 之前。它不生成或删除硬件同步，读取最终
@@ -192,7 +192,7 @@ S3 循环接口、S4 planner 接管及后续同步生成仍不在本步实施。
   actual版本占用进入别名与reuse验证，不用名称证明storage独立。
 - kernel_cache.py的实际_generate_key仅对constraint加入内部schema3 ABI盐，不能由
   用户覆盖；覆盖effective策略与memory/disk路由，legacy key同输入字节保持不变。
-  S6私有function事实的tl.ascend_s6_前缀在Python/native loop builder均保留。
+  存储分析私有function事实的tl.ascend_storage_前缀在Python/native loop builder均保留。
 - 实现与独立测试分工，先最小source初始化正负冒烟，再扩至alias/guard/activation。
   构建由唯一owner负责，链接期间不加载workspace库。新manifest冻结后运行owner、
   lifecycle两个native入口及reuse A3入口，记录逐轮随机scratch/golden和真实IR证据；
@@ -257,8 +257,8 @@ S3 循环接口、S4 planner 接管及后续同步生成仍不在本步实施。
 - `AscendVerifyAutoSchedule`在最后Simplify后、ResourceScopeVerify前独立重建source
   producer、实际实例/版本/Allocate/地址及协议，不能信plan中的PASS字段。
 - 末端MaskLegalize增加auto专属归约验真，旧constraint schema和白名单不变。
-- 主合同`tl.ascend_s8_schedule`与remap `tl.ascend_s8_buffer_remap`记录真实所有权；
-  Python/native预留S8前缀，auto增加compiler cache ABI，旧路径不加新盐。
+- 主合同`tl.ascend_auto_schedule`与remap `tl.ascend_auto_schedule_buffer_remap`记录真实所有权；
+  Python/native预留内部调度元数据命名空间，auto使用独立compiler cache ABI，旧路径不加新盐。
 
 实现文件职责：
 

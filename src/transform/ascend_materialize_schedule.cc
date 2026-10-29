@@ -68,8 +68,8 @@ private:
 };
 PrimFunc Materialize(PrimFunc function, Target target, String platform) {
   CheckAscendAutoScheduleContext(target, platform);
-  auto attr = function->GetAttr<R>(kAscendS8Schedule);
-  ICHECK(attr.defined()) << "Missing new auto schedule";
+  auto attr = function->GetAttr<R>(kAscendAutoSchedule);
+  ICHECK(attr.defined()) << "Missing auto schedule";
   R schedule = attr.value();
   ICHECK(N(schedule.at("schema_version")) == 1 &&
          !N(schedule.at("materialized")))
@@ -93,7 +93,8 @@ PrimFunc Materialize(PrimFunc function, Target target, String platform) {
     ICHECK(N(checked.at("valid")))
         << "Cannot materialize an invalid auto numeric plan";
   }
-  auto remaps = function->GetAttr<Array<ObjectRef>>(kAscendS8BufferRemap);
+  auto remaps =
+      function->GetAttr<Array<ObjectRef>>(kAscendAutoScheduleBufferRemap);
   ICHECK(remaps.defined());
   std::map<const VarNode *, R> owners;
   std::map<const VarNode *, Buffer> declarations;
@@ -120,11 +121,12 @@ PrimFunc Materialize(PrimFunc function, Target target, String platform) {
            versions * pitch <= AscendAutoMemoryBudget(buffer.scope()));
     int64_t physical_elements = versions * pitch / buffer->dtype.bytes();
     ICHECK(physical_elements * buffer->dtype.bytes() == versions * pitch);
-    Var physical(logical->name_hint + "_s8", logical->type_annotation);
+    Var physical(logical->name_hint + "_auto_schedule",
+                 logical->type_annotation);
     Buffer revised = buffer;
     auto *node = revised.CopyOnWrite();
     node->data = physical;
-    node->name = buffer->name + "_s8";
+    node->name = buffer->name + "_auto_schedule";
     if (buffer.scope() == "shared.l1" && buffer->shape.size() == 1) {
       ICHECK(buffer->strides.empty() &&
              EvaluateAscendLifetimeInteger(buffer->shape[0], {}) *
@@ -179,7 +181,7 @@ PrimFunc Materialize(PrimFunc function, Target target, String platform) {
         Stmt call = AccessRewriter(owners, order->value)(
             Downcast<Stmt>(task.at("statement")));
         body.push_back(AttrStmt(IntImm(DataType::Int(64), order->value),
-                                kAscendS8Task, Integer(1), call));
+                                kAscendAutoScheduleTaskId, Integer(1), call));
       }
       if (body.empty())
         continue;
@@ -194,7 +196,8 @@ PrimFunc Materialize(PrimFunc function, Target target, String platform) {
     }
   Stmt body = Seq(sides);
   if (!allocations.empty()) {
-    Block root({}, {}, {}, "ascend_s8_root", body, NullOpt, allocations, {});
+    Block root({}, {}, {}, "ascend_auto_schedule_root", body, NullOpt,
+               allocations, {});
     body = BlockRealize({}, Bool(true), root);
   }
   // Post-order collected inner axes first, so wrapping in that same order
@@ -213,8 +216,8 @@ PrimFunc Materialize(PrimFunc function, Target target, String platform) {
     function = WithAttr(function, key, merged);
   }
   schedule.Set("materialized", Bool(true));
-  function = WithAttr(function, kAscendS8BufferRemap, actual_remaps);
-  function = WithAttr(function, kAscendS8Schedule, schedule);
+  function = WithAttr(function, kAscendAutoScheduleBufferRemap, actual_remaps);
+  function = WithAttr(function, kAscendAutoSchedule, schedule);
   return function;
 }
 } // namespace

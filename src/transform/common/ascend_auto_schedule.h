@@ -9,13 +9,17 @@ namespace tvm {
 namespace tl {
 using AutoRecord = Map<String, ObjectRef>;
 
-constexpr const char *kAscendS8Schedule = "tl.ascend_s8_schedule";
-constexpr const char *kAscendS8Task = "tl.ascend_s8_task";
-constexpr const char *kAscendS8BufferRemap = "tl.ascend_s8_buffer_remap";
-constexpr const char *kAscendS8Prepared = "tl.ascend_s8_prepared";
-constexpr const char *kAscendS8Sync = "tl.ascend_s8_sync";
-constexpr int64_t kAscendS8TaskLimit = 256;
-constexpr int64_t kAscendS8ControlLimit = 65536;
+constexpr const char *kAscendAutoSchedule = "tl.ascend_auto_schedule";
+constexpr const char *kAscendAutoScheduleTaskId =
+    "tl.ascend_auto_schedule_task_id";
+constexpr const char *kAscendAutoScheduleBufferRemap =
+    "tl.ascend_auto_schedule_buffer_remap";
+constexpr const char *kAscendAutoSchedulePrepared =
+    "tl.ascend_auto_schedule_prepared";
+constexpr const char *kAscendAutoScheduleSyncPlan =
+    "tl.ascend_auto_schedule_sync_plan";
+constexpr int64_t kAscendAutoScheduleTaskLimit = 256;
+constexpr int64_t kAscendAutoScheduleControlExpansionLimit = 65536;
 
 // Read-only finite source analysis. Each task has id/group/actor (0=C, 1/2=V),
 // epoch/loop_coords/key, statement/call, operation and

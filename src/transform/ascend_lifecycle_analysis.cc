@@ -164,7 +164,7 @@ public:
 
 private:
   Stmt VisitStmt_(const AttrStmtNode *op) final {
-    if (op->attr_key == kAscendS5TaskHint)
+    if (op->attr_key == kAscendPipelineTaskHint)
       return VisitStmt(op->body);
     return StmtExprMutator::VisitStmt_(op);
   }
@@ -181,9 +181,9 @@ private:
       return GetRef<Stmt>(op);
     Stmt body = GetRef<Stmt>(op);
     for (auto loop = loops_.rbegin(); loop != loops_.rend(); ++loop)
-      body = AttrStmt(Number(loop->first), kAscendS4Iter,
+      body = AttrStmt(Number(loop->first), kAscendConstraintIteration,
                       cast(DataType::Int(64), loop->second), body);
-    return AttrStmt(Number(found->second), kAscendS4Task,
+    return AttrStmt(Number(found->second), kAscendConstraintTaskId,
                     IntImm(DataType::Int(32), 1), body);
   }
   std::unordered_map<const Object *, int64_t> units_;
@@ -493,7 +493,7 @@ private:
       for (const Stmt &child : sequence->seq)
         Walk(child);
     } else if (const auto *attribute = statement.as<AttrStmtNode>()) {
-      if (attribute->attr_key == kAscendS4Task) {
+      if (attribute->attr_key == kAscendConstraintTaskId) {
         int previous = active_task_;
         ICHECK_LT(previous, 0) << "Nested lifetime task markers";
         active_task_ = Downcast<Integer>(attribute->node)->value;
@@ -515,7 +515,7 @@ private:
         Walk(attribute->body);
         bindings_ = saved;
       } else {
-        // S2 has already audited all attributes and public/private task hints.
+        // Schedule analysis has already audited all attributes and task hints.
         Walk(attribute->body);
       }
     } else if (const auto *loop = statement.as<ForNode>()) {
@@ -716,7 +716,8 @@ Record AnalyzeAscendLifetimes(tir::PrimFunc function, String platform) {
 Record RebuildAscendLifetimeContract(tir::PrimFunc marked_source) {
   class RemoveMarkers final : public StmtMutator {
     Stmt VisitStmt_(const AttrStmtNode *op) final {
-      if (op->attr_key == kAscendS4Task || op->attr_key == kAscendS4Iter)
+      if (op->attr_key == kAscendConstraintTaskId ||
+          op->attr_key == kAscendConstraintIteration)
         return VisitStmt(op->body);
       return StmtMutator::VisitStmt_(op);
     }
