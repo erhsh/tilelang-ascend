@@ -149,3 +149,51 @@ S3 循环接口、S4 planner 接管及后续同步生成仍不在本步实施。
 - 校准在已验证的 S4 source/libs 搬移快照中运行，保留原构建 cache/log 字节与身份；
   workspace 的 S5 C++ 可独立应用和构建。正式设备入口仍等成本模型及新 native manifest
   都验证后执行，所有未执行项保持未验证状态。
+
+## S6 实施骨架：canonical storage 与完整生命周期 bridge
+
+确认依据：用户明确授权S6，沿用实现、独立测试、A3验收、计划更新和提交推送后审核。
+
+- 新 common/ascend_storage_alias.h 与 ascend_storage_alias.cc 以 dataVar/allocation
+  身份构造catalog，保存view的dtype/shape/stride/elem_offset/byte range。
+  AscendCanonicalizeStorageAliases() 使用既有StmtExprMutator模式规范化已知Let
+  dataVar/access_ptr别名；unknown/escape/不整除offset/越界拒绝。无需任何规范化变化且
+  校验通过时返回原func。
+  同名异Var在必要时唯一内部命名，同时维护body/BufferMap/Block.alloc_buffers/
+  match_buffer及metadata keys；readonly AnalyzeAscendStorageOwners(f,"A3")注册旧FFI。
+- phase.py仅constraint在LowerAndLegalize最首、HintSyntax/TileOp之前，以及
+  OptimizeForTarget策略校验后、LowerScheduleHints之前设置幂等规范化检查点。
+  wrapper/FFI签名一致，不增加planner/injector/同步生成次数；所有地址改写在MP前。
+- ascend_schedule_analysis.cc复用canonical catalog；旧materializer在inject_pipeline.cc
+  与common/ascend_pipeline_versions.h按dataVar统一N和byte pitch，对所有dtype/offset
+  view、raw pointer及真实Allocate/remap同步改写。
+- ascend_infer_buffer_scope.cc的ScopeCorrector仅在constraint分支按Buffer对象缓存view，
+  保持各dtype/offset/stride，并用RemapAscendStorageMetadata同步scope替换；Block的
+  reads/writes/match/init、address/layout keys使用同一Buffer映射，legacy沿原分支。
+- 新common/ascend_lifecycle.h、ascend_lifecycle_analysis.cc的source walker复用canonical
+  S2 effects，只解释控制和词法分配。公共只读FFI为AnalyzeAscendLifetimes(f,"A3")->Map；
+  内部BuildAscendLifetimeContract(marked_source,canonical_graph,canonical_catalog)->Map。
+  MarkAscendScheduleSource(f,graph)抽取原StableTaskMarker算法，planner/分析接口共用。
+  planner在Solve/Inject前消费source完整定义证明，task所有reads先于本task writes核验。
+- storage activation含allocation site及全部词法祖先迭代；task instance含unit、
+  launch/core/vid、全部祖先迭代及有限bool case。byte segment追踪producer；zero/skipped
+  不制造epoch，N1支持已证明的partial-write union、readonly与carry；privateN>1要求
+  完整write-first且无carry。nested positive pipeline仍拒绝，有限case/trace预算保持。
+- schema3在原manifest加lifetime_contract。ascend_constraint_sync.cc在原finalSimplify后
+  位置重建source期望，匹配actual slot/range最近writer并复用completion闭包，分别核验
+  依赖中的producer、所有readers及下一写完成关系，以及未消费event token的退出drain。
+  不把drain扩称额外证明所有无后继末尾call硬件完成。历史schema1/2 fixtures保留原合同。
+- 原AST在folding/substitution前逐步checked int64；同Task的source/physical R/W仅
+  exact-or-disjoint，保留exact inplace和不同Task partial-write union。
+  原式范围与byte乘加由PromoteAscendStorageIndex、CheckedAscendStorageByteOffset/
+  AddAscendStorageByteOffsets守护；source/final共用EvaluateAscendLifetimeInteger和
+  ValidateAscendLifetimeCallIndices，不拿已回绕常量作范围证书。
+- 不新增精确placement API；旧annotate_address语义保持，最终address_map/size_map和
+  actual版本占用进入别名与reuse验证，不用名称证明storage独立。
+- kernel_cache.py的实际_generate_key仅对constraint加入内部schema3 ABI盐，不能由
+  用户覆盖；覆盖effective策略与memory/disk路由，legacy key同输入字节保持不变。
+  S6私有function事实的tl.ascend_s6_前缀在Python/native loop builder均保留。
+- 实现与独立测试分工，先最小source初始化正负冒烟，再扩至alias/guard/activation。
+  构建由唯一owner负责，链接期间不加载workspace库。新manifest冻结后运行owner、
+  lifecycle两个native入口及reuse A3入口，记录逐轮随机scratch/golden和真实IR证据；
+  更新计划并提交推送后停在S6，不进入S7。

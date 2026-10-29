@@ -117,11 +117,12 @@ pass_configs = {
 
 The single-stage subset requires A3 AscendC/auto, static serial loops, and at least one
 `T.Pipelined(..., num_stages=1)` candidate. It supports audited float16/float32
-full, aligned GM/UB copies and Vector fill/add. Use a separate full short tile
-for a static aligned tail; dynamic padding DMA is outside this subset.
-Manual flag/barrier calls, mixed Cube/Vector, raw code, explicit UB address
-placement, explicit stage/order arrays and multiple stages or buffer versions
-are rejected. UB allocations must be static float16/float32 and fit the native
+full, aligned GM/UB copies and Vector fill/add. A static aligned tail can use a
+separate full short tile; dynamic padding DMA is outside this subset.
+Manual flag/barrier calls, mixed Cube/Vector, raw code, explicit stage/order
+arrays and multiple stages or buffer versions are rejected in this single-stage
+subset. Existing address hints are checked as described below. UB allocations must
+be static float16/float32 and fit the native
 memory budget, including row padding.
 
 GM aliases remain conservative. When the caller guarantees distinct input and
@@ -151,11 +152,13 @@ pass_configs[tilelang.PassConfigKey.TL_ASCEND_PIPELINE_COST_MODEL] = cost_model
 `T.Pipelined(..., num_stages=2)` or `3` enables the supported modulo path.
 The number is a buffer-version search cap. Actual buffer versions can differ;
 the compiler validates and records the materialized versions, strides and bytes.
-Single-row, contiguous float16/float32 UB buffers must be loop-owned, fully
-written before reads in each iteration, and have 32-byte aligned version sizes.
-External UB inputs, shared writable UB and cross-iteration accumulation are
-outside this subset. A full in-place update after that iteration's full write
-must pass the same producer and physical-slot checks.
+Single-row, contiguous float16/float32 UB buffers have 32-byte aligned version
+sizes. Renamed storage must be loop-owned, with every read footprint completely
+defined in that iteration and no carry from another iteration. Multiple dtype or
+offset views share one storage version count and byte pitch. A full in-place
+update after the required definition must pass the same producer and physical-slot
+checks. Initialized readonly or carried storage can remain at one version under
+the lifecycle contract below.
 
 The profile matches exact operation/dtype/count/geometry and contains measured
 effective nanosecond costs including issue and synchronization overhead. It is
@@ -181,3 +184,53 @@ sequence, with one mask state per Vector domain rather than per buffer version.
 Use `scripts/ascend_migration/s5_run_pipeline_npu.py --calibrate-profile` to
 generate an artifact with `msprof op`. The migration plan records the complete
 command, measurement policy, actual verification results and supported scope.
+
+## Storage owners and source lifetimes
+
+Constraint planning proves complete byte coverage before reads. A zero-trip or
+skipped writer does not initialize storage. Multiple partial writes can jointly
+define a later read; in-place operations consume their old inputs before defining
+their outputs. On-chip allocations begin undefined, while actual external
+parameters provide caller-entry values. Internal workspace is not assumed to
+contain a caller-provided value.
+
+The proof identifies storage by data Var and known alias bindings. Different
+names do not establish independence, and different dtype views do not create
+separate allocations. Known pointer aliases are normalized to a root plus one
+byte offset. Every view uses the same physical version pitch, converted to its
+element dtype. Unknown origins, escapes, unprovable offsets and out-of-bounds
+views report an error.
+Within a task, overlapping read/write regions must be exactly the same region;
+shifted partial overlap is not supported. This rule also applies to final physical
+storage reuse. Separate tasks may still contribute partial writes to a complete
+definition. Byte arithmetic is checked before simplification or case substitution
+can hide an int64 overflow.
+
+Complete initialization outside a pipeline can support readonly UB or initialized
+carry with one physical version. Outer allocations retain state across nested or
+consecutive serial loops; an allocation inside a loop has a fresh activation on
+each entry. Renamed multi-version storage cannot borrow definitions from another
+iteration. Nested positive pipelines and general data-dependent control remain
+unsupported. Bounded Boolean predicates are exhaustively checked; this compiler
+proof does not itself establish scalar argument support in a device adapter.
+
+The final verifier reconstructs source producers and checks each byte segment
+against the nearest actual physical writer, then validates production, consumption,
+overwrite dependencies and drain of outstanding event tokens using the existing
+generated synchronization. Token drain does not independently prove completion
+of every final call with no successor; kernel return retains the existing runtime contract.
+Scope exit does not imply a barrier. Existing `annotate_address` byte hints retain
+their upward 32-byte alignment and may permit proven lifetime reuse. Constraint
+mode checks complete physical version size, capacity and aliases; this adds no
+exact-placement API.
+
+Compiler tooling can explicitly inspect already lowered, audited calls through
+`tilelang.transform.AnalyzeAscendStorageOwners(func, platform="A3")` and
+`tilelang.transform.AnalyzeAscendLifetimes(func, platform="A3")`. Both return typed
+legacy TVM Maps without changing the input IR or invoking a scheduler. A source
+readiness report is separate from the final dependency and event validation.
+
+An internal constraint compiler ABI participates in the memory/disk cache key so
+older artifacts cannot bypass the lifecycle checks during a compiler upgrade.
+Legacy cache keys retain their existing format. See the migration plan's S6
+record and its owner, lifecycle and A3 reuse validation entries for evidence.

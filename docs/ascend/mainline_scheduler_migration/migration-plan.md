@@ -58,13 +58,13 @@ Vector 指令选择、mask 合法化、Persistent 参数/partial-wave 保护及 
 | S2 | 能力、任务图与 solver 合同（M0） | 显式分析、能力模型、solver/verifier 和三个入口已交付 | solver 105、capability 42、native 171 及 runner 31 项通过；无新增设备执行路径 | 用户已明确授权 S3 |
 | S3 | Parallel/Pipelined/Persistent 接口与安全性 | 循环接口、域保护、受限 Task/Stage 和三个入口已交付 | native 117 + 29、兼容回归 170、runner 44 项通过；A3 9 项、1000 次 launch/golden 通过 | 用户已明确授权 S4 |
 | S4 | 单核约束规划与同步协议验证（M1） | opt-in constraint、最终协议验证和三个入口已交付 | 原生 45 + 50、兼容 170 + 117 + 29、runner 77 项通过；A3 8 项、800 次 launch/golden 通过 | 用户已明确授权 S5 |
-| S5 | 跨迭代流水与多缓冲（M2） | A3有效成本、实际版本/配置证明及guarded波流水已交付 | 校准32、原生234、兼容411项通过；A3 26用例/2600次launch与golden、4组性能已记录 | 本次S5提交，等待用户审核 |
-| S6 | owner/epoch、别名与生命周期（M3） | 未开始 | 未验证 | 未提交 |
+| S5 | 跨迭代流水与多缓冲（M2） | A3有效成本、实际版本/配置证明及guarded波流水已交付 | 校准32、原生234、兼容411项通过；A3 26用例/2600次launch与golden、4组性能已记录 | 用户已明确授权S6 |
+| S6 | owner/epoch、别名与生命周期（M3） | canonical storage与source/final epoch bridge已交付 | 正式原生61+49、全部兼容/CLI通过；A3 20用例、2000次launch/golden通过 | 本次S6提交，等待用户审核 |
 | S7 | A2/A3 新同步生成器（M4） | 未开始 | 未验证 | 未提交 |
 | S8 | 完整自动调度与混合 C/V 接管（M5） | 未开始 | 未验证 | 未提交 |
 
-当前停止点：S5 实现与 A3 验收已完成；更新计划并提交推送后等待用户审核。
-S6 尚未获得执行授权。
+当前停止点：S6实现与A3验收已完成，本次更新计划并提交推送后等待用户审核。
+S7 尚未获得执行授权。
 实施状态与验证状态分列：“已实现”不等于“native/NPU 验收通过”。
 
 ## 4. 分步交付与验收
@@ -624,7 +624,8 @@ export TL_ASCEND_MIGRATION_BUILD_MANIFEST=/tmp/ascend-migration-s4/native-build.
 /tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s4_run_vector_npu.py --platform a3 --device 0 --seed 0 --repeat 100 --timeout 120 --output /tmp/ascend-migration-s4/s4-a3.json
 ```
 
-复用 S2 的隔离 venv，实际 Z3 为 4.15.4.0，仍继承原 torch/torch_npu/CANN 环境；
+复用 S2 的隔离 venv，实际 Z3 为 4.15.4.0，preflight记录torch 2.7.1+cpu、
+torch_npu 2.7.1.post4及CANN 9.1.0；
 未安装全局依赖。三个入口的缺失/损坏 Z3 预检在 runtime 导入前给出 BLOCKED/2。
 manifest 要由当前源码显式构建，不能复用 S3；方法沿用技术参考第 11.5 节。
 
@@ -653,7 +654,8 @@ AttrStmt/call 构造错误也已修正，诊断日志保留，不用中间分项
 报告以 `*-before-budget-overflow-fix.json` 保存为诊断，不计入修复后的最终验收。
 
 最终设备 artifacts 为 `s4-a3-artifacts-a95k7t67`，实际 SoC `Ascend910_9362`、逻辑
-device 0；Python 3.12.9、torch/torch_npu 2.12.0、CANN 9.1.0，Z3 API 版本 4.15.4。
+device 0；Python 3.12.9、torch 2.7.1+cpu、torch_npu 2.7.1.post4、CANN 9.1.0，
+Z3 API 版本 4.15.4。
 PATH 所选 Bisheng 为 `/home/developer/Ascend/cann-9.1.0/bin/bisheng`，实际 clang
 15.0.5，compiler SHA256 为
 `7ffc97205a0582ce00a9ec163530696bf3971b24669c43c1c02cc9c7b56f541f`。
@@ -675,7 +677,7 @@ clang-format、`git diff --check` 及文档相对链接/围栏检查通过。记
 ## 11. S5 实施记录
 
 S5 实现、CPU 与 A3 设备验收已完成。本节记录实际证据与性能限制；未执行 A2 专项
-测试。交付后停止等待用户审核，S6 尚未开始。
+测试。S5交付时停止等待审核；后续S6授权和结果见第12节。
 
 ### 11.1 实现范围与边界
 
@@ -835,6 +837,8 @@ GM store trace 的 valid tile exact-once 与 NaN canary 同时验证。
 measured samples、24次 post-group golden；不把性能调用当作逐轮数值断言。
 正式执行使用 device0、seed0、repeat100、timeout120 与本节 manifest/model，两个
 父入口严格串行。`device-validation-summary.json` 汇总两父报告与逐 worker 证据。
+两份正式preflight均记录torch 2.7.1+cpu、torch_npu 2.7.1.post4、TVM 0.17.dev0，
+按实际报告记录环境版本。
 
 | 夹具 | legacy median ns（95% CI） | constraint median ns（95% CI） | 观测 legacy/constraint |
 | --- | --- | --- | --- |
@@ -855,4 +859,141 @@ group_tail 的观测耗时增加约15.6%，作为本阶段已知性能退化保�
 本次交付仅包含 S5 实现、永久测试、三个公开入口及文档；legacy 仍为默认。
 完整校准模型、原始采样、manifest、JSON和二进制保留于 `/tmp/ascend-migration-s5/`，
 通过本节命令可复核。提交推送至 `erhsh/codex/ascend-a2a3-scheduler-migration` 后
-停止，等待用户审核；S6 owner/epoch、通用别名和生命周期尚未获得执行授权。
+停止等待用户审核；该S5交付停止点之后，用户已授权S6，结果见第12节。
+
+## 12. S6 实施与验收记录
+
+S6实现、正式原生/兼容及A3 reuse验收已完成。本节区分静态证明、数值容差与字节
+hash证据。范围仅A3，未运行A2专项测试，交付后等待审核，不启动S7。
+
+### 12.1 实现合同
+
+- constraint 在 early/late 两处幂等规范化 storage/view/known pointer alias，再运行
+  既有 planner、一次旧 injector 和一套旧同步器。legacy 默认与生成算法保持。
+- owner 按 dataVar/allocation site 及已证明 alias 归并，同名异 Var 不混淆；dtype/
+  offset view 共用 actual N 和 byte pitch。scope 推断与改写同步维护 Buffer 缓存、
+  Block reads/writes/match/init、address/layout keys 及函数元数据。
+- schema3 在 Solve/Inject 前逐 byte segment 证明 source 完整定义。task 先读后写；
+  N1 支持 preinit readonly/carry、partial-write union、guard/zero、nested/连续serial
+  activation。fresh allocation 不借旧 epoch，内部 workspace 不借 caller-entry。
+- 最终从 source_function 重建 graph/catalog/readiness，忽略 stored PASS/cases/
+  producer 的证明效力，并校验 stored catalog 自洽。实际最近 physical writer 必须匹配
+  source producer，再复用旧事件 closure 校验生产、全部消费者、下一写完成关系及
+  未消费 event token 的退出 drain；不额外声称证明所有无后继末尾 call 完成。
+- 同 task 的 R/W 仅允许完全同区间或不相交；shifted partial overlap 无已审计的
+  multi-repeat 快照保证，source/final 均拒绝。exact in-place 和跨 task union 保留。
+- 原始 byte/index 算术在 Analyzer 简化、常量替换前逐步 checked int64；已实证的
+  singleton `i=2**62, offset=i*64` 与静态 alias byte-scale 回绕均被拒绝。物理声明
+  乘积也先 checked，显式只读 API 不报告回绕后的假容量。
+- 已审计单行 DMA 仍要求准确 template/count、32B 对齐、无动态 padding 与完整界限；
+  未发出的末尾 view metadata 可大于实际 count，不将其误作 helper 执行长度。
+- annotate_address 保留 legacy 字节 hint/向上32B语义，允许已证明的生命周期复用；
+  地址预算按 actual N×pitch/padding 核对。本步不新增 exact-placement API。
+- 内部 constraint compiler ABI3 进入真实 memory/disk key，隔离同 HEAD dirty 升级的
+  schema2 旧产物；legacy key 格式不变。无新 PassConfig 开关或 ambient context 行为。
+
+公共只读 API 为 AnalyzeAscendStorageOwners、AnalyzeAscendLifetimes，输入 IR 不变；
+三入口为 s6_check_owner_ir.py、s6_check_lifecycle_guards.py、s6_run_reuse_npu.py。
+private N>1 仍限连续1D/1×L、32B版本对齐、每个 read footprint 在该迭代完整定义且无
+carry。nested positive pipeline、一般动态整数/while、opaque effects仍拒绝；有限bool
+case仅证明编译器控制路径，不推导设备 scalar ABI。完整设计见技术参考第16节。
+
+### 12.2 构建身份与 CPU 验证
+
+`/tmp/ascend-migration-s6/native-build.json` 已 write/verify：163个构建输入，source
+SHA256 `180efb03b144476aeecf0fcca2680fff3fef8e0aabd310a3b3c833b48f9e808e`，
+module SHA256 `8c8101c48ee81bd01cb7444eda6b2fc616b8d5129cb71dd78a353af76160c570`。
+正式入口使用此冻结源码/库，不把早期开发库通过当作本步最终证据。
+
+| 正式入口/检查 | 已实际执行结果 | 证据（相对 /tmp/ascend-migration-s6/） |
+| --- | --- | --- |
+| s6_check_owner_ir | PASS 61，0skip，含实际owner与cache隔离 | owner-ir.json |
+| s6_check_lifecycle_guards | PASS 49，0skip：source31 + final18 | lifecycle-guards.json |
+| S1 native | PASS 104，0skip | cpu-validation-summary.json关联实际公开入口报告 |
+| S2 native | PASS 170，0skip | 同上，保留原负例及明确诊断 |
+| S3 loop/domain | PASS 129 + 29，0skip | 含新增S6私有metadata保留键 |
+| S4 pipeline/sync | PASS 45 + 50，0skip | 合法旧address hint及错误物理覆盖等正反例 |
+| S5 versions | PASS 235，0skip | 保留实际多版本/guard/mask/legacy合同回归 |
+| 六阶段 CLI host | PASS 154，0skip | 完整节点/命令/XML记在CPU汇总 |
+
+`cpu-validation-summary.json` 汇总全部实际命令、必跑节点、source/库身份与格式检查，
+不把有交集的入口数目相加冒充唯一测试数。新增/owned8个C++/header整文件clang-format
+通过；ir/infer/inject按改动hunks检查，旧3个测试ruff/format通过。实际诊断中旧negative
+的拒绝点可能因
+新边界检查前移，仅更新明确错误类型的 regex，原输入与 require-raises 保留；原失败
+报告/日志作为诊断保留，不冒充正式通过。
+
+### 12.3 A3 对照与压力方案
+
+基础为 readonly f16/f32、carry0/1/5、offset views、连续与nested循环八类，逐类配对
+legacy/constraint。每个 case 仅真实编译一次，同 kernel 重复运行，每轮确定性刷新
+finite Scratch/A、tile/launch 标签并记录 input/output/golden SHA、逐轮数值与canary。
+
+legacy CPU预检确认 readonly f16/f32、alias_views 的旧 positive pipeline 因同owner
+连续写拒绝；dtype_views/private dtype也受此门禁。仅这些 legacy case 改 serial0
+baseline，其余已通过旧规划的 carry/连续/nested保留stage1。constraint基础stage1、
+private dtype stage3不变；报告逐case记录双方directive/role，不宣称指令参数相同。
+旧模式拒绝发生于0次bisheng/0次launch，日志保留；不修改旧算法以支持新增dtype流水。
+
+两个 dtype 候选以 f32[32]/f16[64] 的同128B storage构造有限half bit pairs与零容差
+golden。N1与独立anchor的private actual≥2分别检查；launch前按source task dataVar/
+source_data关联actual remap/pitch/Allocate，不依赖u/v名称或requested版本。候选先做
+内部1轮真实编译/数值pilot，再决定纳入公开必跑集合。四项pilot已实际PASS：每项1次
+bisheng、1次launch/golden，输出SHA均等于golden；private constraint实际owner id4、
+f32/f16同一128B storage、actualN3、pitch128、Allocate384B。owner id仅是本次报告值，
+验证依据为Var/provenance和字节关系，不把id作为新API常量。
+
+两种dtype已纳入公开必跑矩阵，10类fixture×legacy/constraint为20case；private
+tiles1，其余tiles3，每项100轮，正式父入口已PASS。pilot不叠加为正式压力次数。
+
+### 12.4 正式设备结果与复核
+
+`reuse-npu.json` 正式PASS，进程退出0；`device-validation-summary.json` 独立核对
+全部worker、编译命令、逐轮摘要、canary和owner证据：
+
+| 项目 | 实际结果 |
+| --- | --- |
+| 数值用例/真实bisheng编译 | 20/20 PASS，各1次编译 |
+| 同kernel attempted/completed/golden | 2000 / 2000 / 2000 |
+| 每轮input/output/golden摘要记录 | 2000组；各输入每case均100个不同hash |
+| 两策略逐轮input/output/golden字段比较 | 1000/1000组PASS |
+| 未触及区canary检查 | 313600个元素通过 |
+| private mixed dtype | 实际N3、两view同128B owner/pitch、Allocate384B |
+| 独立pilot | 4次编译/4次launch/golden，单独统计 |
+
+golden使用 `assert_close(equal_nan=True)`：普通f32的rtol/atol为1e-5，f16为1e-2，
+dtype reinterpret变体为0。整输出与golden字节hash相等为1800/2000；f16两项共200轮
+不相等，字节hash包含NaN表示，不能把数值容差通过写成全字节相等。两策略的每轮
+input/output/golden字段仍严格一致1000/1000。fixed-storage路径以实际空remap及
+source contract/Allocate记录，不将requested1伪造为显式物化版本证据。
+
+实际device0为Ascend910_9362，torch 2.7.1+cpu、torch_npu 2.7.1.post4、
+TVM 0.17.dev0/c2921fd；CANN9.1.0与bisheng SHA沿S5。本步复用S5完整真实模型，
+canonical SHA `f2aa7ecfa4e592199c81801140903352f6e34fc1cee7be220987d6c5753a13fd`，
+不重校准、不采性能。本任务worker/pilot/profiler均已退出；其他仓库的无关任务不处理，
+不将本任务清理报告扩称为全机持续空闲。
+
+实际设备命令使用seed0、repeat100、timeout120；原生与设备复核入口如下：
+
+```bash
+source set_env.sh
+migration_python=/tmp/ascend-migration-s2/venv/bin/python
+"$migration_python" scripts/ascend_migration/s6_check_owner_ir.py \
+  --platform a3 --build-manifest /tmp/ascend-migration-s6/native-build.json \
+  --output /tmp/ascend-migration-s6/review-owner-ir.json
+"$migration_python" scripts/ascend_migration/s6_check_lifecycle_guards.py \
+  --platform a3 --build-manifest /tmp/ascend-migration-s6/native-build.json \
+  --output /tmp/ascend-migration-s6/review-lifecycle-guards.json
+"$migration_python" scripts/ascend_migration/s6_run_reuse_npu.py \
+  --platform a3 --device 0 --seed 0 --repeat 100 --timeout 120 \
+  --build-manifest /tmp/ascend-migration-s6/native-build.json \
+  --cost-profile /tmp/ascend-migration-s5/a3-effective-cost-model.json \
+  --output /tmp/ascend-migration-s6/review-reuse-npu.json
+```
+
+### 12.5 交付停止点
+
+本次仅提交S6实现、永久测试、三个入口及相关文档，保留legacy默认；临时模型、
+manifest、原始JSON/日志与二进制保留在 `/tmp/ascend-migration-s6/` 或既有S5目录。
+推送至 `erhsh/codex/ascend-a2a3-scheduler-migration` 后停止，等待用户审核。
+S7新同步生成器尚未获得执行授权，S5已记录的性能退化不在本步调优范围。

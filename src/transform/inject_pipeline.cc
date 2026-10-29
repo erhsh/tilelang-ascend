@@ -125,12 +125,47 @@ public:
         access_all_versions_(access_all_versions) {}
 
 private:
+  Optional<Buffer> RemappedView(const Buffer &view) const {
+    if (auto direct = buffer_remap_.Get(view))
+      return direct;
+    if (!pipeline_loop_->annotations.count(kAscendS5LoopId) ||
+        !buffer_data_to_buffer_.count(view->data))
+      return NullOpt;
+    Buffer root = buffer_data_to_buffer_.at(view->data);
+    auto rewritten = buffer_remap_.Get(root);
+    if (!rewritten.defined())
+      return NullOpt;
+    Buffer physical = rewritten.value();
+    PrimExpr pitch = Integer(root->dtype.bytes());
+    for (size_t i = 1; i < physical->shape.size(); ++i)
+      pitch = pitch * physical->shape[i];
+    arith::Analyzer analyzer;
+    ICHECK(
+        analyzer.CanProve(floormod(pitch, Integer(view->dtype.bytes())) == 0))
+        << "Constraint byte pitch is not divisible by view dtype";
+    Buffer result = RewriteLegacyPipelineBuffer(
+        view, Downcast<IntImm>(physical->shape[0])->value);
+    auto *node = result.CopyOnWrite();
+    Array<PrimExpr> strides = view->strides;
+    if (strides.empty()) {
+      strides.resize(view->shape.size());
+      PrimExpr stride = Integer(1);
+      for (int i = int(view->shape.size()) - 1; i >= 0; --i) {
+        strides.Set(i, stride);
+        stride = stride * view->shape[i];
+      }
+    }
+    strides.insert(strides.begin(), analyzer.Simplify(floordiv(
+                                        pitch, Integer(view->dtype.bytes()))));
+    node->strides = strides;
+    return result;
+  }
   BufferRegion
   RewritePipelineBufferRegion(const BufferRegion &buffer_region) const {
-    auto it = buffer_remap_.find(buffer_region->buffer);
-    if (it != buffer_remap_.end()) {
+    auto remapped = RemappedView(buffer_region->buffer);
+    if (remapped.defined()) {
       Region new_region = buffer_region->region;
-      const Buffer &new_buffer = (*it).second;
+      const Buffer &new_buffer = remapped.value();
       // For pipeline buffers, relax the access region of the first dimension to
       // full extent if access_all_versions == true
       Range accessed_version =
@@ -173,6 +208,17 @@ private:
         } else {
           offset = new_buffer->strides[0];
         }
+        if (pipeline_loop_->annotations.count(kAscendS5LoopId)) {
+          int64_t root_bytes = buffer->dtype.bytes();
+          int64_t consumer_bytes = call->args[0].dtype().bytes();
+          PrimExpr stride_bytes = offset * Integer(root_bytes);
+          arith::Analyzer analyzer;
+          ICHECK(analyzer.CanProve(
+              floormod(stride_bytes, Integer(consumer_bytes)) == 0))
+              << "Constraint byte pitch is not divisible by alias dtype";
+          offset = analyzer.Simplify(
+              floordiv(stride_bytes, Integer(consumer_bytes)));
+        }
         PrimExpr new_index =
             old_index + floormod(pipeline_loop_->loop_var - pipeline_loop_->min,
                                  new_buffer->shape[0]) *
@@ -203,11 +249,11 @@ private:
 
   Stmt VisitStmt_(const BufferStoreNode *op) final {
     BufferStore store = Downcast<BufferStore>(StmtExprMutator::VisitStmt_(op));
-    auto it = buffer_remap_.find(store->buffer);
-    if (it == buffer_remap_.end()) {
+    auto remapped = RemappedView(store->buffer);
+    if (!remapped.defined()) {
       return std::move(store);
     }
-    const Buffer &new_buffer = (*it).second;
+    const Buffer &new_buffer = remapped.value();
     auto *n = store.CopyOnWrite();
     n->buffer = new_buffer;
     PrimExpr version = floormod(
@@ -218,11 +264,11 @@ private:
 
   PrimExpr VisitExpr_(const BufferLoadNode *op) final {
     BufferLoad load = Downcast<BufferLoad>(StmtExprMutator::VisitExpr_(op));
-    auto it = buffer_remap_.find(load->buffer);
-    if (it == buffer_remap_.end()) {
+    auto remapped = RemappedView(load->buffer);
+    if (!remapped.defined()) {
       return std::move(load);
     }
-    const Buffer &new_buffer = (*it).second;
+    const Buffer &new_buffer = remapped.value();
     auto *n = load.CopyOnWrite();
     n->buffer = new_buffer;
     PrimExpr version = floormod(
@@ -270,7 +316,10 @@ public:
     std::unordered_map<Buffer, BufferAccessInfo, ObjectPtrHash, ObjectPtrEqual>
         infos = GetBufferAccessInfo();
     for (const Buffer &buffer : pipeline_allocs_) {
-      int num_versions = ComputeBufferVersions(buffer, infos.at(buffer));
+      int num_versions = pipeline_loop_->annotations.count(kAscendS5LoopId)
+                             ? ComputeAscendStoragePipelineVersions(
+                                   buffer->data, pipeline_info_)
+                             : ComputeBufferVersions(buffer, infos.at(buffer));
       if (overrides.count(buffer->data)) {
         int64_t actual = overrides.at(buffer->data)->value;
         ICHECK(actual >= std::max(1, num_versions) && actual <= 3)

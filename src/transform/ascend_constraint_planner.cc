@@ -14,9 +14,11 @@
 #include <vector>
 
 #include "./common/ascend_constraint.h"
+#include "./common/ascend_lifecycle.h"
 #include "./common/ascend_pipeline_structure.h"
 #include "./common/ascend_pipeline_versions.h"
 #include "./common/ascend_schedule_hints.h"
+#include "./common/ascend_storage_alias.h"
 
 namespace tvm {
 namespace tl {
@@ -66,6 +68,22 @@ void ValidateUBDeclaration(DataType dtype, const Array<PrimExpr> &extents) {
   }
 }
 
+void ValidateConstraintUBDeclarations(const PrimFunc &function) {
+  PostOrderVisit(function->body, [&](const ObjectRef &node) {
+    if (const auto *block = node.as<BlockNode>()) {
+      for (const Buffer &buffer : block->alloc_buffers) {
+        if (buffer.scope() == "shared.ub")
+          ValidateUBDeclaration(buffer->dtype, buffer->shape);
+      }
+    } else if (const auto *allocation = node.as<AllocateNode>()) {
+      const auto *pointer =
+          allocation->buffer_var->type_annotation.as<PointerTypeNode>();
+      if (pointer && pointer->storage_scope == "shared.ub")
+        ValidateUBDeclaration(allocation->dtype, allocation->extents);
+    }
+  });
+}
+
 bool ProveCapacityByCongruence(arith::Analyzer *analyzer, const PrimExpr &start,
                                const PrimExpr &end, const PrimExpr &capacity) {
   PrimExpr span = analyzer->Simplify(end - start);
@@ -95,18 +113,8 @@ class ConstraintInputs : public StmtExprVisitor {
 public:
   explicit ConstraintInputs(PrimFunc function) {
     size_t units = 0;
+    ValidateConstraintUBDeclarations(function);
     PostOrderVisit(function->body, [&](const ObjectRef &node) {
-      if (const auto *block = node.as<BlockNode>()) {
-        for (const Buffer &buffer : block->alloc_buffers) {
-          if (buffer.scope() == "shared.ub")
-            ValidateUBDeclaration(buffer->dtype, buffer->shape);
-        }
-      } else if (const auto *allocation = node.as<AllocateNode>()) {
-        const auto *pointer =
-            allocation->buffer_var->type_annotation.as<PointerTypeNode>();
-        if (pointer && pointer->storage_scope == "shared.ub")
-          ValidateUBDeclaration(allocation->dtype, allocation->extents);
-      }
       const auto *evaluate = node.as<EvaluateNode>();
       if (evaluate && evaluate->value.as<CallNode>())
         ICHECK_LE(++units, 4096U)
@@ -150,8 +158,6 @@ public:
         owned.insert(id->value);
     for (size_t id = 0; id < tasks.size(); ++id) {
       Record task = Downcast<Record>(tasks[id]);
-      ICHECK(owned.count(id) || is_one(Downcast<PrimExpr>(task.at("guard"))))
-          << "Constraint guarded calls must belong to one audited candidate";
       if (task.count("manual_stage") &&
           IntegerField(task, "manual_stage") > 0) {
         ICHECK(owned.count(id)) << "Nonzero manual Stage is outside a positive "
@@ -168,6 +174,7 @@ public:
   std::unordered_set<int> empty_loops;
   Map<Var, Buffer> buffers;
   int64_t base_bytes{0};
+  Record lifetime;
 
 private:
   void VisitStmt_(const ForNode *loop) final {
@@ -333,8 +340,6 @@ private:
         continue;
       ICHECK(Downcast<String>(storage.at("scope")) == "shared.ub")
           << "Constraint planner supports UB allocations only";
-      ICHECK(!storage.count("explicit_address"))
-          << "Constraint planner does not support explicit address placement";
       int64_t bytes = IntegerField(storage, "capacity_bytes");
       ICHECK(bytes > 0 && bytes <= kAscendA2A3UBBudget)
           << "Constraint allocation exceeds the A3 UB budget";
@@ -368,6 +373,12 @@ private:
         ICHECK(rows <= kAscendA2A3UBBudget / row_bytes)
             << "Constraint allocation layout exceeds the A3 UB budget";
         aligned_bytes = rows * row_bytes;
+      }
+      if (storage.count("explicit_address")) {
+        int64_t address = IntegerField(storage, "explicit_address");
+        ICHECK(address >= 0 && address <= kAscendA2A3UBBudget &&
+               (address + 31) / 32 * 32 <= kAscendA2A3UBBudget - aligned_bytes)
+            << "Constraint explicit address exceeds actual UB capacity";
       }
       ICHECK(reserved_bytes <= kAscendA2A3UBBudget - aligned_bytes)
           << "Constraint allocations exceed the A3 UB budget without reuse";
@@ -567,48 +578,48 @@ void SolveModuloCandidate(Candidate *candidate, const ConstraintInputs &inputs,
     sizes.push_back(Integer(bytes));
     own_bytes += bytes;
   }
-  // A read in this source iteration must bind to an earlier full write in this
-  // same iteration. This excludes carried accumulators before slot rotation.
-  std::vector<int> first_writer(sizes.size(), -1);
-  std::vector<std::set<int>> accesses(sizes.size());
+  // Source readiness is proven before solving. Only private, owner-local
+  // allocations can rotate. Every other touched storage remains one physical
+  // instance and receives explicit cross-iteration hazard edges.
+  std::vector<std::set<int>> accesses(sizes.size()), writers(sizes.size());
+  std::unordered_map<int, std::vector<std::pair<int, bool>>> fixed_accesses;
   for (size_t i = 0; i < count; ++i) {
     Record task = Downcast<Record>(inputs.tasks[candidate->units[i]->value]);
     for (const char *effect : {"reads", "writes"}) {
+      bool writing = std::string(effect) == "writes";
       for (const ObjectRef &item :
            Downcast<Array<ObjectRef>>(task.at(effect))) {
         Record access = Downcast<Record>(item);
-        Record storage = Downcast<Record>(
-            inputs.storages[IntegerField(access, "storage_id")]);
+        int storage_id = IntegerField(access, "storage_id");
+        Record storage = Downcast<Record>(inputs.storages[storage_id]);
         if (Downcast<String>(storage.at("scope")) != "shared.ub")
           continue;
         Var data = Downcast<Var>(storage.at("data"));
-        ICHECK(buffer_index.count(data.get()))
-            << "S5 written/read UB must be privately owned by this candidate";
-        int b = buffer_index.at(data.get());
-        ICHECK(StaticInteger(Downcast<PrimExpr>(access.at("start")),
-                             "whole-buffer start") == 0 &&
-               StaticInteger(Downcast<PrimExpr>(access.at("end")),
-                             "whole-buffer end") == sizes[b]->value)
-            << "S5 versioned accesses must cover one fixed whole logical "
-               "region";
-        if (std::string(effect) == "reads") {
-          ICHECK_GE(first_writer[b], 0)
-              << "S5 loop-carried/read-before-write UB is unsupported";
-        } else if (first_writer[b] < 0) {
-          first_writer[b] = i;
+        if (buffer_index.count(data.get())) {
+          int b = buffer_index.at(data.get());
+          accesses[b].insert(i);
+          if (writing)
+            writers[b].insert(i);
+        } else {
+          fixed_accesses[storage_id].push_back({int(i), writing});
         }
-        accesses[b].insert(i);
       }
     }
   }
   for (size_t b = 0; b < sizes.size(); ++b) {
-    ICHECK(first_writer[b] >= 0 && !accesses[b].empty())
-        << "S5 unused/read-only private allocation is unsupported";
-    for (int access : accesses[b]) {
-      dependencies.push_back({Integer(access), Integer(first_writer[b]),
-                              Integer(-int(b) - 1), latencies[access]});
-    }
+    ICHECK(!writers[b].empty() && !accesses[b].empty())
+        << "S6 rotating storage must be defined in its owner iteration";
+    for (int access : accesses[b])
+      for (int writer : writers[b])
+        dependencies.push_back({Integer(access), Integer(writer),
+                                Integer(-int(b) - 1), latencies[access]});
   }
+  for (const auto &entry : fixed_accesses)
+    for (auto [u, u_write] : entry.second)
+      for (auto [v, v_write] : entry.second)
+        if (u_write || v_write)
+          dependencies.push_back(
+              {Integer(u), Integer(v), Integer(1), latencies[u]});
   Array<Integer> memory{
       Integer(kAscendA2A3UBBudget - (inputs.base_bytes - own_bytes))};
   for (size_t b = 0; b < sizes.size(); ++b)
@@ -623,7 +634,9 @@ void SolveModuloCandidate(Candidate *candidate, const ConstraintInputs &inputs,
                  {"stage_order_deps", stage_order},
                  {"num_stages", Integer(candidate->bound)},
                  {"buffer_sizes", sizes},
-                 {"memory_groups", Array<Array<Integer>>{memory}},
+                 {"memory_groups", sizes.empty()
+                                       ? Array<Array<Integer>>()
+                                       : Array<Array<Integer>>{memory}},
                  {"ii_bounds", Array<Integer>{Integer(1), Integer(upper)}},
                  {"enable_offset", Bool(candidate->offset)}};
   if (has_manual || !candidate->offset)
@@ -672,7 +685,7 @@ void SolveModuloCandidate(Candidate *candidate, const ConstraintInputs &inputs,
         << "S5 version count must be an integer";
     int64_t actual = std::max<int64_t>(
         candidate->versions[b]->value,
-        ComputeLegacyPipelineBufferVersions(buffer, access.at(buffer), info));
+        ComputeAscendStoragePipelineVersions(buffer->data, info));
     ICHECK(actual >= 1 && actual <= candidate->bound)
         << "S5 actual injector versions exceed requested bound";
     candidate->versions.Set(b, Integer(actual));
@@ -761,39 +774,6 @@ void SolveCandidate(Candidate *candidate, const ConstraintInputs &inputs) {
   }
 }
 
-class StableTaskMarker : public StmtExprMutator {
-public:
-  explicit StableTaskMarker(const ConstraintInputs &inputs) : inputs_(inputs) {}
-
-private:
-  Stmt VisitStmt_(const AttrStmtNode *attr) final {
-    if (attr->attr_key == kAscendS5TaskHint)
-      return VisitStmt(attr->body);
-    return StmtExprMutator::VisitStmt_(attr);
-  }
-  Stmt VisitStmt_(const ForNode *loop) final {
-    int id = next_loop_++;
-    stack_.push_back({id, loop->loop_var});
-    Stmt result = StmtExprMutator::VisitStmt_(loop);
-    stack_.pop_back();
-    return result;
-  }
-  Stmt VisitStmt_(const EvaluateNode *statement) final {
-    auto found = inputs_.task_ids.find(statement);
-    if (found == inputs_.task_ids.end())
-      return GetRef<Stmt>(statement);
-    Stmt body = GetRef<Stmt>(statement);
-    for (auto loop = stack_.rbegin(); loop != stack_.rend(); ++loop)
-      body = AttrStmt(IntImm(DataType::Int(64), loop->first), kAscendS4Iter,
-                      cast(DataType::Int(64), loop->second), body);
-    return AttrStmt(IntImm(DataType::Int(64), found->second), kAscendS4Task,
-                    IntImm(DataType::Int(32), 1), body);
-  }
-  const ConstraintInputs &inputs_;
-  int next_loop_{0};
-  std::vector<std::pair<int, Var>> stack_;
-};
-
 class AnnotationEmitter : public StmtExprMutator {
 public:
   explicit AnnotationEmitter(const ConstraintInputs &inputs) : inputs_(inputs) {
@@ -858,6 +838,8 @@ PrimFunc PlanAscendConstraintPipeline(PrimFunc function,
          "auto_cross_core_sync=false and auto_sync_vs=false";
   ICHECK(!function->GetAttr<ObjectRef>(kAscendS4Manifest).defined())
       << "Constraint pipeline is already planned";
+  ValidateConstraintUBDeclarations(function);
+  function = CanonicalizeAscendStorageAliases(function);
   ConstraintInputs inputs(function);
   if (auto facts = function->GetAttr<Array<ObjectRef>>(
           "tl.ascend_s5_degenerate_candidates")) {
@@ -876,6 +858,9 @@ PrimFunc PlanAscendConstraintPipeline(PrimFunc function,
   Optional<Record> profile;
   if (auto configured = context->GetConfig<DictAttrs>(kAscendPipelineCostModel))
     profile = configured.value()->dict;
+  Record catalog = BuildAscendStorageCatalog(function, inputs.graph);
+  PrimFunc source = MarkAscendScheduleSource(function, inputs.graph);
+  inputs.lifetime = BuildAscendLifetimeContract(source, inputs.graph, catalog);
   bool modulo = false;
   int64_t reserved = inputs.base_bytes;
   for (Candidate &candidate : inputs.candidates) {
@@ -891,13 +876,24 @@ PrimFunc PlanAscendConstraintPipeline(PrimFunc function,
         ICHECK(extra <= (kAscendA2A3UBBudget - reserved) / bytes)
             << "S5 actual versions exceed whole-kernel UB budget";
         reserved += extra * bytes;
+        Var data = candidate.buffers[b]->data;
+        for (const ObjectRef &item : inputs.storages) {
+          Record storage = Downcast<Record>(item);
+          if (!Downcast<Var>(storage.at("data")).same_as(data) ||
+              !storage.count("explicit_address"))
+            continue;
+          int64_t address = IntegerField(storage, "explicit_address");
+          int64_t physical_bytes = (extra + 1) * bytes;
+          ICHECK((address + 31) / 32 * 32 <=
+                 kAscendA2A3UBBudget - physical_bytes)
+              << "Constraint explicit address plus actual versions exceeds UB "
+                 "capacity";
+        }
       }
       modulo = true;
     } else
       SolveCandidate(&candidate, inputs);
   }
-  PrimFunc source = function;
-  source.CopyOnWrite()->body = StableTaskMarker(inputs)(function->body);
   Array<ObjectRef> candidates;
   for (size_t i = 0; i < inputs.candidates.size(); ++i) {
     const Candidate &candidate = inputs.candidates[i];
@@ -914,7 +910,8 @@ PrimFunc PlanAscendConstraintPipeline(PrimFunc function,
         {"execution", String(is_zero(candidate.loop->extent) ? "zero_trip_noop"
                                                              : "injected")}});
   }
-  Record manifest{{"schema_version", Integer(modulo ? 2 : 1)},
+  Record manifest{{"schema_version", Integer(3)},
+                  {"lifetime_contract", inputs.lifetime},
                   {"source_graph", inputs.graph},
                   {"source_function", source},
                   {"candidates", candidates}};
@@ -922,8 +919,7 @@ PrimFunc PlanAscendConstraintPipeline(PrimFunc function,
     manifest.Set("cost_model", profile.value());
   PrimFunc planned = source;
   planned.CopyOnWrite()->body = AnnotationEmitter(inputs)(source->body);
-  if (modulo)
-    planned = WithAttr(planned, kAscendS5BufferRemap, Array<ObjectRef>());
+  planned = WithAttr(planned, kAscendS5BufferRemap, Array<ObjectRef>());
   return WithAttr(planned, kAscendS4Manifest, manifest);
 }
 
@@ -951,9 +947,15 @@ tir::transform::Pass AscendPrepareConstraintPipeline(Target target) {
                                {"extent", loop->extent},
                                {"num_stages", requested.value()}});
     });
-    if (facts.empty())
-      return function;
-    return WithAttr(function, "tl.ascend_s5_degenerate_candidates", facts);
+    Array<Var> parameters;
+    for (const Var &parameter : function->params)
+      if (function->buffer_map.count(parameter))
+        parameters.push_back(function->buffer_map[parameter]->data);
+    function = WithAttr(function, kAscendS6OriginalParameters, parameters);
+    if (!facts.empty())
+      function =
+          WithAttr(function, "tl.ascend_s5_degenerate_candidates", facts);
+    return function;
   };
   return tir::transform::CreatePrimFuncPass(
       pass_func, 0, "tl.AscendPrepareConstraintPipeline", {});

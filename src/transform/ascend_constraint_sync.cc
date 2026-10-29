@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "common/ascend_constraint.h"
+#include "common/ascend_lifecycle.h"
 #include "common/ascend_resource.h"
 #include "common/ascend_schedule_hints.h"
 
@@ -51,9 +52,12 @@ struct TraceEvent {
 class TraceBuilder {
 public:
   TraceBuilder(PrimFunc function, Array<ObjectRef> units, bool source,
-               const LaunchCase &launch_case = {}, bool strict_launch = false)
+               const LaunchCase &launch_case = {}, bool strict_launch = false,
+               Map<Var, PrimExpr> scalar_bindings = {},
+               bool checked_arithmetic = false)
       : function_(function), units_(units), source_(source),
-        launch_case_(launch_case), strict_launch_(strict_launch) {
+        launch_case_(launch_case), strict_launch_(strict_launch),
+        bindings_(scalar_bindings), checked_arithmetic_(checked_arithmetic) {
     Walk(function->body);
   }
 
@@ -91,6 +95,8 @@ private:
     return analyzer_.Simplify(Substitute(expr, bindings_));
   }
   int64_t IntegerValue(const PrimExpr &expr) {
+    if (checked_arithmetic_)
+      return EvaluateAscendLifetimeInteger(expr, bindings_);
     PrimExpr value = Resolve(expr);
     const auto *integer = value.as<IntImmNode>();
     ICHECK(integer && value.dtype().lanes() == 1 &&
@@ -198,7 +204,15 @@ private:
       }
       bindings_ = saved;
     } else if (const auto *let = statement.as<LetStmtNode>()) {
-      PrimExpr value = Resolve(let->value);
+      PrimExpr value;
+      if (checked_arithmetic_ &&
+          (let->var.dtype().is_int() || let->var.dtype().is_uint())) {
+        int64_t integer = EvaluateAscendLifetimeInteger(
+            Cast(let->var.dtype(), let->value), bindings_);
+        value = IntImm(let->var.dtype(), integer);
+      } else {
+        value = Resolve(let->value);
+      }
       PostOrderVisit(value, [](const ObjectRef &node) {
         ICHECK(!node.as<BufferLoadNode>() && !node.as<CallNode>())
             << "Unsupported memory-dependent constraint scalar binding";
@@ -220,6 +234,16 @@ private:
       if (!IntegerValue(realize->predicate))
         return;
       for (const Buffer &buffer : realize->block->alloc_buffers) {
+        if (checked_arithmetic_) {
+          int64_t bytes = buffer->dtype.bytes();
+          for (const PrimExpr &extent : buffer->shape) {
+            int64_t count = IntegerValue(extent);
+            ICHECK(count > 0 &&
+                   bytes <= std::numeric_limits<int64_t>::max() / count)
+                << "Lifetime final allocation extent overflow";
+            bytes *= count;
+          }
+        }
         if (allocation_vars_.insert(buffer->data.get()).second)
           buffers_.push_back(buffer);
       }
@@ -230,8 +254,15 @@ private:
       if (allocation_vars_.insert(allocation->buffer_var.get()).second) {
         Allocate copy = GetRef<Allocate>(allocation);
         Array<PrimExpr> extents;
+        int64_t bytes = allocation->dtype.bytes();
         for (const PrimExpr &extent : allocation->extents) {
-          ICHECK_GT(IntegerValue(extent), 0) << "Invalid constraint allocation";
+          int64_t count = IntegerValue(extent);
+          ICHECK_GT(count, 0) << "Invalid constraint allocation";
+          if (checked_arithmetic_) {
+            ICHECK(bytes <= std::numeric_limits<int64_t>::max() / count)
+                << "Lifetime final allocation extent overflow";
+            bytes *= count;
+          }
           extents.push_back(Resolve(extent));
         }
         copy.CopyOnWrite()->extents = extents;
@@ -239,6 +270,9 @@ private:
       }
       Walk(allocation->body);
     } else if (const auto *evaluate = statement.as<EvaluateNode>()) {
+      if (checked_arithmetic_ && evaluate->value.as<CallNode>())
+        ValidateAscendLifetimeCallIndices(Downcast<Call>(evaluate->value),
+                                          bindings_);
       PrimExpr value = Resolve(evaluate->value);
       if (is_zero(value))
         return;
@@ -324,6 +358,7 @@ private:
   Array<Buffer> buffers_;
   std::vector<Allocate> allocations_;
   std::vector<AttrStmt> launches_;
+  const bool checked_arithmetic_;
 };
 
 struct Effect {
@@ -353,16 +388,49 @@ public:
     ICHECK(attribute.defined()) << "Missing constraint source manifest";
     Record manifest = attribute.value();
     int64_t schema = Downcast<Integer>(manifest["schema_version"])->value;
-    ICHECK(schema == 1 || schema == 2)
+    ICHECK(schema == 1 || schema == 2 || schema == 3)
         << "Unsupported constraint manifest version";
-    versions_enabled_ = schema == 2;
+    versions_enabled_ = schema >= 2;
+    lifetimes_enabled_ = schema == 3;
     Record source_graph = Downcast<Record>(manifest["source_graph"]);
-    if (versions_enabled_)
-      LoadVersionRemaps(source_graph);
-    Array<ObjectRef> units = Downcast<Array<ObjectRef>>(source_graph["tasks"]);
     PrimFunc source_function = Downcast<PrimFunc>(manifest["source_function"]);
     ICHECK(!source_function->GetAttr<Record>(kAscendS4Manifest).defined())
         << "Recursive constraint source manifest";
+    if (lifetimes_enabled_) {
+      ICHECK(manifest.count("lifetime_contract"))
+          << "Missing source lifetime contract";
+      // Source syntax is the semantic reference. Do not trust a serialized
+      // PASS bit or previously computed producer/coverage records.
+      lifetime_contract_ = RebuildAscendLifetimeContract(source_function);
+      Record stored = Downcast<Record>(manifest["lifetime_contract"]);
+      ICHECK_EQ(StaticInteger(stored.at("schema_version"), "lifetime schema"),
+                1)
+          << "Unsupported source lifetime contract version";
+      CheckLifetimeCatalog(
+          Downcast<Record>(stored.at("storage_catalog")),
+          Downcast<Record>(lifetime_contract_.at("storage_catalog")));
+      source_graph = Downcast<Record>(lifetime_contract_["source_graph"]);
+      source_function =
+          Downcast<PrimFunc>(lifetime_contract_["source_function"]);
+    }
+    if (versions_enabled_)
+      LoadVersionRemaps(source_graph);
+    Array<ObjectRef> units = Downcast<Array<ObjectRef>>(source_graph["tasks"]);
+    if (lifetimes_enabled_) {
+      for (const ObjectRef &item :
+           Downcast<Array<ObjectRef>>(lifetime_contract_["cases"])) {
+        Record selection = Downcast<Record>(item);
+        LaunchCase launch;
+        for (const auto &entry : Downcast<Record>(selection["launches"])) {
+          Record domain = Downcast<Record>(entry.second);
+          launch[entry.first] = {
+              StaticInteger(domain["coordinate"], "launch coordinate"),
+              StaticInteger(domain["extent"], "launch extent")};
+        }
+        CheckCase(source_function, units, launch, selection);
+      }
+      return;
+    }
     std::vector<LaunchCase> cases{{}};
     if (versions_enabled_) {
       std::map<std::string, int64_t> domains;
@@ -398,15 +466,116 @@ public:
   }
 
 private:
+  bool LifetimeMetadataEqual(const ObjectRef &left, const ObjectRef &right) {
+    if (left.as<VarNode>() || right.as<VarNode>())
+      return left.as<VarNode>() && right.as<VarNode>() && left.same_as(right);
+    if (left.as<PrimExprNode>() && right.as<PrimExprNode>()) {
+      PrimExpr a = Downcast<PrimExpr>(left), b = Downcast<PrimExpr>(right);
+      if ((a.dtype().is_int() || a.dtype().is_uint()) &&
+          (b.dtype().is_int() || b.dtype().is_uint())) {
+        if (a.dtype().lanes() != 1 || b.dtype().lanes() != 1 ||
+            (a.dtype().is_uint() && a.dtype().bits() >= 64) ||
+            (b.dtype().is_uint() && b.dtype().bits() >= 64))
+          return false;
+        return Equal(cast(DataType::Int(64), a), cast(DataType::Int(64), b));
+      }
+    }
+    if (left.as<runtime::ArrayNode>() && right.as<runtime::ArrayNode>()) {
+      auto a = Downcast<Array<ObjectRef>>(left),
+           b = Downcast<Array<ObjectRef>>(right);
+      if (a.size() != b.size())
+        return false;
+      for (size_t i = 0; i < a.size(); ++i)
+        if (!LifetimeMetadataEqual(a[i], b[i]))
+          return false;
+      return true;
+    }
+    return StructuralEqual()(left, right);
+  }
+  void CheckLifetimeCatalog(const Record &stored, const Record &rebuilt) {
+    ICHECK_EQ(StaticInteger(stored.at("schema_version"), "catalog schema"), 1)
+        << "Unsupported lifetime catalog version";
+    auto compare = [&](const char *section,
+                       const std::vector<const char *> &fields) {
+      auto left = Downcast<Array<ObjectRef>>(stored.at(section)),
+           right = Downcast<Array<ObjectRef>>(rebuilt.at(section));
+      ICHECK_EQ(left.size(), right.size())
+          << "Lifetime catalog owner/view count differs from source";
+      std::vector<bool> matched(right.size(), false);
+      for (const ObjectRef &object : left) {
+        Record a = Downcast<Record>(object);
+        bool found = false;
+        for (size_t i = 0; i < right.size() && !found; ++i) {
+          if (matched[i])
+            continue;
+          Record b = Downcast<Record>(right[i]);
+          bool same = true;
+          for (const char *field : fields) {
+            if (a.count(field) != b.count(field) ||
+                (a.count(field) &&
+                 !LifetimeMetadataEqual(a.at(field), b.at(field)))) {
+              same = false;
+              break;
+            }
+          }
+          if (same) {
+            found = true;
+            matched[i] = true;
+          }
+        }
+        ICHECK(found) << "Lifetime catalog owner/storage/view metadata differs "
+                         "from source";
+      }
+    };
+    compare("storages", {"id", "data", "source_data", "scope", "capacity_bytes",
+                         "physical_allocation", "allocation_site_id",
+                         "parent_loop_ids", "origin", "explicit_address"});
+    compare("aliases",
+            {"data", "root", "storage_id", "byte_offset", "kind",
+             "binding_site_id", "parent_loop_ids", "parent_loop_vars"});
+    compare("views", {"storage_id", "data", "dtype", "shape", "strides",
+                      "elem_offset", "byte_begin", "byte_end"});
+  }
   void CheckCase(const PrimFunc &source_function, const Array<ObjectRef> &units,
-                 const LaunchCase &launch) {
-    TraceBuilder source(source_function, units, true, launch,
-                        versions_enabled_);
-    TraceBuilder final(function_, units, false, launch, versions_enabled_);
+                 const LaunchCase &launch, Record lifetime_case = {}) {
+    Map<Var, PrimExpr> source_scalars, final_scalars;
+    if (lifetimes_enabled_) {
+      source_scalars =
+          Downcast<Map<Var, PrimExpr>>(lifetime_case["bool_bindings"]);
+      ICHECK_EQ(source_function->params.size(), function_->params.size())
+          << "Lifetime parameter ABI changed";
+      for (size_t i = 0; i < source_function->params.size(); ++i) {
+        Var parameter = source_function->params[i];
+        if (!source_scalars.count(parameter))
+          continue;
+        ICHECK(function_->params[i].dtype().is_bool())
+            << "Lifetime boolean parameter ABI changed";
+        final_scalars.Set(function_->params[i], source_scalars[parameter]);
+      }
+    }
+    TraceBuilder source(source_function, units, true, launch, versions_enabled_,
+                        source_scalars, lifetimes_enabled_);
+    TraceBuilder final(function_, units, false, launch, versions_enabled_,
+                       final_scalars, lifetimes_enabled_);
     Record original_graph = source.Analyze();
     Record final_graph = final.Analyze();
     auto original = Instances(original_graph, false);
     auto actual = Instances(final_graph, true);
+    if (lifetimes_enabled_) {
+      for (const Instance &task : actual)
+        for (const Effect &read : task.reads)
+          for (const Effect &write : task.writes) {
+            if (read.scope != "shared.ub" || write.scope != "shared.ub")
+              continue;
+            ICHECK(
+                !Overlap(read, write, true, false) ||
+                (Equal(read.physical_begin.value(),
+                       write.physical_begin.value()) &&
+                 Equal(read.physical_end.value(), write.physical_end.value())))
+                << "Unsupported same-task shifted/partial physical read-write "
+                   "overlap";
+          }
+    }
     if (versions_enabled_)
       CheckActualVersionAllocations(final_graph, actual);
     ICHECK_EQ(original.size(), actual.size())
@@ -440,7 +609,10 @@ private:
           requirements[j].insert(i);
       }
     }
-    if (versions_enabled_)
+    if (lifetimes_enabled_)
+      CheckLifetimeReaders(original, actual, source.keys, correspondence,
+                           lifetime_case, &requirements);
+    else if (versions_enabled_)
       CheckReachingWriters(original, actual, source.keys, correspondence,
                            &requirements);
     CheckEvents(final.events, actual, requirements);
@@ -576,6 +748,127 @@ private:
       if (remap.versions > 1 && remap.logical.same_as(effect.data))
         return true;
     return false;
+  }
+  Key LifetimeKey(const ObjectRef &object) {
+    Key result;
+    for (Integer value : Downcast<Array<Integer>>(object))
+      result.push_back(value->value);
+    return result;
+  }
+  void CheckLifetimeReaders(const std::vector<Instance> &source,
+                            const std::vector<Instance> &final,
+                            const std::vector<Key> &keys,
+                            const std::vector<int> &correspondence,
+                            const Record &selection,
+                            std::vector<std::set<int>> *requirements) {
+    std::map<Key, int> source_ids;
+    for (size_t i = 0; i < keys.size(); ++i)
+      ICHECK(source_ids.emplace(keys[i], i).second)
+          << "Duplicate lifetime source task";
+    auto expected_keys = Downcast<Array<ObjectRef>>(selection.at("task_keys"));
+    ICHECK_EQ(expected_keys.size(), keys.size())
+        << "Rebuilt lifetime task coverage changed";
+    for (size_t i = 0; i < keys.size(); ++i)
+      ICHECK(LifetimeKey(expected_keys[i]) == keys[i])
+          << "Rebuilt lifetime task identity changed";
+    auto storages = Downcast<Array<ObjectRef>>(
+        Downcast<Record>(lifetime_contract_.at("storage_catalog"))
+            .at("storages"));
+    for (const ObjectRef &object :
+         Downcast<Array<ObjectRef>>(selection.at("reads"))) {
+      Record record = Downcast<Record>(object);
+      Key consumer_key = LifetimeKey(record.at("consumer_key"));
+      auto consumer = source_ids.find(consumer_key);
+      ICHECK(consumer != source_ids.end()) << "Missing lifetime consumer";
+      int source_consumer = consumer->second,
+          final_consumer = correspondence[source_consumer];
+      int64_t operand = StaticInteger(record.at("read_index"), "read index");
+      ICHECK(operand >= 0 &&
+             size_t(operand) < source[source_consumer].reads.size())
+          << "Invalid lifetime read operand";
+      const Effect &logical_read = source[source_consumer].reads[operand];
+      const Effect &physical_read = final[final_consumer].reads[operand];
+      ICHECK_EQ(physical_read.scope, "shared.ub")
+          << "Internal GM workspace lifetime materialization is unsupported";
+      int64_t storage = StaticInteger(record.at("storage_id"), "storage id");
+      ICHECK(storage >= 0 && size_t(storage) < storages.size());
+      Record allocation = Downcast<Record>(storages[storage]);
+      ICHECK(
+          Downcast<Var>(allocation.at("data")).same_as(logical_read.data) &&
+          Equal(logical_read.begin, Downcast<PrimExpr>(record.at("begin"))) &&
+          Equal(logical_read.end, Downcast<PrimExpr>(record.at("end"))))
+          << "Lifetime logical read footprint changed";
+      int64_t logical_begin = StaticInteger(
+          analyzer_.Simplify(logical_read.begin), "logical read begin");
+      int64_t physical_begin = StaticInteger(
+          analyzer_.Simplify(physical_read.physical_begin.value()),
+          "physical read begin");
+      for (const ObjectRef &item :
+           Downcast<Array<ObjectRef>>(record.at("segments"))) {
+        Record segment = Downcast<Record>(item);
+        auto producer =
+            source_ids.find(LifetimeKey(segment.at("producer_key")));
+        ICHECK(producer != source_ids.end()) << "Missing lifetime producer";
+        int source_producer = producer->second,
+            final_producer = correspondence[source_producer];
+        int64_t write_index =
+            StaticInteger(segment.at("write_index"), "write index");
+        ICHECK(write_index >= 0 &&
+               size_t(write_index) < source[source_producer].writes.size())
+            << "Invalid lifetime producer operand";
+        const Effect &logical_write =
+            source[source_producer].writes[write_index];
+        int64_t begin = StaticInteger(segment.at("begin"), "segment begin"),
+                end = StaticInteger(segment.at("end"), "segment end");
+        ICHECK(begin < end && logical_write.data.same_as(logical_read.data) &&
+               analyzer_.CanProve(logical_write.begin <= Integer(begin) &&
+                                  Integer(end) <= logical_write.end &&
+                                  logical_read.begin <= Integer(begin) &&
+                                  Integer(end) <= logical_read.end))
+            << "Invalid complete lifetime read definition";
+        (*requirements)[final_consumer].insert(final_producer);
+        // Inspect the nearest writer separately for every byte segment. A
+        // completed write from another logical owner still changes the value.
+        std::vector<std::pair<int64_t, int64_t>> missing{
+            {physical_begin + begin - logical_begin,
+             physical_begin + end - logical_begin}};
+        for (int previous = final_consumer - 1;
+             previous >= 0 && !missing.empty(); --previous) {
+          for (size_t index = 0; index < final[previous].writes.size();
+               ++index) {
+            const Effect &write = final[previous].writes[index];
+            if (write.scope != "shared.ub")
+              continue;
+            int64_t write_begin = StaticInteger(
+                        analyzer_.Simplify(write.physical_begin.value()),
+                        "physical writer begin"),
+                    write_end = StaticInteger(
+                        analyzer_.Simplify(write.physical_end.value()),
+                        "physical writer end");
+            std::vector<std::pair<int64_t, int64_t>> remaining;
+            for (auto interval : missing) {
+              int64_t left = std::max(interval.first, write_begin),
+                      right = std::min(interval.second, write_end);
+              if (left >= right) {
+                remaining.push_back(interval);
+                continue;
+              }
+              ICHECK(previous == final_producer &&
+                     int64_t(index) == write_index)
+                  << "Lifetime read observes the wrong reaching writer or "
+                     "overwritten physical owner";
+              if (interval.first < left)
+                remaining.push_back({interval.first, left});
+              if (right < interval.second)
+                remaining.push_back({right, interval.second});
+            }
+            missing = std::move(remaining);
+          }
+        }
+        ICHECK(missing.empty())
+            << "Lifetime read has no initialized physical producer";
+      }
+    }
   }
   void CheckReachingWriters(const std::vector<Instance> &source,
                             const std::vector<Instance> &final,
@@ -847,6 +1140,8 @@ private:
   PrimFunc function_;
   arith::Analyzer analyzer_;
   bool versions_enabled_{false};
+  bool lifetimes_enabled_{false};
+  Record lifetime_contract_;
   std::vector<VersionRemap> remaps_;
 };
 } // namespace

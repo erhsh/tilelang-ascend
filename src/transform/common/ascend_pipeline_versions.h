@@ -136,6 +136,49 @@ ComputeLegacyPipelineBufferVersions(const Buffer &buffer,
   return num_versions;
 }
 
+// The constraint bridge treats all dtype/offset views of a data Var as one
+// physical storage. Legacy Buffer-identity liveness remains unchanged.
+inline int
+ComputeAscendStoragePipelineVersions(const Var &data,
+                                     const PipelineInfo &pipeline_info) {
+  int first = -1, last = -1;
+  for (const auto &entry : pipeline_info) {
+    for (const BufferRegion &write : entry.first->writes)
+      if (write->buffer->data.same_as(data))
+        first = first < 0 ? entry.second.stage
+                          : std::min(first, entry.second.stage);
+    for (const BufferRegion &read : entry.first->reads)
+      if (read->buffer->data.same_as(data))
+        last = std::max(last, entry.second.stage);
+  }
+  if (first < 0)
+    return 1;
+  int versions = std::max(1, last - first + 1);
+  if (versions >= 2) {
+    bool conflict = false;
+    for (const auto &writer : pipeline_info)
+      for (const BufferRegion &write : writer.first->writes) {
+        if (!write->buffer->data.same_as(data))
+          continue;
+        for (const auto &reader : pipeline_info)
+          for (const BufferRegion &read : reader.first->reads) {
+            if (!read->buffer->data.same_as(data) ||
+                writer.second.order >= reader.second.order ||
+                writer.second.stage >= reader.second.stage)
+              continue;
+            // Different views may use different ranks, offsets and units. They
+            // conservatively overlap unless they are literally the same view.
+            conflict |=
+                !write->buffer.same_as(read->buffer) ||
+                LegacyPipelineRegionsMayConflict(write->region, read->region);
+          }
+      }
+    if (!conflict)
+      --versions;
+  }
+  return versions;
+}
+
 inline Buffer RewriteLegacyPipelineBuffer(const Buffer &buffer,
                                           int num_versions) {
   ObjectPtr<BufferNode> new_buffer = make_object<BufferNode>(*(buffer.get()));

@@ -1,6 +1,7 @@
 // Copyright (c) Tile-AI Corporation.
 // Licensed under the MIT License.
 
+#include "common/ascend_storage_alias.h"
 #include <limits>
 #include <tvm/arith/analyzer.h>
 #include <tvm/runtime/registry.h>
@@ -578,8 +579,9 @@ private:
     ICHECK(registered != storage_ids_.end())
         << "Unregistered schedule storage/raw pointer";
     int storage = registered->second;
-    PrimExpr start = Index(pointer->args[2]) * Integer(bytes);
-    PrimExpr extent = Index(count) * Integer(bytes);
+    PrimExpr start =
+        CheckedAscendStorageByteOffset(Index(pointer->args[2]), bytes);
+    PrimExpr extent = CheckedAscendStorageByteOffset(Index(count), bytes);
     PrimExpr declared = Index(pointer->args[3]);
     ICHECK(!analyzer_.CanProve(start < 0))
         << "Unsupported negative schedule access";
@@ -588,7 +590,7 @@ private:
         << "Schedule access exceeds declared pointer extent";
     ICHECK(analyzer_.CanProve(floormod(start, Integer(32)) == 0))
         << "Unsupported unaligned schedule access";
-    PrimExpr end = Index(start + extent);
+    PrimExpr end = Index(AddAscendStorageByteOffsets(start, extent));
     bool bounded = analyzer_.CanProve(Index(count) >= 0 &&
                                       Index(count) <= declared && start >= 0);
     const Storage &allocation = storages_[storage];
@@ -641,8 +643,11 @@ private:
       const auto *size = count.as<IntImmNode>();
       ICHECK(size && size->value > 0 &&
              analyzer_.CanProve(Index(call->args[4]) == 1) &&
-             analyzer_.CanProve(count == Index(call->args[load ? 7 : 6])))
+             analyzer_.CanProve(count <= Index(call->args[load ? 7 : 6])))
           << "Unsupported dynamic DMA padding or partial tile";
+      // The trailing shape is view metadata, not the emitted helper template.
+      // A full aligned subview tile may be smaller; the exact template check
+      // below still excludes padding/compound helpers and hidden PIPE effects.
       auto *pointer = call->args[1].as<CallNode>();
       ICHECK(pointer && pointer->args.size() == 5)
           << "Malformed schedule DMA pointer";
@@ -788,6 +793,19 @@ private:
 };
 
 } // namespace
+
+PrimExpr PromoteAscendStorageIndex(PrimExpr expression,
+                                   Map<tir::Var, Range> proof_domains) {
+  DataType dtype = expression.dtype();
+  ICHECK(dtype.is_scalar() && !dtype.is_bool() &&
+         ((dtype.is_int() && dtype.bits() <= 64) ||
+          (dtype.is_uint() && dtype.bits() < 64)))
+      << "Unsupported S6 pointer integer index";
+  ScheduleIndexPromoter promoter(proof_domains);
+  PrimExpr result = promoter(expression);
+  ICHECK(result.dtype() == DataType::Int(64)) << "S6 index must remain int64";
+  return result;
+}
 
 Map<String, ObjectRef> AnalyzeAscendSchedule(tir::PrimFunc function,
                                              String platform) {

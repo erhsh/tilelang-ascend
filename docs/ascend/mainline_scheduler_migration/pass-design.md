@@ -10,6 +10,7 @@
 S3 的循环与标记实现边界见第 13 节。
 S4 的约束桥接与最终同步验证合同见第 14 节，实际验证状态以迁移计划为准。
 S5 的多 stage/版本与成本模型合同见第 15 节。
+S6 的 storage/view owner 与完整生命周期 bridge 合同见第 16 节。
 
 用户已明确当前及后续只要求 A3 测试和验收。本文的 A2/A3 目标范围保留既有后端
 兼容性，不要求新增 A2 专属测试，也不把 A2 历史未运行当作步骤验收缺口。
@@ -977,3 +978,115 @@ group 空洞与末 wave overshoot；正流水改用纯 If-noelse，不把 loop_b
 s5_run_persistent_pipeline_npu.py。分别保存实际版本/容量/事件/配置故障注入、
 0/1/N/短 trip 与 1/2/3 物理版本、静态短尾、guarded 单/多 wave、重复调用和同条件
 msprof 性能记录。最终新构建 manifest、实际结果与剩余边界记录在迁移计划，未验证不记 PASS。
+
+## 16. S6：alias-aware owner 与完整 epoch 证明
+
+### 16.1 职责与接入位置
+
+本步继续使用一次旧 injector 和一套旧同步生成器。增加 storage/view 规范化与完整
+readiness/reuse 证明，不引入 S7 事件生成器，legacy 默认行为保持。
+
+新增 `AscendCanonicalizeStorageAliases()` 是 constraint-only 的幂等变换，设置两个
+检查点：LowerAndLegalize 最首、hint syntax/TileOp 降低之前；OptimizeForTarget 策略
+校验后、AscendLowerScheduleHints 之前。前者保留并统一输入 alias，后者收拢 lowering
+产生的形式并维护 shape 元数据；校验通过且无需任何规范化变化时返回原 PrimFunc
+identity。所有地址、buffer 和 pointer 改写位于 MemoryPlanning 前，不增加规划/注入次数。
+
+PipelinePlanning 内先构造 canonical effects/owner catalog，再调用
+`BuildAscendLifetimeContract(marked_source, canonical_graph, canonical_catalog)`，
+在求解和注入前证明源程序的完整定义关系。现有最终 AscendVerifyConstraintSync 位置
+保持：最后同步相关 Simplify 后、ResourceScopeVerify 前；新增 schema3 物理 owner/
+epoch 检查并复用事件 completion closure。Selection/MaskLegalize 尾部边界保持。
+
+两个显式只读接口采用旧 FFI，不调用 solver、不修改输入 IR：
+
+- `AnalyzeAscendStorageOwners(PrimFunc, platform="A3") -> Map`：storage、allocation site、
+  view、pointer alias、字节偏移与物理元数据。
+- `AnalyzeAscendLifetimes(PrimFunc, platform="A3") -> Map`：实际控制路径的 activation、
+  producer 区间、readiness 和 reuse 期望。
+
+constraint 缓存身份加入内部固定的 schema3 编译合同 ABI，不能由 pass_configs 覆盖。
+现有 key 的 git HEAD 不区分同 HEAD 下的 dirty C++ 升级，必须隔离旧 schema2 的
+memory/disk 产物，避免绕过新 readiness；legacy key 不添加该字段，字节身份保持。
+
+### 16.2 Canonical storage 与 view
+
+本节 owner 指 allocation/版本的生命周期归属；操作的 C/V/PIPE 归属仍复用既有资源分类。
+storage 以 allocation/data Var 身份及已证明别名关系归并；名称不证明相同或独立。
+catalog 的 storage id 对齐 canonical graph.storage_id，保存 canonical data、
+source_data、physical capacity、allocation_site_id 与 allocation 的 parent_loop_ids。
+alias 项另记 source aliasVar、storage_id、int64 byte-offset Expr 及 binding scope。
+每个 view 保留 dtype、shape、stride、elem_offset 和相对 storage 的字节范围。
+
+已知纯 Let 的 dataVar/access_ptr 别名规范化为 root dataVar 加一次字节偏移；消费
+位置按 pointer dtype 换算元素偏移。unknown/opaque escape、不整除offset、越界或
+无法证明的范围拒绝。Block、BufferMap、alloc_buffers、match_buffer 及元数据 keys
+随实际改写更新。同名异 Var 仍为不同 owner；必要时为旧 name-based 消费器生成唯一
+内部 root 名称，保留 source_data 身份，不以字符串替代别名证明。
+
+多版本按 canonical dataVar 确定统一 N 和 byte pitch。所有 dtype/offset view、raw
+pointer、BufferLoad/Store、Allocate 和 remap 使用同一物理步长；容量包含 owner 的
+完整 footprint、对齐和 padding。最终核对 actual N、selector、pitch 和真实分配。
+本步不新增精确 placement 的公开 API；既有 annotate_address 保留字节 hint 与向上
+32B 对齐的 legacy 语义，允许已证明生命周期不重叠的存储复用。最终 address_map/
+size_map 的物理重叠必须进入 producer/reuse 校验，actual N×pitch 完整进入地址预算。
+
+### 16.3 源程序的完整定义证明
+
+不能直接迁入上游 storage-granular write-first/AssumeForExecutes 启发式：部分区域
+写入不代表完整 read 已定义，zero/skipped 循环不产生 producer。
+
+- Task instance：launch/core/vid、布尔 case、unit ID、全部祖先 loop ID/iteration。
+- Storage activation：同一 case、allocation site、该 allocation 的词法祖先迭代。
+
+source walker 只解释已审计控制和分配，effects 复用 canonical S2 adapter。
+`MarkAscendScheduleSource(PrimFunc, graph)` 复用原 StableTaskMarker 的稳定ID算法，
+供 planner 与显式分析接口使用。每个 activation 维护 byte segment→source producer。
+task 先检查所有 reads，再应用 writes；in-place 不能用本次写入补齐自己的输入。
+read 全范围必须有定义且无 hole；N1 可由多次部分写的 union 完整覆盖。
+原 AST 的整数运算在 folding/substitution 前逐步检查 int64 可表示性，原 int32 内部
+索引算术仍按既有 int64 提升；显式缩位必须可表示，不能用回绕后的常量证明范围。
+同一 task 的实际 R/W 区间只接受完全同址或不相交；非同址的部分重叠不按单次调用
+就假定 overlap-safe，多 repeat helper 的内部覆盖顺序尚无该保证。此项同时检查 source
+alias 与最终物理 alias，不限制不同 task 的已证明 partial-write union。
+
+外层 allocation 的 N1 状态跨 inner/连续循环保留；体内 allocation 每次 entry
+重新为 unknown，不能借上一 activation。支持完整初始化后的 readonly UB 和 N1
+carry。private N>1 仍要求 owner 内完整定义且无 carry，不自动多版本化 carry。
+
+有界解释保持每 trace 4096 任务、65536 control visits、4096 launch/case 上限。
+支持静态 guard、zero/one/N、nested/连续 serial loop；nested positive pipeline拒绝。
+有限 bool scalar 仅用于 predicate 时穷举所有组合并计入 case 预算；不开放未界定
+索引、数据相关条件、一般动态整数循环或 while，不推导其设备 ABI 已验收。
+
+### 16.4 最终物理 epoch 与 completion
+
+schema3 manifest 增加 lifetime_contract，保留 source、canonical owner/view 与完整
+实例身份。最终重新构造 source producer，不信任单独的 PASS 标记或旧缓存结论。
+历史 schema1/2 直接协议验证保留原合同；legacy 不自动新增初始化拒绝。
+
+最终实际访问映射到 MemoryPlanning 后的 physical storage、byte range 和 slot。
+每个 read segment 的最近物理 writer 必须对应期望 source producer；不同逻辑
+storage 不能因错误物理重叠覆盖仍需读取的值，即使同步配对正确也须拒绝。
+producer 完成、所有 consumer/readers 完成、下一次写入和退出 drain，分别由实际
+PIPE 顺序、barrier 或 set/wait completion closure 证明。scope 退出不是 barrier，
+不能借后次迭代 handoff 补前次缺失；guard/zero 路径不得制造无来源 wait。
+mask 合同继续保持每个 Vector 域一份状态。
+退出 drain 的静态检查指未消费事件 token 必须为空；不把它扩称为额外证明每个无后继
+末尾调用均已硬件完成。kernel 返回与 host 可见性沿既有 AscendC/runtime 合同验证。
+
+### 16.5 验证与交付
+
+先实现最小初始化正负冒烟，再覆盖 alias、guard、activation 与真实物理故障注入。
+统一重建并核验 source/库 manifest 后才运行正式 native/device：
+
+- s6_check_owner_ir.py：同 data 多 view、同名异 Var、offset/dtype/raw pointer、
+  actual version/pitch/Allocate/address/size/remap；错误 owner 与陈旧元数据拒绝。
+- s6_check_lifecycle_guards.py：完整初始化、partial union/hole、read-before-write、
+  readonly/N1 carry、guard/zero、nested/连续 activation、缺 completion/退出 token。
+- s6_run_reuse_npu.py：沿已有 Vector fixture，合法新路径与 legacy 尽量配对；同 kernel
+  重复运行，每轮确定性改变 scratch/input/tile 标签，检查 golden、未触及 canary、
+  实际 owner/epoch/remap/Allocate。非法状态仅 native 注入，不发设备。
+
+仅 A3 验收，不重校准 S5 成本或新增性能门槛。结果与边界记入迁移计划，提交推送后
+等待审核，不启动 S7。

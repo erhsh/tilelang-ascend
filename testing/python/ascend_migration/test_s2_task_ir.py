@@ -296,7 +296,10 @@ def test_partial_or_dynamic_dma_padding_is_rejected(valid):
     source = _buffer("source", "global")
     a = _buffer("a")
     n = tir.Var("n", "int32")
-    with pytest.raises(tvm.TVMError, match="Unsupported dynamic DMA padding"):
+    with pytest.raises(
+        tvm.TVMError,
+        match="Unsupported dynamic DMA padding|Unsupported schedule DMA template/physical footprint",
+    ):
         _analyze(
             _function(
                 [source, a],

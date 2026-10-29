@@ -311,13 +311,16 @@ def test_allocate_dimensions_are_checked_before_capacity_can_wrap():
         _plan(tvm.IRModule.from_expr(function.with_body(body)))
 
 
-def test_explicit_placement_is_outside_the_first_constraint_slice():
+def test_explicit_placement_hint_is_preserved_by_constraint_planning():
     module = _fills()
     function = module["main"]
     data = function.body.body.body.block.alloc_buffers[0].data
     function = function.with_attr("address_map", {data: tir.IntImm("int64", 0)})
-    with pytest.raises(tvm.TVMError, match="explicit address placement"):
-        _plan(tvm.IRModule.from_expr(function))
+    planned = _plan(tvm.IRModule.from_expr(function))
+    assert int(planned["main"].attrs["address_map"][data]) == 0
+    invalid = function.with_attr("address_map", {data: tir.IntImm("int64", 196352)})
+    with pytest.raises(tvm.TVMError, match="explicit address.*UB capacity"):
+        _plan(tvm.IRModule.from_expr(invalid))
 
 
 @pytest.mark.parametrize(

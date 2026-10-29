@@ -80,6 +80,17 @@ def AscendPrepareConstraintPipeline(target: tvm.target.Target):
     return _ffi_api.AscendPrepareConstraintPipeline(target)  # type: ignore
 
 
+def AscendCanonicalizeStorageAliases():
+    """Normalize known storage/view aliases before constraint analysis and memory planning.
+
+    The constraint pipeline calls this idempotent pass before hint and operation
+    lowering, then again before late hint consumption. The pass operates only
+    in a constraint context; legacy returns the input function unchanged.
+    Unknown pointer origins and unprovable view offsets are diagnosed.
+    """
+    return _ffi_api.AscendCanonicalizeStorageAliases()  # type: ignore
+
+
 def AscendVerifyConstraintSync(target: tvm.target.Target, platform: str):
     """Verify final constraint-mode task identities, dependencies and event lifetimes."""
     return _ffi_api.AscendVerifyConstraintSync(target, platform)  # type: ignore
@@ -91,7 +102,7 @@ def AscendValidateScheduleHints():
 
 
 def AscendLowerScheduleHints(target: tvm.target.Target, platform: str):
-    """Audit single-call A3 task effects, then consume serial stage-zero hints."""
+    """Audit supported A3 Task effects, then consume validated Task/Stage hints."""
     return _ffi_api.AscendLowerScheduleHints(target, platform)  # type: ignore
 
 
@@ -103,6 +114,26 @@ def AnalyzeAscendSchedule(func: tvm.tir.PrimFunc, platform: str = "A3") -> tvm.i
     Unsupported effects are diagnosed only by this explicit analysis entrypoint.
     """
     return _ffi_api.AnalyzeAscendSchedule(func, platform)  # type: ignore
+
+
+def AnalyzeAscendStorageOwners(func: tvm.tir.PrimFunc, platform: str = "A3") -> tvm.ir.Map:
+    """Inspect canonical storage identity, views and known pointer aliases without rewriting IR.
+
+    Storage identity follows data Vars and proven alias bindings. The report
+    retains typed legacy TVM objects and byte offsets, rather than treating
+    buffer names or different dtype views as independent allocations.
+    """
+    return _ffi_api.AnalyzeAscendStorageOwners(func, platform)  # type: ignore
+
+
+def AnalyzeAscendLifetimes(func: tvm.tir.PrimFunc, platform: str = "A3") -> tvm.ir.Map:
+    """Prove complete source read definitions on bounded control paths without changing IR.
+
+    The report records allocation activations and byte-segment producers;
+    skipped or zero-trip writes provide no initialization. This explicit
+    analysis does not schedule operations or generate synchronization.
+    """
+    return _ffi_api.AnalyzeAscendLifetimes(func, platform)  # type: ignore
 
 
 def LayoutInference():

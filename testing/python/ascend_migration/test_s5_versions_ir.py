@@ -333,7 +333,7 @@ def test_prepare_keeps_zero_and_one_trip_request_facts():
             facts = prepared["main"].attrs["tl.ascend_s5_degenerate_candidates"]
             assert len(facts) == 1 and int(facts[0]["extent"]) == trip
             planned = tilelang.transform.PipelinePlanning()(prepared)
-        assert int(planned["main"].attrs["tl.ascend_s4_manifest"]["schema_version"]) == 2
+        assert int(planned["main"].attrs["tl.ascend_s4_manifest"]["schema_version"]) == 3
 
 
 @pytest.mark.parametrize("bound", [1, 2, 3])
@@ -383,7 +383,10 @@ def test_static_expansion_product_is_rejected_before_solver_and_injection():
         )
 
     body = tir.stmt_functor.ir_transform(function.body, None, trip, ["tir.For"])
-    with pytest.raises(tvm.TVMError, match="requested staging window exceeds"):
+    with pytest.raises(
+        tvm.TVMError,
+        match="requested staging window exceeds|Lifetime hardware-task instance limit exceeded",
+    ):
         _plan(tvm.IRModule.from_expr(function.with_body(body)), configs())
 
 
@@ -399,9 +402,36 @@ def test_shared_kernel_complete_lowering_includes_final_sync_and_mask_proofs(tri
     assert "auto main" in result.kernel_source or "void main" in result.kernel_source
 
 
-def test_versioned_partial_region_is_rejected_before_injection():
-    with pytest.raises(tvm.TVMError, match="fixed whole logical region"):
-        _plan(_fills(stages=2, allocation_shape=(128,)), configs())
+def test_partial_write_without_undefined_reads_is_safe_to_plan():
+    planned = _plan(_fills(stages=2, allocation_shape=(128,)), configs())
+    assert int(planned["main"].attrs["tl.ascend_s4_manifest"]["schema_version"]) == 3
+
+
+def test_partial_initialization_cannot_define_a_complete_read():
+    from test_s2_task_ir import _add
+
+    module = _fills(stages=2, allocation_shape=(128,))
+    function = module["main"]
+    block = _loops(function)[0].body.block
+    statements = list(block.body.seq) + [
+        _add(block.alloc_buffers[1], block.alloc_buffers[0], block.alloc_buffers[0], count=128)
+    ]
+    replacement = tir.Block(
+        block.iter_vars,
+        block.reads,
+        block.writes,
+        block.name_hint,
+        tir.SeqStmt(statements),
+        alloc_buffers=block.alloc_buffers,
+    )
+    body = tir.stmt_functor.ir_transform(
+        function.body,
+        None,
+        lambda node: tir.BlockRealize([], True, replacement),
+        ["tir.BlockRealize"],
+    )
+    with pytest.raises(tvm.TVMError, match="read.*defin|uninitialized|undefined|readiness"):
+        _plan(tvm.IRModule.from_expr(function.with_body(body)), configs())
 
 
 def test_versioned_read_before_write_is_rejected_before_injection():
@@ -420,7 +450,7 @@ def test_versioned_read_before_write_is_rejected_before_injection():
         return _add(buffers[0], buffers[0], buffers[1])
 
     body = tir.stmt_functor.ir_transform(function.body, None, read_first, ["tir.Evaluate"])
-    with pytest.raises(tvm.TVMError, match="loop-carried/read-before-write"):
+    with pytest.raises(tvm.TVMError, match="read.*defin|uninitialized|undefined|readiness"):
         _plan(tvm.IRModule.from_expr(function.with_body(body)), configs())
 
 

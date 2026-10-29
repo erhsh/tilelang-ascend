@@ -69,7 +69,8 @@ static void ValidateLoopAnnotations(const Map<String, ObjectRef> &annotations,
            key != "tl_cross_interval" && key != "tl.ascend_task" &&
            key != "tl.ascend_stage" && key != "enable_offset" &&
            key != "parallel_loop_layout" &&
-           key.rfind("software_pipeline_", 0) != 0)
+           key.rfind("software_pipeline_", 0) != 0 &&
+           key.rfind("tl.ascend_s6_", 0) != 0)
         << "Loop annotation '" << key
         << "' is reserved; use its dedicated supported API";
   }

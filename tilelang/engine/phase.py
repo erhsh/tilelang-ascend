@@ -51,6 +51,7 @@ def LowerAndLegalize(mod: IRModule, target: Target) -> IRModule:
         tilelang.transform.get_pass_context().config.get("tl.ascend_pipeline_planner", "legacy")
     )
     if planner == "constraint":
+        mod = tilelang.transform.AscendCanonicalizeStorageAliases()(mod)
         mod = tilelang.transform.AscendPrepareConstraintPipeline(target)(mod)
     mod = tilelang.transform.AscendValidateScheduleHints()(mod)
     # Workspace sizing must see the same UB scopes as VidReduction.
@@ -107,6 +108,8 @@ def OptimizeForTarget(mod: IRModule, target: Target, platform: str) -> IRModule:
     planner = str(pass_ctx.config.get("tl.ascend_pipeline_planner", "legacy"))
     if planner not in {"legacy", "constraint"}:
         raise ValueError(f"Unknown Ascend pipeline planner strategy: {planner!r}")
+    if planner == "constraint":
+        mod = tilelang.transform.AscendCanonicalizeStorageAliases()(mod)
     mod = tilelang.transform.AscendLowerScheduleHints(target, platform)(mod)
     managed_vector_mask = target.model in {"ascendc", "auto"} and platform in {"A2", "A3"}
     mod = tir.transform.PlanAndUpdateBufferAllocationLocation()(mod)
