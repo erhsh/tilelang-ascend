@@ -1040,6 +1040,11 @@ public:
       return f;
     }
 
+    ICHECK(
+        ctx->GetConfig<String>("tl.ascend_pipeline_planner", String("legacy"))
+                .value() != "auto" &&
+        !f->GetAttr<ObjectRef>("tl.ascend_s8_schedule").defined())
+        << "The auto scheduler owns C/V dispatch; legacy CombineCV cannot run";
     PrimFuncNode *fptr = f.CopyOnWrite();
     fptr->body = ContextualResourceResolver()(fptr->body);
     // Reject opaque outer calls and conflicting explicit scopes before the

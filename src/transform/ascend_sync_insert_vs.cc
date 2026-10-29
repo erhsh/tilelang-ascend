@@ -52,6 +52,12 @@ public:
       return f;
     }
 
+    ICHECK(
+        ctx->GetConfig<String>("tl.ascend_pipeline_planner", String("legacy"))
+                .value() != "auto" &&
+        !f->GetAttr<ObjectRef>("tl.ascend_s8_schedule").defined())
+        << "The auto scheduler owns this kernel; legacy VS synchronization "
+           "cannot run";
     ICHECK(!f->GetAttr<ObjectRef>(kAscendS7LocalSync).defined())
         << "A3 local synchronization already owns this kernel; legacy "
            "generator cannot run twice";

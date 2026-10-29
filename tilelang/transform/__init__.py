@@ -45,6 +45,8 @@ def PipelinePlanning():
     the constraint strategy registers the optional numeric solver callback.
     """
     strategy = str(get_pass_context().config.get(PassConfigKey.TL_ASCEND_PIPELINE_PLANNER, "legacy"))
+    if strategy == "auto":
+        raise ValueError("The auto scheduler uses AscendAutoSchedule and AscendMaterializeSchedule")
     if strategy not in {"legacy", "constraint"}:
         raise ValueError(f"Unknown Ascend pipeline planner strategy: {strategy!r}")
     if strategy == "constraint":
@@ -53,6 +55,38 @@ def PipelinePlanning():
         _validate_constraint_cost_model()
         register_solver()
     return _ffi_api.PipelinePlanning()  # type: ignore
+
+
+def AscendPrepareAutoSchedule(target: Target):
+    """Preserve finite control and requested version facts before early simplification."""
+    return _ffi_api.AscendPrepareAutoSchedule(target)  # type: ignore
+
+
+def AscendAutoSchedule(target: Target, platform: str):
+    """Plan the audited finite A3 task DAG using abstract issue steps.
+
+    Optional solver registration is lazy and exclusive to the auto route.
+    This path does not consume the constraint planner's nanosecond profile.
+    """
+    from .ascend_schedule_solver_ffi import register_solver
+
+    register_solver()
+    return _ffi_api.AscendAutoSchedule(target, platform)  # type: ignore
+
+
+def AscendMaterializeSchedule(target: Target, platform: str):
+    """Emit finite task instances and owned UB/L1 versions without the legacy injector."""
+    return _ffi_api.AscendMaterializeSchedule(target, platform)  # type: ignore
+
+
+def AscendInsertScheduledSync(target: Target, platform: str):
+    """Generate sole-owner local fences and fixed-slot A3 GM handshakes after MP."""
+    return _ffi_api.AscendInsertScheduledSync(target, platform)  # type: ignore
+
+
+def AscendVerifyAutoSchedule(target: Target, platform: str):
+    """Independently verify source producers, physical versions and the final protocol."""
+    return _ffi_api.AscendVerifyAutoSchedule(target, platform)  # type: ignore
 
 
 def load_ascend_pipeline_cost_model(path, *, expected_identity=None):

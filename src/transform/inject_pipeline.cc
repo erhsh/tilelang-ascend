@@ -1019,6 +1019,12 @@ private:
 tir::transform::Pass InjectSoftwarePipeline() {
   using namespace tir::transform;
   auto pass_func = [=](PrimFunc f, IRModule m, PassContext ctx) {
+    ICHECK(
+        ctx->GetConfig<String>("tl.ascend_pipeline_planner", String("legacy"))
+                .value() != "auto" &&
+        !f->GetAttr<ObjectRef>("tl.ascend_s8_schedule").defined())
+        << "Auto schedule owns version materialization; old injector cannot "
+           "run";
     auto *fptr = f.CopyOnWrite();
     fptr->body = PipelineInjector::Inject(f);
     fptr->body = ConvertSSA(std::move(fptr->body));

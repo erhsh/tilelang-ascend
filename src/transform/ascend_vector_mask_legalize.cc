@@ -434,12 +434,32 @@ void ApplyMaskContract(const MaskContract &contract, MaskFacts *facts,
 // region; software-pipeline buffer versions do not version these registers.
 class MaskContractVerifier final : public StmtExprVisitor {
 public:
-  static void Verify(const PrimFunc &function) {
-    MaskContractVerifier verifier;
+  static void Verify(const PrimFunc &function, bool auto_schedule = false) {
+    MaskContractVerifier verifier(auto_schedule);
     verifier(function->body);
   }
 
 private:
+  explicit MaskContractVerifier(bool auto_schedule)
+      : auto_schedule_(auto_schedule) {}
+
+  bool IsAutoReduction(const SelectedCallView &selected) {
+    if (!auto_schedule_ ||
+        !selected.semantic_spec().base.same_as(ascend_reduce()))
+      return false;
+    ICHECK(selected.variant().selector == SelectorRecipe::kReduceFp32V2 &&
+           selected.vector_dtype() == DataType::Float(32))
+        << "Auto scheduling requires the audited fp32 row-reduce terminal";
+    const Array<PrimExpr> &args = selected.semantic_args();
+    ICHECK((args.size() == 5 || args.size() == 6) &&
+           args[4].dtype().is_bool() && is_one(args[4]))
+        << "Auto scheduling requires clear=true reduction with private scratch";
+    for (size_t i = 1; i <= 3; ++i)
+      ICHECK(VectorAccessPtrDtype(args[i]) == DataType::Float(32))
+          << "Auto reduction operands must be fp32 pointer views";
+    return true;
+  }
+
   void VisitStmt_(const AttrStmtNode *op) final {
     if (op->attr_key != "resource_scope") {
       StmtExprVisitor::VisitStmt_(op);
@@ -494,7 +514,8 @@ private:
     if (IsSelectedVectorTerminal(call)) {
       SelectedCallView selected(call);
       ICHECK(selected.semantic_spec().base.same_as(ascend_fill()) ||
-             selected.semantic_spec().base.same_as(ascend_add()))
+             selected.semantic_spec().base.same_as(ascend_add()) ||
+             IsAutoReduction(selected))
           << "Unsupported constraint managed mask terminal";
       MaskContract contract = ContractOf(call, &analyzer_);
       if (contract.mode.requirement == MaskRequirement::kExact) {
@@ -571,6 +592,7 @@ private:
   }
 
   int depth_{0};
+  const bool auto_schedule_;
   MaskFacts facts_;
   arith::Analyzer analyzer_;
 };
@@ -580,7 +602,8 @@ private:
 class AscendVectorMaskLegalizer final : public StmtExprMutator {
 public:
   static PrimFunc Rewrite(PrimFunc func, Target target, std::string platform,
-                          bool reuse_mask, bool verify_contract) {
+                          bool reuse_mask, bool verify_contract,
+                          bool auto_schedule = false) {
     if (!UseCompilerManagedVectorMask(target, platform)) {
       return func;
     }
@@ -588,7 +611,7 @@ public:
     PrimFuncNode *copy = func.CopyOnWrite();
     copy->body = legalizer.VisitStmt(func->body);
     if (verify_contract)
-      MaskContractVerifier::Verify(func);
+      MaskContractVerifier::Verify(func, auto_schedule);
     return func;
   }
 
@@ -861,11 +884,13 @@ tvm::transform::Pass AscendVectorMaskLegalize(Target target,
   auto pass_func = [=](PrimFunc func, IRModule, PassContext ctx) {
     bool reuse_mask =
         ctx->GetConfig<Bool>(ascendVectorMaskReuse, Bool(true)).value();
-    bool verify_contract =
+    String planner =
         ctx->GetConfig<String>(kAscendPipelinePlanner, String("legacy"))
-            .value() == "constraint";
+            .value();
+    bool verify_contract = planner == "constraint" || planner == "auto";
     return AscendVectorMaskLegalizer::Rewrite(std::move(func), target, platform,
-                                              reuse_mask, verify_contract);
+                                              reuse_mask, verify_contract,
+                                              planner == "auto");
   };
   return CreatePrimFuncPass(pass_func, 0, "tl.AscendVectorMaskLegalize", {});
 }
@@ -876,6 +901,12 @@ TVM_REGISTER_GLOBAL("tl.transform.AscendVectorMaskLegalize")
 TVM_REGISTER_GLOBAL("tl.transform._AscendVerifyManagedMaskContract")
     .set_body_typed([](PrimFunc function) {
       MaskContractVerifier::Verify(function);
+      return function;
+    });
+
+TVM_REGISTER_GLOBAL("tl.transform._AscendVerifyAutoMaskContract")
+    .set_body_typed([](PrimFunc function) {
+      MaskContractVerifier::Verify(function, true);
       return function;
     });
 

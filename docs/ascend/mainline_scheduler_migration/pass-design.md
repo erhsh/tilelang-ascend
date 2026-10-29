@@ -1212,3 +1212,93 @@ blocking，不改变目标kernel或任务规模。此验收证明start-gated同�
 不推导自然提交窗口或硬件执行时间重叠。精确安装版源码与真实单轮验证见计划S7记录。
 S5 成本模型复用，不新增性能调优或重校准，不执行 A2 测试。
 最终记录实际支持边界、构建身份与结果，提交推送后等待审核，不启动 S8。
+
+## 18. S8：选定有限域的完整自动调度接管
+
+### 18.1 配置和所有权
+
+新增 `tl.ascend_pipeline_planner="auto"`，要求A3 AscendC/auto及
+`tl.ascend_sync_strategy="a3"`。legacy默认和constraint bridge保持原合同。
+auto整核接管，不静默混合新旧区域，不运行旧CrossCorePipeline、CombineCV、
+PipelinePlanning、InjectSoftwarePipeline、AscendSyncInsert或AscendSyncInsertVS。
+新materializer负责执行侧分派；新同步器同时覆盖准入任务的核内与跨核依赖。
+自动同步和内存规划必须开启；旧自动跨核/VS配置不得另开。未知调用、手写事件、
+未经审计的scalar/config状态或超出本节边界的输入明确拒绝，不回退后报告成功。
+
+“完整”表示选定受审计域的调度、版本和同步所有权完整，不表示任意动态TIR或全部
+Ascend API均已支持。首片为有界静态控制域、UB/L1的N1/N2、固定N1的单GM channel；
+多channel、多slot GM、动态while、950/VF/spill及PTO不在本片范围。
+有限展开每函数至多256个任务、65536次控制访问；straight数字协议使用至多62个
+实际参与的`(group, actor, pipe)`资源域，紧凑编号后以显式Int64位图表示。这是数字
+表示的边界，不是硬件事件池大小或实测资源吞吐；超限明确拒绝。
+
+### 18.2 Pass位置和结构合同
+
+```text
+Phase1最早：AscendPrepareAutoSchedule(target)，保留短循环/原始控制事实
+  → 既有scope/layout/TileOp/workspace lowering
+Phase2 allocation placement
+  → AscendAutoSchedule(target, platform)：联合源任务/producer图、版本候选、数字求解
+  → AscendMaterializeSchedule(target, platform)：自有有限展开、版本布局、执行侧分派
+  → 既有flatten/storage rewrite与AscendMemoryPlanning
+  → AscendInsertScheduledSync(target, platform)：唯一实际同步生成
+  → final Simplify
+  → AscendVerifyAutoSchedule(target, platform)：独立只读最终证明
+  → ResourceScopeVerify → InstructionSelection → MaskLegalize → codegen
+```
+
+新状态统一使用`tl.ascend_s8_`前缀，主合同`tl.ascend_s8_schedule`含原函数、
+storage catalog、逐read源producer、控制域、数字问题/结果和发射实例身份。
+`tl.ascend_s8_buffer_remap`记录实际dataVar、版本数、byte pitch及总容量。
+不得发出旧`software_pipeline_*` ABI或让旧injector再次处理同一buffer。
+Python/native均保留新前缀；auto产物增加独立compiler cache ABI，旧键格式不变。
+
+### 18.3 新任务图与版本物化
+
+在C/V分流前保留联合源函数，以canonical storage、view偏移和原activation重建
+每个read的reaching producer。native有界枚举合法N1/N2候选，先校验实际对齐、
+容量及slot复用边，再调用既有straight数字solver和独立整数verifier。
+straight输入全为有限distance=0 DAG，不塞入其不支持的modulo/manual-stage字段。
+本步使用统一`abstract_issue_step_v1`模型；它只决定合法任务次序，不是硬件ns，
+不把S5四类Vector成本与未测Cube/reduce成本混算，也不声称求解结果预测设备吞吐。
+
+新物化器直接消费execution permutation，生成有限实例、UB/L1版本布局及typed
+访问重写。只对已证明每activation完整定义、无跨轮carry的owner使用多版本；
+carry和GEMM内部scratch固定N1。只删除被实际不同slot消除的WAR/WAW，source read
+仍须读取原producer的值。独立跨PIPE任务允许合法预取重排，不给所有原actor任务
+追加一条人为源码总序。channel通知端点和共享配置的必需顺序仍须守恒。
+必须验证至少一个真实N2及非源码顺序的正例，不能把N1串行旧路径改名作为交付。
+
+caller GM参数不扩容、不静默增加版本，也不改变workspace最终可见值。跨核保持
+S7已审计的cv_1_2、完整两AIV参与、单channel/N1 FIFO合同；新backend可复用纯协议
+helper，但不调用旧pass。source producer按独立actor/FIFO epoch绑定，不能把跨C/V
+AST遍历顺序当作happens-before。
+
+### 18.4 复合调用、物理同步和末端证明
+
+GEMM按不可拆复合任务建模，审计真实MTE1/M及其借用资源、内部事件0/1和SPR行为，
+不以OperationConfig单个PIPE_M标签替代。首片为f16输入、f32L0C、完整对齐、
+clear=true、n_actual=N、unitFlag=0；HF32/deq/atomic及未审计配置拒绝。
+L0A/B内部ping-pong scratch各按真实64KB预算、固定N1，不与外部显式L0任务重叠。
+归约首片为已审计的clear=true f32行归约；精确区分dst的must_define、保守
+may-access和内部scratch，不以scratch整区写足迹冒充入口初始化证明。
+
+新核内生成器可在原子任务边界使用真实ALL完成fence，隔离复合helper内部flag租约，
+但ALL不代替mask/SPR值证明。auto专属末端mask验证扩展归约合同，保持旧constraint
+fill/add白名单及历史schema语义。最终验证从原函数和实际IR独立重建任务、
+producer/epoch、remap、Allocate和物理hazard；local物理域区分core kind/cid/vid/pool，
+GM另作全局别名检查。错误地址、pitch、selector、初始化、释放/drain或mask均拒绝。
+
+### 18.5 交付和实际验收
+
+提交独立入口`s8_check_integration_ir.py`、`s8_run_workloads_npu.py`和
+`s8_benchmark_npu.py`，沿用既有manifest、隔离worker、退出码和机器可读报告合同。
+native检查新版本与实际重排、source producer/物理复用故障、compound scratch、
+mask、GM双向握手、0/1/N与guard/尾输出exact-once，以及旧路径调用次数为零。
+默认legacy/constraint及旧Expert另做兼容回归，不用legacy算子通过冒称auto支持。
+
+A3实际运行新路径GEMM、归约和GEMM→GM→Vector/归约，并逐次刷新输入、golden、
+canary和workspace终值。benchmark在正确性前置通过后，固定配对输入、flags、
+warmup、样本数和计时方法，分别记录compile、host dispatch和NPU Event span。
+证据序列化、输入重置及golden在计时区外；不把Event span冒称纯指令延迟，不预设
+提速或隐藏回归。最终范围、构建身份、真实结果及限制随S8记录更新。

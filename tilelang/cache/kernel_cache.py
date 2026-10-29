@@ -33,6 +33,7 @@ AUTO_GM_IDX_PATH = "auto_gm_idx.pkl"
 # alone does not separate dirty-tree upgrades from older constraint artifacts.
 _ASCEND_CONSTRAINT_COMPILER_ABI = 3
 _ASCEND_SYNC_COMPILER_ABI = 1
+_ASCEND_AUTO_COMPILER_ABI = 1
 
 
 class KernelCache:
@@ -128,6 +129,8 @@ class KernelCache:
             pass_configs.get("tl.ascend_pipeline_planner", "legacy")
         ) == "constraint":
             key_data["ascend_constraint_compiler_abi"] = _ASCEND_CONSTRAINT_COMPILER_ABI
+        if pass_configs and str(pass_configs.get("tl.ascend_pipeline_planner", "legacy")) == "auto":
+            key_data["ascend_auto_compiler_abi"] = _ASCEND_AUTO_COMPILER_ABI
         if pass_configs and str(pass_configs.get("tl.ascend_sync_strategy", "legacy")) == "a3":
             key_data["ascend_sync_compiler_abi"] = _ASCEND_SYNC_COMPILER_ABI
         key_string = json.dumps(key_data, sort_keys=True)  # Sort keys to ensure consistency

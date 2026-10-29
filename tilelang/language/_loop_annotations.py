@@ -44,7 +44,7 @@ def loop_annotations(
                 raise TypeError("Pipelined enable_offset must be bool")
             continue
         if key in _RESERVED_KEYS or key.startswith(
-            ("software_pipeline_", "tl.ascend_s6_", "tl.ascend_s7_")
+            ("software_pipeline_", "tl.ascend_s6_", "tl.ascend_s7_", "tl.ascend_s8_")
         ):
             raise ValueError(
                 f"loop annotation {key!r} is reserved; use its dedicated supported API"

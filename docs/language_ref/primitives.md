@@ -276,3 +276,51 @@ implicit flag users. Unproved participation, unsupported domains and budget
 exhaustion report an error. No event spill or mode4 mapping is introduced.
 The synchronization contract has a separate internal cache ABI for A3 artifacts.
 See the migration plan's S7 record for the exact validated scope and commands.
+
+## Finite A3 automatic scheduling
+
+`PassConfigKey.TL_ASCEND_PIPELINE_PLANNER = "auto"` selects the complete backend
+for its audited finite kernel subset. Legacy remains the default; `"constraint"`
+retains the established bridge. The auto route requires the A3 AscendC backend:
+
+```python
+pass_configs = {
+    tilelang.PassConfigKey.TL_ASCEND_PIPELINE_PLANNER: "auto",
+    tilelang.PassConfigKey.TL_ASCEND_SYNC_STRATEGY: "a3",
+    tilelang.PassConfigKey.TL_ASCEND_AUTO_SYNC: True,
+    tilelang.PassConfigKey.TL_ASCEND_MEMORY_PLANNING: True,
+    tilelang.PassConfigKey.TL_ASCEND_AUTO_CV_SYNC: False,
+    tilelang.PassConfigKey.TL_ASCEND_AUTO_SYNC_VS: False,
+}
+```
+
+Keep automatic C/V ownership enabled, which is its default. The new backend
+owns task ordering, finite expansion, UB/L1 version materialization and all
+synchronization for the selected kernel. Its route bypasses the legacy planner,
+injector and synchronization passes. Unsupported operations or control flow
+produce an error; the backend does not silently mix ownership or fall back.
+
+The first contract admits bounded static control, audited dense DMA, fill/add,
+aligned float16-input/float32-output GEMM with independent initialization, and
+audited clear-true float32 row reductions. GEMM is an indivisible multi-pipeline
+task, including its internal scratch and event use. Unknown calls, manual
+events/configuration, HF32, atomic effects and unsupported guards are rejected.
+Finite expansion admits at most 256 tasks and 65536 control visits per function.
+The numeric protocol admits at most 62 used physical resource domains; this is
+a scheduling representation limit, distinct from the hardware event budget.
+Read producers, actual version slots and final physical aliases are checked
+independently. Vector mask checking includes a separate auto contract.
+
+Loop-private UB/L1 storage can use one or two physical versions. Carry storage
+retains one version. A caller-provided GM workspace retains its declared shape,
+one slot and final visible contents; the initial mixed route uses one channel
+with complete C-to-two-V participation and a ready/release protocol. It does
+not infer permission to resize a caller argument or to create hardware-local
+C/V direct transfers.
+
+Scheduling uses the uniform `abstract_issue_step_v1` model to choose a legal
+finite order. Its units are not hardware nanoseconds. Do not supply
+`TL_ASCEND_PIPELINE_COST_MODEL` with this route; that calibrated profile belongs
+to the constraint bridge. Actual compilation, host dispatch and device event
+times are reported separately by the S8 validation entries. See the migration
+plan's S8 record for the precise supported boundaries and measured results.

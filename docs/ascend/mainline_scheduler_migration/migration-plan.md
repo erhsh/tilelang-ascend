@@ -60,12 +60,11 @@ Vector 指令选择、mask 合法化、Persistent 参数/partial-wave 保护及 
 | S4 | 单核约束规划与同步协议验证（M1） | opt-in constraint、最终协议验证和三个入口已交付 | 原生 45 + 50、兼容 170 + 117 + 29、runner 77 项通过；A3 8 项、800 次 launch/golden 通过 | 用户已明确授权 S5 |
 | S5 | 跨迭代流水与多缓冲（M2） | A3有效成本、实际版本/配置证明及guarded波流水已交付 | 校准32、原生234、兼容411项通过；A3 26用例/2600次launch与golden、4组性能已记录 | 用户已明确授权S6 |
 | S6 | owner/epoch、别名与生命周期（M3） | canonical storage与source/final epoch bridge已交付 | 正式原生61+49、全部兼容/CLI通过；A3 20用例、2000次launch/golden通过 | 用户已明确授权S7 |
-| S7 | A2/A3 新同步生成器（M4） | A3核内生成器与固定C/V workspace握手已交付 | 正式native70+60、兼容与CLI214通过；A3 20用例、3200次launch/golden通过 | 本步提交，待用户审核 |
-| S8 | 完整自动调度与混合 C/V 接管（M5） | 未开始 | 未验证 | 未提交 |
+| S7 | A2/A3 新同步生成器（M4） | A3核内生成器与固定C/V workspace握手已交付 | 正式native70+60、兼容与CLI214通过；A3 20用例、3200次launch/golden通过 | 用户已明确授权S8 |
+| S8 | 完整自动调度与混合 C/V 接管（M5） | 新后端、版本、同步与三个入口已完成 | 原生74、CLI283和旧阶段兼容通过；A3正确性14用例/1400次、性能6用例/480次通过，回归已记录 | 待用户审核 |
 
-当前授权范围：S7；实现与A3验收已完成，随本步提交交付，推送结果见最终报告。
-交付后停在S7等待用户审核。
-S8 尚未获得执行授权。
+当前授权范围：S8；实施起点为S7提交`59f3b220`，固定源码基线与主仓参考保持。
+S8实现、A3正确性与性能记录已完成，随本步提交推送，随后停止等待用户审核。
 实施状态与验证状态分列：“已实现”不等于“native/NPU 验收通过”。
 
 ## 4. 分步交付与验收
@@ -1174,4 +1173,172 @@ manifest须由当前源码显式构建并核验，方法沿用技术参考第11.
 提交/查询/释放/同步顺序均保留在输出及artifacts中。
 
 本步只交付S7实现、永久测试、三个入口和四份文档；不提交JSON、日志、模型和二进制。
-交付后等待用户审核与明确的S8指令，不自动推进完整混合C/V排程。
+S7交付时停止等待审核；用户随后已明确授权S8，当前进展见第3、14节。
+
+## 14. S8 实施记录
+
+用户已明确授权S8。设计与实施骨架已补入技术参考第18节及对应S8骨架；新后端已
+构建，原生74、CLI283及旧阶段兼容均已实际通过。A3正式正确性14用例/1400次、
+benchmark六用例/480次均已通过；实际性能及编译回归见下文。
+本步只做A3专项验收，保留legacy默认与A2兼容代码。
+
+### 14.1 范围与构建身份
+
+新增`planner="auto"`与`sync="a3"`的整核接管分支，任务规划、新版本物化和同步
+均由新后端负责，旧planner/injector/local/VS/cross链不在该分支运行。legacy与
+constraint bridge保留。首片为有限静态域，最多256任务/65536控制访问/62个数字
+资源域；UB/L1可用N1/N2，单GM channel保持N1与caller可见ABI/终值。
+GEMM准入为f16输入/f32累加、clear=true完整对齐复合调用；归约为已审计的
+clear=true f32行归约。scratch必须具有正确UB/F32指针ABI、足够几何容量且不与
+本call payload重叠。未知调用、未审计状态、动态while及多channel等明确拒绝。
+`abstract_issue_step_v1`只决定合法有限次序，不是硬件ns；不读取S5成本profile。
+
+最终候选构建记录为`/tmp/ascend-migration-s8/native-build.json`：174个native输入，
+source SHA256 `257659998dc6656fe5456e2c4207e4eb4da00465284f7879fa723d49032a2dec`，
+module SHA256 `4771eeefbf6ff07edc1cd17d94f6ea834e3e553f94d6162455f56a4d1de84d98`。
+TVM/runtime仍为`79912ad7…`/`a98401d8…`，固定TVM源码与两项patch不变。
+237个Python输入的最终冻结SHA256为
+`8657121883e9f25bf2398df5e41a31e821a6a2fefadf9adab949a9fcfe603f76`。
+主机、旧阶段回归与正式正确性运行使用此前冻结`9c5ca67d…`；设备进程全退出后仅
+`test_s8_sync_contract.py`调整排版，AST相同，其余236个Python文件逐字节未变。
+`python-format-provenance-bridge.json`保留前后完整清单和SHA，原报告不改写。
+报告记录S7 HEAD `59f3b220`上的dirty工作区；最终提交与验收通过已核验的源码/
+Python/实际加载库关联，不把旧HEAD当作最终S8提交。
+
+设备逻辑0、实际SoC为`Ascend910_9362`；Python3.12.9、torch2.7.1+cpu、
+torch_npu2.7.1.post4、CANN9.1.0。实际Bisheng仍为
+`/home/developer/Ascend/cann-9.1.0/tools/bisheng_compiler/bin/bisheng`，SHA256
+`7ffc97205a0582ce00a9ec163530696bf3971b24669c43c1c02cc9c7b56f541f`。
+普通配对显式flags为`[--cce-auto-sync=off, -O3]`，实际解析为
+`[-O2, --cce-auto-sync=off, -O3]`；真实有序argv逐对相同，仅排除唯一cpp输入与
+`-o`输出临时路径。两独立Expert沿用原flags，不拿它们作auto性能配对。
+
+### 14.2 正式 CPU 验证
+
+| 检查 | 实际结果 | 证据（相对`/tmp/ascend-migration-s8/`） |
+| --- | --- | --- |
+| s8_check_integration_ir | PASS74：integration33、cache7、source/final/protocol/mask fault34；0skip | `integration-ir.json` |
+| S1–S8主机CLI与路由/计时政策 | PASS283，0skip；执行前后237个Python输入相同 | `host-cli.json`、`formal-host-cli/pytest.xml` |
+| S1/S2 legacy/task native | PASS104/170 | `compat/s1_check_legacy_lowering.json`、`compat/s2_check_task_ir.json` |
+| S3 loop/domain | PASS129/29 | `compat/s3_check_loop_ir.json`、`compat/s3_check_persistent_domain.json` |
+| S4 pipeline/sync | PASS45/50 | `compat/s4_check_pipeline_ir.json`、`compat/s4_check_sync_coverage.json` |
+| S5 versions | PASS235 | `compat/s5_check_versions_ir.json` |
+| S6 owner/lifecycle | PASS61/49 | `compat/s6_check_owner_ir.json`、`compat/s6_check_lifecycle_guards.json` |
+| S7 event/handoff | PASS70/60 | `compat/s7_check_event_budget.json`、`compat/s7_check_handoff_ir.json` |
+
+兼容入口完整命令与结果保留在`compatibility-summary.json`，两进程只读并行。
+上述入口之间有交集，不把每行数字相加当作唯一测试总数。
+测试排版调整后，公开S8入口按最终`86571218…`冻结身份再次实际74/74 PASS，
+0skip，运行前后输入核验相同；最终报告SHA256为
+`86d80bd3c06e2f109497c6314a857e281c17c3af3cff9d05b02eb37e31159a26`。
+旧报告保存在`integration-ir-before-format.json`；主机和旧阶段源码均未变，
+保留其原始通过记录，`cpu-validation-summary.json`明确列出两次冻结范围。
+
+### 14.3 A3 矩阵与前置 pilot
+
+正确性必跑14个worker：GEMM single(64×64×32,1core,1trip)与batch3
+(128×64×32,4cores,3trips)、reduce single/batch3、mixed_add(1core,3trips)、
+mixed_reduce(4cores,3trips)，各legacy/auto配对；另有独立原Expert C128精度与
+L1 K=200/stages2回归。正式repeat100已完成14次真实编译、1400次target调用/golden，
+六组600条跨策略记录。普通12case逐次换输入；Expert沿原helper固定输入并逐轮
+重置输出/检查，不把它们表述为逐轮生成新随机输入。
+
+修复后同snapshot的3pair/6pilot已实际全部PASS：每case各1次真实Bisheng编译、
+1次target调用/golden，3pair输入/输出/golden/workspace及真实有序编译选项一致，
+83072个canary元素检查通过。auto实际N2/actor内重排均按IR门禁验证：GEMM有L1N2，
+reduce有UBN2，mixed_reduce的UB均N1，不从请求数推断所有buffer都是N2。
+证据为`pilots-int64-fixed.json`及独立摘要；6compile/6call不叠加正式次数。
+
+正式`workloads-npu.json`为14/14 PASS、0fail/skip，SHA256为
+`d8a6bfc7ee61422f25cde79cc5e0d47aab101a0048e2255956170444c80737f5`。
+`root-workloads-audit.json`另从原始报告复核14次编译、1400次完整调用/golden及
+600轮严格配对；普通用例保存1200条逐轮记录，全部输出摘要等于golden，400条
+workspace摘要等于golden，12816000个未写canary元素通过检查。实际typed访问、
+allocation/size-map边界与要求的N2/重排均复核通过。Expert200次沿用原helper断言，
+不补造逐轮摘要。该审计不代表额外设备执行。
+
+性能六worker：gemm_batch3、reduce_batch3、mixed_reduce各legacy/auto；每case
+20个timed rounds，每round3次warmup加1次timed，全部reset/golden在计时区外。
+实际6compile、480call/golden，其中360warmup、120timed samples；三组240条完整
+逐调用配对。编译wall/CPU及Bisheng、host dispatch wall、NPU Event span分别记录；
+不相减为“纯指令延迟”，不预设提速，所有回归如实列出。
+
+`benchmark-npu.json`为6/6 PASS、0fail/skip，SHA256为
+`92511902feacc69f8043f4d0fd686ffbfacfa787c2a33e637ba2ecdfd61165f6`。
+`root-benchmark-audit.json`独立复算raw samples的中位数与bootstrap区间，复核
+全部warmup/测量先后、同输入/输出/workspace、真实编译flags、保留cpp/kernel库
+SHA及6645760个canary元素；不代表额外设备执行。mixed_reduce两策略计时pilot
+另为2compile/8call/golden/2samples，不叠加正式次数。
+
+下表单位为微秒，括号为中位数95% bootstrap区间（1000次resample，seed0）；
+变化为auto相对legacy，正数为回归。每worker20个实测样本，Event包含主机提交
+间隙，不能由这些数值推导纯kernel指令延迟或普遍提速。mixed的legacy为完整
+READY/FREE手写握手，auto为新生成器；两者实际编译选项与全部计算数据相同。
+
+| 用例 | 指标 | legacy 中位数（95%区间） | auto 中位数（95%区间） | 变化 |
+| --- | --- | --- | --- | --- |
+| gemm_batch3 | host dispatch | 248.2860 (237.9820–261.3220) | 242.7770 (236.8315–254.3220) | -2.22% |
+| gemm_batch3 | NPU Event span | 251.1405 (235.4800–272.1810) | 246.2605 (241.0100–253.5410) | -1.94% |
+| reduce_batch3 | host dispatch | 206.8460 (206.1310–207.4670) | 199.9915 (199.4660–200.8170) | -3.31% |
+| reduce_batch3 | NPU Event span | 215.5600 (215.1305–216.2400) | 206.5605 (205.7905–207.1000) | -4.17% |
+| mixed_reduce | host dispatch | 246.5120 (243.3820–259.2820) | 255.6915 (249.1465–273.4670) | +3.72% |
+| mixed_reduce | NPU Event span | 250.3205 (246.3200–260.1110) | 256.5210 (248.4405–274.1205) | +2.48% |
+
+每case仅一次真实冷编译，下表单位为秒；wall包含前端/TVM/Bisheng/adapter，
+不含后置证据序列化或数据准备；parent process与回收child CPU分别列出。
+
+| 用例 | 策略 | 编译wall | parent CPU | child CPU | Bisheng wall |
+| --- | --- | --- | --- | --- | --- |
+| gemm_batch3 | legacy | 4.741 | 0.119 | 4.742 | 4.712 |
+| gemm_batch3 | auto | 19.247 | 14.688 | 4.867 | 4.836 |
+| reduce_batch3 | legacy | 4.566 | 0.114 | 4.566 | 4.540 |
+| reduce_batch3 | auto | 5.351 | 0.841 | 4.644 | 4.611 |
+| mixed_reduce | legacy | 5.036 | 0.140 | 5.008 | 4.992 |
+| mixed_reduce | auto | 53.770 | 49.156 | 5.615 | 5.593 |
+
+auto编译wall分别为legacy的约4.06/1.17/10.68倍，当前有限DAG求解/证明路径的
+编译成本明显增加；这是已知交付限制。本步采用每任务前后ALL保护审计helper
+内部借用资源，不将abstract issue次序表述为真实硬件重叠证明，也不将三组观测
+当作成本校准。计时期间未并行运行本任务的CPU检查或其它NPU任务。
+
+### 14.4 实施中发现的合同缺口
+
+早期构建与native诊断依次修复了当前TVM的Optional/API适配、实际已flatten的L1
+形状、归约U8 backing上的F32 scratch指针及真实几何容量/UB归属/不重叠要求、
+caller参数顺序/dtype/容量ABI，以及空任务与非空任务的launch axis区别。
+对应负例进入永久native测试；前期失败报告留在`diagnostic-37b2f3c0/`、
+`diagnostic-b9a19f12/`与`.diagnostics/`，不计入最终通过次数。
+
+首次设备pilot前五项PASS，第六项四core mixed_reduce_auto在Bisheng之前因
+`resource_flags[92]`失败，故该worker为零次编译/调用。根因是当前TVM的
+`Integer(int)`将64位resource mask隐式收窄至32位，并非dense域编号溢出。
+调度记录、物化形状字段和verifier Key改为显式Int64 IntImm；保留原四core/
+三trip/120task用例及dense映射，新增bit39高位mask和逐任务资源冲突回归。
+`int64-record-repair.json`为当时的修复/构建记录，后续通过另见正式native、pilot
+及workload报告；旧`pilots.json`的FAIL保留，不改写为PASS。
+
+17个变更Python的ruff lint、12个新增Python的format100、7个新增/完整维护C++的
+clang-format及git diff--check均已实际通过。共享旧C++仅检查变更hunk，不扩面
+重排。`format-report.json`、`format-report.md`及修复前报告均在临时证据目录。
+`final-routing-review.json`对最终冻结源码的默认策略、旧链隔离、配置/FFI、
+缓存ABI和35文件范围进行独立只读复核，未发现待修问题；它不代替测试或设备证据。
+`final-acceptance-summary.json`关联原始结果、库哈希与两次Python冻结的有效范围。
+
+### 14.5 复核入口与交付边界
+
+```bash
+source set_env.sh
+export TL_ASCEND_MIGRATION_BUILD_MANIFEST=/tmp/ascend-migration-s8/native-build.json
+
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s8_check_integration_ir.py --platform a3 --timeout 120 --output /tmp/ascend-migration-s8/review-integration-ir.json
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s8_run_workloads_npu.py --platform a3 --device 0 --seed 0 --repeat 100 --timeout 300 --output /tmp/ascend-migration-s8/review-workloads-npu.json
+/tmp/ascend-migration-s2/venv/bin/python scripts/ascend_migration/s8_benchmark_npu.py --platform a3 --device 0 --seed 0 --repeat 20 --timeout 300 --output /tmp/ascend-migration-s8/review-benchmark-npu.json
+```
+
+manifest须按技术参考第11.5节由当前源码构建并核验；上述临时环境和产物不是仓库
+自带依赖，入口不自动安装或重编译。每个NPU case独立进程/缓存，保存真实编译
+命令、实际配置/库、最终IR/合同和逐次golden记录；性能入口另保存真实编译输入
+及kernel库，计时区内不序列化证据。各入口失败/超时立即停止该组并明确未运行项。
+
+本步只提交S8实现、永久测试、三个公开入口及四份文档，不提交JSON、日志、模型
+或二进制。保持legacy默认，不新增A2测试或S5成本校准；推送后停止等待审核。

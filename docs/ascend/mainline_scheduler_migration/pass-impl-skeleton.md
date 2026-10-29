@@ -238,6 +238,46 @@ S3 循环接口、S4 planner 接管及后续同步生成仍不在本步实施。
   新manifest核验后先导入/最小lowering冒烟，再由独立测试责任人执行native及三个入口。
   测试包含独立allocator边界、实际IR故障注入和A3长循环/多core/重复/双stream，
   不将legacy CV兼容执行计入新cross握手。A2测试跳过，S8混合规划不纳入。
+
+## S8 实施骨架：有限域的完整调度、版本与同步后端
+
+用户已明确授权S8，设计见技术参考第18节；先完成本骨架，再在本步内实施并验证。
+
+- 配置新增`planner="auto"`、强制`sync="a3"`；legacy/constraint原路径保留。
+- `AscendPrepareAutoSchedule(target)`在Phase1早期保留控制/短循环请求。
+- `AscendAutoSchedule(target, platform)`位于Phase2 allocation placement后、旧C/V分流前。
+  收集联合source/effects/producer，枚举合法N1/N2布局，以straight solver及独立数字
+  verifier求解有限DAG，统一abstract_issue_step_v1；不混用S5 ns成本。
+- `AscendMaterializeSchedule(target, platform)`直接按execution permutation展开有限
+  实例、typed版本访问与core分派；auto不调用旧CrossCorePipeline/CombineCV/planner/
+  injector。caller GM固定N1不扩容，UB/L1新版本须有真实N2正例。
+- 复用既有flatten/storage rewrite/MP；新`AscendInsertScheduledSync`在MP后独占
+  local/cross生成。复合GEMM/归约task在审计完整effects、scratch和状态后，以ALL边界
+  隔离；GM保持单channel两AIV READY/RELEASE。
+- `AscendVerifyAutoSchedule`在最后Simplify后、ResourceScopeVerify前独立重建source
+  producer、实际实例/版本/Allocate/地址及协议，不能信plan中的PASS字段。
+- 末端MaskLegalize增加auto专属归约验真，旧constraint schema和白名单不变。
+- 主合同`tl.ascend_s8_schedule`与remap `tl.ascend_s8_buffer_remap`记录真实所有权；
+  Python/native预留S8前缀，auto增加compiler cache ABI，旧路径不加新盐。
+
+实现文件职责：
+
+| 文件 | 职责 |
+| --- | --- |
+| src/transform/ascend_auto_schedule.cc | 准入、原任务/producer图、版本候选及solver协议 |
+| src/transform/ascend_materialize_schedule.cc | 新finite实例、版本布局/访问重写和core分派 |
+| src/transform/common/ascend_auto_schedule.h | 共享typed合同、审计helper和跨文件接口 |
+| src/transform/ascend_scheduled_sync.cc | 最终MP物理依赖、ALL边界及GM双向协议生成 |
+| src/transform/ascend_auto_schedule_verify.cc | 独立source/final producer/物理/协议证明 |
+| src/transform/ascend_vector_mask_legalize.cc | auto专属末端mask证明，不放宽旧路径 |
+| tilelang/engine/phase.py | 三种planner与新后端互斥路由 |
+| tilelang/transform/__init__.py、pass_config.py | FFI封装、懒solver注册和公开配置说明 |
+| tilelang/cache/kernel_cache.py | auto产物ABI隔离 |
+| src/ir.cc、tilelang/language/_loop_annotations.py | S8保留字段保护 |
+
+测试与三入口由独立验证任务实现：真实N2/重排、producer和slot fault injection、
+GEMM/reduce/mixed、owner互斥spy、默认兼容、A3逐次golden，以及三类真实计时。
+不把abstract cost、未执行项、部分通过或旧路径执行当作本步验收完成。
   双stream由两个独立ExternalEvent闭门对齐提交，done/stream均pending后第三stream
   释放并同步；同一live参数dict保留异常现场。该控制只在验证worker内，不改kernel，
   不用mode0或sleep估时，不将pending证据称为硬件时间重叠。
