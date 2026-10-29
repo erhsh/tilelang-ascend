@@ -621,12 +621,20 @@ private:
     }
     Block result = Downcast<Block>(StmtExprMutator::VisitStmt_(block));
     auto region = [&](BufferRegion value) {
-      return BufferRegion(RewriteBuffer(value->buffer), value->region);
+      Buffer buffer = RewriteBuffer(value->buffer);
+      return buffer.same_as(value->buffer)
+                 ? value
+                 : BufferRegion(buffer, value->region);
     };
-    if (!saved.empty() || !renamed_.empty()) {
+    // An enclosing pointer binding can change a region's storage even when
+    // this block has no match buffers and the root name is unchanged.
+    Array<BufferRegion> reads = result->reads.Map(region);
+    Array<BufferRegion> writes = result->writes.Map(region);
+    if (!reads.same_as(result->reads) || !writes.same_as(result->writes) ||
+        !saved.empty()) {
       auto *node = result.CopyOnWrite();
-      node->reads = node->reads.Map(region);
-      node->writes = node->writes.Map(region);
+      node->reads = reads;
+      node->writes = writes;
       node->match_buffers = {};
     }
     Array<Buffer> allocations;

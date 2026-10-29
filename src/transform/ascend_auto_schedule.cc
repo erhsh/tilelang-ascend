@@ -541,12 +541,29 @@ AutoRecord AuditAscendAutoCall(tir::Call call, int actor) {
     ICHECK(call->args[3].dtype().is_int());
     int64_t count = I(call->args[3]);
     ICHECK(count > 0);
-    add(call->args[0], count, true);
-    if (call->op.same_as(ascend_add())) {
+    bool fill = call->op.same_as(ascend_fill());
+    // Fill carries a helper name before its destination; Add starts with its
+    // destination.
+    add(call->args[fill ? 1 : 0], count, true);
+    String dtype = Downcast<String>(Downcast<R>(writes[0]).at("dtype"));
+    if (fill) {
+      const auto *helper = call->args[0].as<StringImmNode>();
+      ICHECK(helper && helper->value ==
+                           (dtype == "float16" ? "Fill<half>" : "Fill<float>"))
+          << "Auto fill helper does not match its destination dtype";
+      DataType scalar_dtype = call->args[2].dtype();
+      ICHECK(scalar_dtype.is_scalar() &&
+             (scalar_dtype.is_float() || scalar_dtype.is_int() ||
+              scalar_dtype.is_uint()))
+          << "Auto fill requires an arithmetic scalar value";
+      PostOrderVisit(call->args[2], [](const ObjectRef &node) {
+        ICHECK(!node.as<BufferLoadNode>() && !node.as<CallNode>())
+            << "Unsupported memory-dependent/opaque auto fill scalar";
+      });
+    } else {
       add(call->args[1], count, false);
       add(call->args[2], count, false);
     }
-    String dtype = Downcast<String>(Downcast<R>(writes[0]).at("dtype"));
     for (const auto &items : {reads, writes})
       for (const ObjectRef &item : items) {
         R e = Downcast<R>(item);

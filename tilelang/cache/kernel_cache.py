@@ -31,9 +31,9 @@ AUTO_GM_IDX_PATH = "auto_gm_idx.pkl"
 
 # Validation semantics are part of the compiled artifact contract. Git/version
 # alone does not separate dirty-tree upgrades from older constraint artifacts.
-_ASCEND_CONSTRAINT_COMPILER_ABI = 4
+_ASCEND_CONSTRAINT_COMPILER_ABI = 5
 _ASCEND_SYNC_COMPILER_ABI = 2
-_ASCEND_AUTO_COMPILER_ABI = 2
+_ASCEND_AUTO_COMPILER_ABI = 3
 
 
 class KernelCache:
