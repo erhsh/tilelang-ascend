@@ -47,7 +47,7 @@ include(CheckCXXCompilerFlag)
 # Include code coverage module
 include(${CMAKE_SOURCE_DIR}/cmake/modules/CodeCoverage.cmake)
 
-option(USE_ASCEND_SYNC_Z3 "Enable Z3 proofs for Ascend synchronization" OFF)
+option(USE_ASCEND_SYNC_Z3 "Enable Z3 proofs for Ascend synchronization" ON)
 set(Z3_ROOT "" CACHE PATH "Root of the native Z3 installation used by Ascend synchronization")
 if(USE_ASCEND_SYNC_Z3)
   include(${CMAKE_SOURCE_DIR}/cmake/modules/FindAscendSyncZ3.cmake)

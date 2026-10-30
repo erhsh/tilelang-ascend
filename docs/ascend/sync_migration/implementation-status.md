@@ -22,7 +22,11 @@ v8 完整主机/编译回归、A3 设备组合及完整旧 VS 编译回归已通
 
 ## 构建和使用
 
-构建开关 `USE_ASCEND_SYNC_Z3` 默认 OFF。显式根目录优先，不会混用其他环境的 Z3。
+后续安装方式调整见 [Z3 默认启用与 PyPI 依赖](z3-pypi-install.md)。新默认值为 ON，
+pip 构建及运行均依赖 z3-solver，Python 包从运行环境加载 Z3。下述 v8 产物和配置记录
+属于历史检查点，不表示新的分发方式已复用其验收结果。
+
+构建开关 `USE_ASCEND_SYNC_Z3` 在历史 v8 中默认 OFF。显式根目录优先，不会混用其他环境的 Z3。
 本机验证过的根目录为 `/home/developer/.local/lib/python3.12/site-packages/z3`，
 原生库版本 4.15.4；可替换为具有 `include/z3++.h` 与 `lib/libz3.so` 的兼容目录。
 不要求运行 TileLang 的 Python 环境安装 Python `z3` 模块。
