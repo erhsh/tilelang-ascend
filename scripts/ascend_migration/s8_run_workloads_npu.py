@@ -26,9 +26,7 @@ def main():
         "ownership; separate legacy references and old Expert regressions. Caller GM workspace "
         "remains N1, with every output/canary and final workspace checked on each launch."
     )
-    return run_cases(
-        args, report, WORKLOAD_CASES, Path(__file__).resolve(), final_check=compare_pairs
-    )
+    return run_cases(args, report, WORKLOAD_CASES, Path(__file__).resolve(), final_check=compare_pairs)
 
 
 if __name__ == "__main__":

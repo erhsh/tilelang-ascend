@@ -34,9 +34,7 @@ def read_profiler_samples(directory, worker, *, metrics="BasicInfo"):
     if len(roots) != 1:
         raise ValueError("Expected exactly one profiler run and matching kernel")
     root = roots[0]
-    observed = sorted(
-        int(path.name) for path in root.iterdir() if path.is_dir() and path.name.isdecimal()
-    )
+    observed = sorted(int(path.name) for path in root.iterdir() if path.is_dir() and path.name.isdecimal())
     launches = worker["launches"]
     counts = worker.get("count_values", sorted({launch["count"] for launch in launches}))
     if len(counts) != 5 or counts[0] != 0:
@@ -78,10 +76,7 @@ def read_profiler_samples(directory, worker, *, metrics="BasicInfo"):
         if len(rows) != 1:
             raise ValueError("Expected one BasicInfo row per application kernel invocation")
         row = rows[0]
-        if (
-            row["Op Name"] != "main_kernel"
-            or int(row["Device Id"]) != worker["actual_device"]["logical_device"]
-        ):
+        if row["Op Name"] != "main_kernel" or int(row["Device Id"]) != worker["actual_device"]["logical_device"]:
             raise ValueError("Profiler kernel/device differs from the verified worker")
         vector = []
         if pipe_metrics:
@@ -129,17 +124,13 @@ def fit_effective_cost(samples, *, bootstrap=1000):
     for sample in samples:
         if sample["phase"] == "measured":
             groups[sample["count"]].append(sample["duration_ns"])
-            rounds.setdefault(sample["round"], {count: [] for count in counts})[
-                sample["count"]
-            ].append(sample["duration_ns"])
+            rounds.setdefault(sample["round"], {count: [] for count in counts})[sample["count"]].append(sample["duration_ns"])
     if any(not values for values in groups.values()):
         raise ValueError("Missing measured samples for a required operation count")
 
     def slope(medians):
         return statistics.median(
-            (medians[right] - medians[left]) / (right - left)
-            for position, left in enumerate(counts)
-            for right in counts[position + 1 :]
+            (medians[right] - medians[left]) / (right - left) for position, left in enumerate(counts) for right in counts[position + 1 :]
         )
 
     medians = {count: statistics.median(values) for count, values in groups.items()}
@@ -159,9 +150,7 @@ def fit_effective_cost(samples, *, bootstrap=1000):
     low = distribution[int(0.025 * (bootstrap - 1))]
     high = distribution[int(0.975 * (bootstrap - 1))]
     relative_half_width = (high - low) / (2 * abs(estimate)) if estimate else math.inf
-    relative_residual = (
-        residual / abs(estimate * (counts[-1] - counts[0])) if estimate else math.inf
-    )
+    relative_residual = residual / abs(estimate * (counts[-1] - counts[0])) if estimate else math.inf
     reasons = []
     if low <= 0:
         reasons.append("slope confidence interval includes zero")
@@ -184,9 +173,7 @@ def fit_effective_cost(samples, *, bootstrap=1000):
         "relative_residual": format(relative_residual, ".12g"),
         "count_median_ns": {str(count): format(value, ".12g") for count, value in medians.items()},
         "round_slopes": [
-            format(
-                slope({count: statistics.median(values) for count, values in group.items()}), ".12g"
-            )
+            format(slope({count: statistics.median(values) for count, values in group.items()}), ".12g")
             for _, group in sorted(rounds.items())
         ],
         "measured_sample_count": sum(len(values) for values in groups.values()),
@@ -220,11 +207,7 @@ def assemble_profile(cases, *, quantum_ns=1):
             raise ValueError("Duplicate calibration geometry/pattern")
         indexed[key] = case
         toolchain = worker["toolchain"]
-        version = next(
-            line.removeprefix("Version=")
-            for line in toolchain["cann_version_info"].splitlines()
-            if line.startswith("Version=")
-        )
+        version = next(line.removeprefix("Version=") for line in toolchain["cann_version_info"].splitlines() if line.startswith("Version="))
         actual = {
             "platform": "A3",
             "soc": worker["actual_device"]["soc"],
@@ -235,23 +218,11 @@ def assemble_profile(cases, *, quantum_ns=1):
             "rated_freq_mhz": samples[0]["rated_freq_mhz"],
         }
         current_source = worker["native_build"]["project_source"]
-        current_libraries = sorted(
-            (Path(entry["path"]).name, entry["sha256"])
-            for entry in worker["native_build"]["libraries"]
-        )
-        if identity is not None and (
-            identity != actual
-            or source_identity != current_source
-            or library_identity != current_libraries
-        ):
-            raise ValueError(
-                "Calibration cases use different actual hardware/compiler/native identities"
-            )
+        current_libraries = sorted((Path(entry["path"]).name, entry["sha256"]) for entry in worker["native_build"]["libraries"])
+        if identity is not None and (identity != actual or source_identity != current_source or library_identity != current_libraries):
+            raise ValueError("Calibration cases use different actual hardware/compiler/native identities")
         identity, source_identity, library_identity = actual, current_source, current_libraries
-        if (
-            worker.get("count_values") != list(COUNTS)
-            or worker.get("independent_batch_tiles") != 128
-        ):
+        if worker.get("count_values") != list(COUNTS) or worker.get("independent_batch_tiles") != 128:
             raise ValueError("Calibration cases do not use the common bounded-batch count policy")
         expected_policy = {"warmup": 5, "samples": 20, "rounds": 3}
         if any(parameters.get(key) != value for key, value in expected_policy.items()):
@@ -342,9 +313,7 @@ def assemble_profile(cases, *, quantum_ns=1):
             "maximum_attempts": 2,
             "attempt_merge_policy": "Include every round/sample from all attempts; accept only the combined fit. Never discard a failed batch.",
             "application_launches": sum(len(case["samples"]) for case in cases),
-            "measured_samples": sum(
-                sum(sample["phase"] == "measured" for sample in case["samples"]) for case in cases
-            ),
+            "measured_samples": sum(sum(sample["phase"] == "measured" for sample in case["samples"]) for case in cases),
             "native_source": source_identity,
             "native_libraries": [{"name": name, "sha256": sha} for name, sha in library_identity],
             "scope": "Effective issue/loop/synchronization cost, including bounded-batch drains; no pure instruction latency or safety guarantee.",
@@ -409,9 +378,7 @@ def compile_kernel(tilelang, program, args, report, artifacts, *, configs=None):
         try:
             result = real_run(command, *positional, **keywords)
             if record is not None:
-                record.update(
-                    returncode=result.returncode, status="PASS" if not result.returncode else "FAIL"
-                )
+                record.update(returncode=result.returncode, status="PASS" if not result.returncode else "FAIL")
                 if not result.returncode and "-o" in command:
                     copied = artifacts / "npu_kernel.so"
                     shutil.copyfile(command[command.index("-o") + 1], copied)
@@ -506,9 +473,7 @@ def run_worker(args, report, artifacts):
             output.fill_(float("nan"))
             torch.npu.synchronize()
             phases = (
-                (("warmup", args.warmup), ("measured", args.samples))
-                if args.mode == "profile"
-                else (("accuracy", args.accuracy_repeat),)
+                (("warmup", args.warmup), ("measured", args.samples)) if args.mode == "profile" else (("accuracy", args.accuracy_repeat),)
             )
             for phase, repeat in phases:
                 for _ in range(repeat):
@@ -526,9 +491,7 @@ def run_worker(args, report, artifacts):
                         }
                     )
                     if args.mode == "accuracy":
-                        torch.testing.assert_close(
-                            output.cpu(), expected, rtol=0, atol=0, equal_nan=True
-                        )
+                        torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0, equal_nan=True)
                         report["golden_checks"] += 1
             if args.mode == "profile":
                 torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0, equal_nan=True)
@@ -552,18 +515,10 @@ def main():
     report["parameters"] = vars(args)
     report["count_values"] = list(COUNTS)
     report["independent_batch_tiles"] = 128
-    if (
-        sys.flags.optimize
-        or min(args.accuracy_repeat, args.samples, args.rounds) < 1
-        or args.warmup < 0
-    ):
-        return finish(
-            args, report, "BLOCKED", "Assertions and positive sampling counts are required"
-        )
+    if sys.flags.optimize or min(args.accuracy_repeat, args.samples, args.rounds) < 1 or args.warmup < 0:
+        return finish(args, report, "BLOCKED", "Assertions and positive sampling counts are required")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    artifacts = Path(
-        tempfile.mkdtemp(prefix=args.output.stem + "-artifacts-", dir=args.output.parent)
-    )
+    artifacts = Path(tempfile.mkdtemp(prefix=args.output.stem + "-artifacts-", dir=args.output.parent))
     report["artifacts"] = str(artifacts)
     for name, path in (("harness_source", Path(__file__)), ("fixture_source", fixture)):
         copied = artifacts / path.name

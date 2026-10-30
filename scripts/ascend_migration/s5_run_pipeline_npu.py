@@ -24,9 +24,7 @@ PARAMETERS = {
     for name, spec in FIXTURES.items()
     for strategy in ("legacy", "constraint")
 }
-PARAMETERS["zero_legacy"].update(
-    num_stages=0, legacy_zero_baseline=True, role="serial_zero_baseline_with_live_anchor"
-)
+PARAMETERS["zero_legacy"].update(num_stages=0, legacy_zero_baseline=True, role="serial_zero_baseline_with_live_anchor")
 PARAMETERS["steady3_constraint"].update(manual_stages=(0, 0, 3, 3), enable_offset=True)
 CASES = (*PARAMETERS, "l1_tail_stages2", "l1_tail_parallel")
 

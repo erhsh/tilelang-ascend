@@ -19,9 +19,7 @@ from _npu_runner import digest
 def load_cost_module():
     name = "ascend_migration_s5_cost"
     if name not in sys.modules:
-        spec = importlib.util.spec_from_file_location(
-            name, ROOT / "tilelang/transform/ascend_pipeline_cost.py"
-        )
+        spec = importlib.util.spec_from_file_location(name, ROOT / "tilelang/transform/ascend_pipeline_cost.py")
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module
         spec.loader.exec_module(module)
@@ -77,29 +75,17 @@ def parser(description, cases, *, calibration=False):
 def validate_arguments(args, report):
     if sys.flags.optimize:
         return finish(args, report, "BLOCKED", "Python optimization disables mandatory assertions")
-    if (
-        args.device < 0
-        or args.seed < 0
-        or args.repeat < 1
-        or not math.isfinite(args.timeout)
-        or args.timeout <= 0
-    ):
-        return finish(
-            args, report, "BLOCKED", "device/seed must be nonnegative; repeat/timeout positive"
-        )
+    if args.device < 0 or args.seed < 0 or args.repeat < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
+        return finish(args, report, "BLOCKED", "device/seed must be nonnegative; repeat/timeout positive")
     if args._measure and args._case in (None, "preflight"):
         return finish(args, report, "BLOCKED", "Timing requires a concrete internal case worker")
     if getattr(args, "calibrate_profile", None) is not None:
         if not math.isfinite(args.calibration_timeout) or args.calibration_timeout <= 0:
-            return finish(
-                args, report, "BLOCKED", "calibration timeout must be finite and positive"
-            )
+            return finish(args, report, "BLOCKED", "calibration timeout must be finite and positive")
         if args._case or args._measure:
             return finish(args, report, "BLOCKED", "Calibration cannot be combined with a worker")
         if args.calibrate_profile.resolve() == args.output.resolve():
-            return finish(
-                args, report, "BLOCKED", "Model and report require different output paths"
-            )
+            return finish(args, report, "BLOCKED", "Model and report require different output paths")
         return None
     try:
         args.cost_model = load_cost_module().load_cost_model(args.cost_profile)
@@ -132,14 +118,8 @@ def check_identity(args, evidence, tilelang):
     from tilelang.transform.pass_config import process_default_pass_config
 
     toolchain = evidence["toolchain"]
-    version = next(
-        line.removeprefix("Version=")
-        for line in toolchain["cann_version_info"].splitlines()
-        if line.startswith("Version=")
-    )
-    flags = resolve_compile_flags(
-        "ascendc", process_default_pass_config("ascendc", pass_configs(args)), None
-    )
+    version = next(line.removeprefix("Version=") for line in toolchain["cann_version_info"].splitlines() if line.startswith("Version="))
+    flags = resolve_compile_flags("ascendc", process_default_pass_config("ascendc", pass_configs(args)), None)
     expected = {
         "platform": "A3",
         "soc": evidence["actual_device"]["soc"],
@@ -273,16 +253,10 @@ def exact_output_trace(kernel, expected_indices):
             execute(statement.body, environment)
         elif isinstance(statement, tir.LetStmt):
             nested = dict(environment)
-            nested[statement.var] = tir.IntImm(
-                statement.var.dtype, integer(statement.value, environment)
-            )
+            nested[statement.var] = tir.IntImm(statement.var.dtype, integer(statement.value, environment))
             execute(statement.body, nested)
         elif isinstance(statement, tir.IfThenElse):
-            selected = (
-                statement.then_case
-                if integer(statement.condition, environment)
-                else statement.else_case
-            )
+            selected = statement.then_case if integer(statement.condition, environment) else statement.else_case
             if selected is not None:
                 execute(selected, environment)
         elif isinstance(statement, tir.AssertStmt):
@@ -297,14 +271,9 @@ def exact_output_trace(kernel, expected_indices):
                 return
             if getattr(call.op, "name", None) == "tl.loop_break":
                 raise BreakLoop
-            if getattr(call.op, "name", None) == "tir.call_extern" and call.args[
-                0
-            ].value.startswith("tl::ascend::copy_ub_to_gm<"):
+            if getattr(call.op, "name", None) == "tir.call_extern" and call.args[0].value.startswith("tl::ascend::copy_ub_to_gm<"):
                 pointer = call.args[2]
-                if (
-                    getattr(pointer.op, "name", None) != "tir.tvm_access_ptr"
-                    or pointer.args[1].name != "O"
-                ):
+                if getattr(pointer.op, "name", None) != "tir.tvm_access_ptr" or pointer.args[1].name != "O":
                     raise AssertionError("Unexpected final GM destination")
                 offset = integer(pointer.args[2], environment)
                 count = integer(pointer.args[3], environment)

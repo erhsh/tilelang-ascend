@@ -123,11 +123,7 @@ def compare_outputs(report):
                         raise AssertionError(f"Wrong actual case parameters for {name}: {key}")
                 kernels = observed["kernels"]
                 expected_strategy = PARAMETERS[name][2]
-                if (
-                    len(kernels) != 1
-                    or kernels[0]["resolved_pass_configs"].get("tl.ascend_pipeline_planner")
-                    != expected_strategy
-                ):
+                if len(kernels) != 1 or kernels[0]["resolved_pass_configs"].get("tl.ascend_pipeline_planner") != expected_strategy:
                     raise AssertionError(f"Wrong resolved planner strategy for {name}")
             if left["input_sha256"] != right["input_sha256"]:
                 raise AssertionError(f"Different actual inputs for {names}")
@@ -148,16 +144,8 @@ def main() -> int:
     report = base_report("s4_run_vector_npu", args, step="S4")
     if sys.flags.optimize:
         return finish(args, report, "BLOCKED", "Python optimization disables mandatory assertions")
-    if (
-        args.device < 0
-        or args.seed < 0
-        or args.repeat < 1
-        or not math.isfinite(args.timeout)
-        or args.timeout <= 0
-    ):
-        return finish(
-            args, report, "BLOCKED", "device/seed must be nonnegative; repeat/timeout positive"
-        )
+    if args.device < 0 or args.seed < 0 or args.repeat < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
+        return finish(args, report, "BLOCKED", "device/seed must be nonnegative; repeat/timeout positive")
     if args._case:
         return run_worker(args, run_case, case_parameters=parameters(args._case))
     report["verification_scope"] = (

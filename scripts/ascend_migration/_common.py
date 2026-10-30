@@ -23,9 +23,7 @@ EXIT_CODES = {"PASS": 0, "FAIL": 1, "BLOCKED": 2, "SKIP": 3, "NOT_IMPLEMENTED": 
 
 
 def git(*args: str) -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(ROOT), *args], text=True, stderr=subprocess.PIPE
-    ).strip()
+    return subprocess.check_output(["git", "-C", str(ROOT), *args], text=True, stderr=subprocess.PIPE).strip()
 
 
 def base_report(entry: str, args: argparse.Namespace, *, step: str = "S1") -> dict:
@@ -140,9 +138,7 @@ def run_pytest(
         *nodes,
     ]
     result = run_process(command, directory, "pytest", child_env, timeout)
-    result.update(
-        junit=str(junit), counts={"passed": 0, "failed": 0, "skipped": 0, "total": 0}, cases=[]
-    )
+    result.update(junit=str(junit), counts={"passed": 0, "failed": 0, "skipped": 0, "total": 0}, cases=[])
     if result["exit_code"] == 124:
         return result
     if not junit.is_file():
@@ -154,13 +150,7 @@ def run_pytest(
             failure = case.find("failure")
             error = case.find("error")
             skipped = case.find("skipped")
-            status = (
-                "failed"
-                if failure is not None or error is not None
-                else "skipped"
-                if skipped is not None
-                else "passed"
-            )
+            status = "failed" if failure is not None or error is not None else "skipped" if skipped is not None else "passed"
             result["counts"][status] += 1
             result["counts"]["total"] += 1
             record = {
@@ -188,10 +178,7 @@ def run_pytest(
     for node in nodes:
         filename, *qualifiers = node.split("::")
         if not qualifiers:
-            if not any(
-                Path(filename).stem in (case["classname"] or "").split(".")
-                for case in result["cases"]
-            ):
+            if not any(Path(filename).stem in (case["classname"] or "").split(".") for case in result["cases"]):
                 missing.append(node)
             continue
         function = qualifiers[-1]
@@ -200,9 +187,7 @@ def run_pytest(
         for case in result["cases"]:
             classname = (case["classname"] or "").split(".")
             name = case["name"] or ""
-            function_matches = name == function or (
-                "[" not in function and name.startswith(function + "[")
-            )
+            function_matches = name == function or ("[" not in function and name.startswith(function + "["))
             if module in classname and function_matches:
                 class_position = classname.index(module) + 1
                 if classname[class_position:] == qualifiers[:-1]:

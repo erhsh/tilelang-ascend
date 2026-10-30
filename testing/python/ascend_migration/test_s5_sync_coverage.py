@@ -31,11 +31,7 @@ def _copy(src, dst, *, load, count=64, src_offset=0, dst_offset=0):
 
 
 def _task(statement, unit, iteration):
-    value = (
-        tir.Cast("int64", iteration)
-        if isinstance(iteration, tir.PrimExpr)
-        else tir.const(iteration, "int64")
-    )
+    value = tir.Cast("int64", iteration) if isinstance(iteration, tir.PrimExpr) else tir.const(iteration, "int64")
     body = tir.AttrStmt(tir.const(0, "int64"), "tl.ascend_s4_iter", value, statement)
     return tir.AttrStmt(tir.const(unit, "int64"), "tl.ascend_s4_task", 1, body)
 
@@ -110,9 +106,7 @@ def _fixture(
     bytes_per_element = tvm.DataType(dtype).bits // 8
     stride = 64 * bytes_per_element
     final = final.with_attr("address_map", {} if elide_empty and not trips else {physical.data: 0})
-    final = final.with_attr(
-        "size_map", {} if elide_empty and not trips else {physical.data: versions * stride}
-    )
+    final = final.with_attr("size_map", {} if elide_empty and not trips else {physical.data: versions * stride})
     remap = {
         "logical_data": logical.data,
         "physical_data": physical.data,
@@ -136,9 +130,7 @@ def _fixture(
 def _verify(function):
     before = tvm.ir.save_json(function)
     with tvm.transform.PassContext(config={"tl.ascend_pipeline_planner": "constraint"}):
-        result = tilelang.transform.AscendVerifyConstraintSync(TARGET, "A3")(
-            tvm.IRModule({"main": function})
-        )["main"]
+        result = tilelang.transform.AscendVerifyConstraintSync(TARGET, "A3")(tvm.IRModule({"main": function}))["main"]
     assert result.same_as(function)
     assert tvm.ir.save_json(function) == before
 
@@ -190,9 +182,7 @@ def test_claimed_unused_versions_must_still_be_physically_allocated(versions):
         _verify(_fixture(versions, 1, short_allocation=True))
 
 
-@pytest.mark.parametrize(
-    "field,value", [("version_stride_bytes", 128), ("versions", 4), ("selector_origin", 9)]
-)
+@pytest.mark.parametrize("field,value", [("version_stride_bytes", 128), ("versions", 4), ("selector_origin", 9)])
 def test_inconsistent_remap_geometry_is_rejected(field, value):
     function = _fixture(2, 2)
     remap = dict(function.attrs["tl.ascend_s5_buffer_remap"][0].items())
@@ -335,10 +325,7 @@ def test_real_injected_prologue_guards_exclude_negative_logical_iterations():
     body = tir.stmt_functor.ir_transform(function.body, None, one_trip, ["tir.For"])
     planned = _plan(tvm.IRModule.from_expr(function.with_body(body)), configs())
     function = tilelang.transform.InjectSoftwarePipeline()(planned)["main"]
-    units = [
-        int(unit)
-        for unit in planned["main"].attrs["tl.ascend_s4_manifest"]["candidates"][0]["unit_ids"]
-    ]
+    units = [int(unit) for unit in planned["main"].attrs["tl.ascend_s4_manifest"]["candidates"][0]["unit_ids"]]
 
     def observe_task(attribute):
         if attribute.attr_key != "tl.ascend_s4_task":
@@ -346,16 +333,10 @@ def test_real_injected_prologue_guards_exclude_negative_logical_iterations():
         iterations = []
         tir.stmt_functor.post_order_visit(
             attribute.body,
-            lambda node: (
-                iterations.append(node.value)
-                if isinstance(node, tir.AttrStmt) and node.attr_key == "tl.ascend_s4_iter"
-                else None
-            ),
+            lambda node: iterations.append(node.value) if isinstance(node, tir.AttrStmt) and node.attr_key == "tl.ascend_s4_iter" else None,
         )
         assert len(iterations) == 1
-        return tir.Evaluate(
-            tir.call_extern("handle", "observe_unit", attribute.node, iterations[0])
-        )
+        return tir.Evaluate(tir.call_extern("handle", "observe_unit", attribute.node, iterations[0]))
 
     # Replace only terminal hardware tasks in a test copy; retain the injector's
     # actual clocks, predicates and substituted logical iteration expressions.
@@ -380,7 +361,5 @@ def test_real_injected_prologue_guards_exclude_negative_logical_iterations():
             return statement.then_case
         return tir.BlockRealize(statement.iter_values, True, statement.block)
 
-    unchecked_probe = tir.stmt_functor.ir_transform(
-        probe, None, ignore_predicate, ["tir.IfThenElse", "tir.BlockRealize"]
-    )
+    unchecked_probe = tir.stmt_functor.ir_transform(probe, None, ignore_predicate, ["tir.IfThenElse", "tir.BlockRealize"])
     assert any(iteration < 0 for _, iteration in trace(unchecked_probe))

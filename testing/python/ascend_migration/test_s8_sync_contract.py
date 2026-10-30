@@ -55,17 +55,13 @@ def lower(function):
 def verify(function):
     before = tvm.ir.save_json(function)
     with tvm.transform.PassContext(config=configs()):
-        checked = tilelang.transform.AscendVerifyAutoSchedule(TARGET, "A3")(
-            tvm.IRModule.from_expr(function)
-        )["main"]
+        checked = tilelang.transform.AscendVerifyAutoSchedule(TARGET, "A3")(tvm.IRModule.from_expr(function))["main"]
     assert checked.same_as(function)
     assert tvm.ir.save_json(function) == before
 
 
 def rewrite_calls(function, callback):
-    return function.with_body(
-        TIR.stmt_functor.ir_transform(function.body, None, callback, ["tir.Call"])
-    )
+    return function.with_body(TIR.stmt_functor.ir_transform(function.body, None, callback, ["tir.Call"]))
 
 
 def call_name(call):
@@ -97,18 +93,12 @@ def test_missing_all_boundary_is_rejected(gemm):
 
     def remove(node):
         nonlocal changed
-        if (
-            not changed
-            and isinstance(node.value, TIR.Call)
-            and call_name(node.value) == "tl.ascend_auto_barrier"
-        ):
+        if not changed and isinstance(node.value, TIR.Call) and call_name(node.value) == "tl.ascend_auto_barrier":
             changed = True
             return TIR.Evaluate(0)
         return None
 
-    function = gemm[0].with_body(
-        TIR.stmt_functor.ir_transform(gemm[0].body, None, remove, ["tir.Evaluate"])
-    )
+    function = gemm[0].with_body(TIR.stmt_functor.ir_transform(gemm[0].body, None, remove, ["tir.Evaluate"]))
     assert changed
     with pytest.raises(tvm.TVMError, match="ALL completion boundary"):
         verify(function)
@@ -141,9 +131,7 @@ def test_actual_cross_protocol_faults_are_not_hidden_by_stored_plan(mixed, damag
         changed = True
         return TIR.Evaluate(TIR.Call(call.dtype, call.op, args))
 
-    function = mixed[0].with_body(
-        TIR.stmt_functor.ir_transform(mixed[0].body, None, mutate, ["tir.Evaluate"])
-    )
+    function = mixed[0].with_body(TIR.stmt_functor.ir_transform(mixed[0].body, None, mutate, ["tir.Evaluate"]))
     assert changed
     with pytest.raises(tvm.TVMError, match="Auto|auto|mode2|PIPE|producer|consumer"):
         verify(function)
@@ -282,9 +270,7 @@ def test_reduction_scratch_must_fit_its_real_source_allocation(reduction):
             for buffer in node.alloc_buffers:
                 if buffer.data.same_as(roots[0]):
                     changed = True
-                    buffer = TIR.decl_buffer(
-                        [1], buffer.dtype, buffer.name, data=buffer.data, scope=buffer.scope()
-                    )
+                    buffer = TIR.decl_buffer([1], buffer.dtype, buffer.name, data=buffer.data, scope=buffer.scope())
                 buffers.append(buffer)
             return TIR.Block(
                 node.iter_vars,
@@ -299,9 +285,7 @@ def test_reduction_scratch_must_fit_its_real_source_allocation(reduction):
             )
         return None
 
-    function = source.with_body(
-        TIR.stmt_functor.ir_transform(source.body, None, shrink, ["tir.Allocate", "tir.Block"])
-    )
+    function = source.with_body(TIR.stmt_functor.ir_transform(source.body, None, shrink, ["tir.Allocate", "tir.Block"]))
     assert changed
     with pytest.raises(tvm.TVMError, match="footprint exceeds its real allocation|scratch|Scratch"):
         tvm.get_global_func("tl.transform.AnalyzeAscendAutoSchedule")(function)
@@ -359,9 +343,7 @@ def test_mask_reaching_setter_fault_is_rejected_after_legalization(reduction, da
         args[0] = TIR.const(0, "uint64")
         return TIR.Evaluate(TIR.Call(node.value.dtype, node.value.op, args))
 
-    function = reduction[1].with_body(
-        TIR.stmt_functor.ir_transform(reduction[1].body, None, mutate, ["tir.Evaluate"])
-    )
+    function = reduction[1].with_body(TIR.stmt_functor.ir_transform(reduction[1].body, None, mutate, ["tir.Evaluate"]))
     assert changed
     with pytest.raises(tvm.TVMError, match="matching reaching setter"):
         verify_mask(function)
@@ -373,10 +355,7 @@ def test_same_pool_alias_cannot_overwrite_an_earlier_source_producer(gemm):
     owners = [
         row
         for row in function.attrs[REMAP]
-        if any(
-            storage["data"].same_as(row["logical_data"]) and str(storage["scope"]) == "shared.l1"
-            for storage in storages
-        )
+        if any(storage["data"].same_as(row["logical_data"]) and str(storage["scope"]) == "shared.l1" for storage in storages)
     ]
     assert len(owners) >= 2
     addresses = dict(function.attrs["address_map"].items())
@@ -397,13 +376,9 @@ def test_actual_allocate_cannot_exceed_the_real_size_map(gemm):
         extents = list(node.extents)
         extents[0] = extents[0] * 2
         changed = True
-        return TIR.Allocate(
-            node.buffer_var, node.dtype, extents, node.condition, node.body, node.annotations
-        )
+        return TIR.Allocate(node.buffer_var, node.dtype, extents, node.condition, node.body, node.annotations)
 
-    function = function.with_body(
-        TIR.stmt_functor.ir_transform(function.body, None, enlarge, ["tir.Allocate"])
-    )
+    function = function.with_body(TIR.stmt_functor.ir_transform(function.body, None, enlarge, ["tir.Allocate"]))
     assert changed
     with pytest.raises(tvm.TVMError, match="Allocate exceeds size_map"):
         verify(function)
@@ -413,18 +388,14 @@ def test_public_parameter_order_is_part_of_the_original_semantics(gemm):
     function = gemm[0]
     params = list(function.params)
     params[0], params[1] = params[1], params[0]
-    changed = TIR.PrimFunc(
-        params, function.body, function.ret_type, function.buffer_map, function.attrs
-    )
+    changed = TIR.PrimFunc(params, function.body, function.ret_type, function.buffer_map, function.attrs)
     with pytest.raises(tvm.TVMError, match="ordered public parameter role"):
         verify(changed)
 
 
 def test_empty_source_cannot_acquire_a_hardware_event():
     function = lower(make_gemm_kernel(trips=0))[0]
-    event = TIR.Evaluate(
-        TIR.Call("handle", tvm.ir.Op.get("tl.ascend_auto_barrier"), [TIR.StringImm("PIPE_ALL")])
-    )
+    event = TIR.Evaluate(TIR.Call("handle", tvm.ir.Op.get("tl.ascend_auto_barrier"), [TIR.StringImm("PIPE_ALL")]))
     body = TIR.SeqStmt(
         [
             function.body,
@@ -446,14 +417,10 @@ def test_nonempty_source_requires_the_same_actual_vector_launch_axis(mixed):
         }:
             assert not changed and int(node.value) == 2
             changed = True
-            return TIR.AttrStmt(
-                node.node, node.attr_key, TIR.IntImm(node.value.dtype, 1), node.body
-            )
+            return TIR.AttrStmt(node.node, node.attr_key, TIR.IntImm(node.value.dtype, 1), node.body)
         return None
 
-    function = mixed[0].with_body(
-        TIR.stmt_functor.ir_transform(mixed[0].body, None, shrink, ["tir.AttrStmt"])
-    )
+    function = mixed[0].with_body(TIR.stmt_functor.ir_transform(mixed[0].body, None, shrink, ["tir.AttrStmt"]))
     assert changed
     with pytest.raises(tvm.TVMError, match="physical launch mapping changed"):
         verify(function)
@@ -475,11 +442,7 @@ def test_caller_workspace_buffer_abi_cannot_be_resized_or_retyped(mixed, damage)
     else:
         assert dtype == "float32"
         dtype = "int32"
-    buffers[param] = TIR.decl_buffer(
-        shape, dtype, buffer.name, data=buffer.data, scope=buffer.scope()
-    )
-    changed = TIR.PrimFunc(
-        function.params, function.body, function.ret_type, buffers, function.attrs
-    )
+    buffers[param] = TIR.decl_buffer(shape, dtype, buffer.name, data=buffer.data, scope=buffer.scope())
+    changed = TIR.PrimFunc(function.params, function.body, function.ret_type, buffers, function.attrs)
     with pytest.raises(tvm.TVMError, match="GM storage capacity/ABI|buffer ABI|parameter.*dtype"):
         verify(changed)

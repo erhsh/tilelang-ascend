@@ -43,9 +43,9 @@ def allocate(rows, platform="A3"):
             assert slot == int(row["fixed_id"])
         for other in range(index):
             previous = rows[other]
-            if domain(row) == domain(previous) and max(
-                int(row["begin"]), int(previous["begin"])
-            ) < min(int(row["end"]), int(previous["end"])):
+            if domain(row) == domain(previous) and max(int(row["begin"]), int(previous["begin"])) < min(
+                int(row["end"]), int(previous["end"])
+            ):
                 assert slot != assignments[other]
     return result
 
@@ -71,9 +71,7 @@ def test_half_open_boundaries_reuse_slots_without_accumulating_total_request_cou
 
 def test_directed_pipe_pair_and_physical_instance_are_independent_domains():
     rows = (
-        [request(instance=0) for _ in range(8)]
-        + [request(instance=1) for _ in range(8)]
-        + [request(src="V", dst="MTE2") for _ in range(8)]
+        [request(instance=0) for _ in range(8)] + [request(instance=1) for _ in range(8)] + [request(src="V", dst="MTE2") for _ in range(8)]
     )
     result = allocate(rows)
     assert len(result["domains"]) == 3

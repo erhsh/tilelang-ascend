@@ -130,9 +130,7 @@ def test_persistent_guard_for_dynamic_domain():
         ([4, 2], WAVE_SIZE, 0, 0, "group_size must be positive"),
     ],
 )
-def test_persistent_rejects_invalid_static_arguments(
-    domain, wave_size, index, group_size, error_match
-):
+def test_persistent_rejects_invalid_static_arguments(domain, wave_size, index, group_size, error_match):
     with pytest.raises(tvm.TVMError, match=error_match):
         T.Persistent(domain, wave_size, index, group_size)
 

@@ -39,10 +39,7 @@ def test_actual_cache_key_partitions_constraint_from_both_legacy_forms(tmp_path)
     explicit = vector_pass_configs("legacy")
     default = {key: value for key, value in explicit.items() if key != "tl.ascend_pipeline_planner"}
     constraint = vector_pass_configs("constraint")
-    keys = [
-        cache._generate_key(**_arguments(program, configs))
-        for configs in (default, explicit, constraint)
-    ]
+    keys = [cache._generate_key(**_arguments(program, configs)) for configs in (default, explicit, constraint)]
     # Default and explicit legacy have the same behavior, but may have distinct
     # cache keys because the optional default is not materialized by Python.
     assert keys[2] not in keys[:2]
@@ -66,9 +63,7 @@ def test_cache_hit_routing_cannot_restore_the_other_strategy(tmp_path, monkeypat
     monkeypatch.setattr(cache_module, "is_cache_enabled", lambda: True)
     monkeypatch.setattr(cache_module, "JITKernel", construct)
     monkeypatch.setattr(cache, "_load_kernel_from_disk", lambda key, *args: disk.get(key))
-    monkeypatch.setattr(
-        cache, "_save_kernel_to_disk", lambda key, kernel, *args: disk.update({key: kernel})
-    )
+    monkeypatch.setattr(cache, "_save_kernel_to_disk", lambda key, kernel, *args: disk.update({key: kernel}))
     restored = {}
     for strategy in ("legacy", "constraint", "legacy", "constraint"):
         if layer == "disk":

@@ -22,9 +22,7 @@ def run_blocked(tmp_path, entry, extra=(), *, optimize=False):
     command = [sys.executable]
     if optimize:
         command.append("-O")
-    command.extend(
-        [str(RUNNERS / f"{entry}.py"), "--platform", "a3", "--output", str(output), *extra]
-    )
+    command.extend([str(RUNNERS / f"{entry}.py"), "--platform", "a3", "--output", str(output), *extra])
     env = isolated_environment(tmp_path, block_z3=True)
     env["TL_ASCEND_MIGRATION_BUILD_MANIFEST"] = str(tmp_path / "absent-build.json")
     env["TL_ASCEND_PIPELINE_COST_PROFILE"] = str(tmp_path / "absent-profile.json")

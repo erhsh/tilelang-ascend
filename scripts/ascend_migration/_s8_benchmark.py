@@ -46,9 +46,7 @@ def sample_summary(values):
     if not values or any(type(value) is not int or value <= 0 for value in values):
         raise ValueError("Timing samples must be positive integer nanoseconds")
     generator = random.Random(0)
-    distribution = sorted(
-        statistics.median(generator.choices(values, k=len(values))) for _ in range(1000)
-    )
+    distribution = sorted(statistics.median(generator.choices(values, k=len(values))) for _ in range(1000))
     return {
         "samples": len(values),
         "min_ns": min(values),
@@ -113,13 +111,7 @@ def _compile(tilelang, spec, args, report, artifacts):
         "wall_ns": finished - started,
         "process_cpu_ns": cpu_finished - cpu_started,
         "reaped_child_cpu_ns": round(
-            1e9
-            * (
-                after_children.ru_utime
-                + after_children.ru_stime
-                - before_children.ru_utime
-                - before_children.ru_stime
-            )
+            1e9 * (after_children.ru_utime + after_children.ru_stime - before_children.ru_utime - before_children.ru_stime)
         ),
         "bisheng_wall_ns": records[0]["elapsed_ns"],
         "note": "Frontend/TVM/Bisheng/adapter compile wall; no evidence serialization or data setup",
@@ -228,9 +220,7 @@ def run_measured_worker(args):
                     if phase == "measured":
                         host_ns = host_finished - host_started
                         if host_ns <= 0:
-                            raise ValueError(
-                                "Host dispatch clock did not produce a positive interval"
-                            )
+                            raise ValueError("Host dispatch clock did not produce a positive interval")
                         report["samples"].append(
                             {
                                 "index": len(report["samples"]),
@@ -243,16 +233,12 @@ def run_measured_worker(args):
                         )
                 _save(report, args.output)
         expected = args.repeat * (BENCHMARK_WARMUPS + 1)
-        if (
-            counts != {"attempted": expected, "completed": expected}
-            or report["golden_checks"] != expected
-        ):
+        if counts != {"attempted": expected, "completed": expected} or report["golden_checks"] != expected:
             raise AssertionError("Benchmark launch/golden accounting is incomplete")
         if len(report["journal"]) != expected or len(report["samples"]) != args.repeat:
             raise AssertionError("Benchmark sample coverage differs from the fixed policy")
         report["summary"] = {
-            metric: sample_summary([row[metric] for row in report["samples"]])
-            for metric in ("host_dispatch_ns", "event_span_ns")
+            metric: sample_summary([row[metric] for row in report["samples"]]) for metric in ("host_dispatch_ns", "event_span_ns")
         }
     except Exception as error:
         report["traceback"] = traceback.format_exc()
@@ -273,8 +259,7 @@ def compare_performance(report):
                 or worker["compilations"][0]["status"] != "PASS"
                 or len(worker["kernels"]) != 1
                 or len(worker["launches"]) != 1
-                or next(iter(worker["launches"].values()))
-                != {"attempted": expected, "completed": expected}
+                or next(iter(worker["launches"].values())) != {"attempted": expected, "completed": expected}
                 or worker["golden_checks"] != expected
                 or len(worker["journal"]) != expected
                 or len(worker["samples"]) != report["repeat"]
@@ -290,9 +275,7 @@ def compare_performance(report):
                     round_phases()[index % (BENCHMARK_WARMUPS + 1)],
                     "PASS",
                 ):
-                    raise AssertionError(
-                        "Benchmark journal does not establish checked warmups before samples"
-                    )
+                    raise AssertionError("Benchmark journal does not establish checked warmups before samples")
             for index, sample in enumerate(worker["samples"]):
                 if (sample["index"], sample["round"], sample["golden_status"]) != (
                     index,
@@ -300,10 +283,7 @@ def compare_performance(report):
                     "PASS",
                 ):
                     raise AssertionError("Missing ordered measured sample/golden")
-                if (
-                    sample["host_dispatch_ns"] <= 0
-                    or event_span_ns(sample["event_span_ms_raw"]) != sample["event_span_ns"]
-                ):
+                if sample["host_dispatch_ns"] <= 0 or event_span_ns(sample["event_span_ms_raw"]) != sample["event_span_ns"]:
                     raise AssertionError("Invalid actual host/Event timing samples")
         if left["sampling_policy"] != right["sampling_policy"]:
             raise AssertionError("Paired timing policies differ")
@@ -311,10 +291,7 @@ def compare_performance(report):
             raise AssertionError("Paired benchmark compiler flags differ")
         if compiler_options(left["compilations"][0]) != compiler_options(right["compilations"][0]):
             raise AssertionError("Paired benchmark actual Bisheng options differ")
-        if (
-            left["toolchain"] != right["toolchain"]
-            or left["actual_device"] != right["actual_device"]
-        ):
+        if left["toolchain"] != right["toolchain"] or left["actual_device"] != right["actual_device"]:
             raise AssertionError("Paired benchmark toolchain/device identity differs")
         if len(left["journal"]) != len(right["journal"]):
             raise AssertionError("Paired launch counts differ")
@@ -329,8 +306,7 @@ def compare_performance(report):
             "workspace_golden_sha256",
         )
         if any(
-            {key: a.get(key) for key in fields} != {key: b.get(key) for key in fields}
-            for a, b in zip(left["journal"], right["journal"])
+            {key: a.get(key) for key in fields} != {key: b.get(key) for key in fields} for a, b in zip(left["journal"], right["journal"])
         ):
             raise AssertionError("Paired benchmark inputs/output/golden/workspace differ")
         change = {}

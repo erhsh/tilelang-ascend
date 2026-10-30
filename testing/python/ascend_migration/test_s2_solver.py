@@ -9,9 +9,7 @@ import sys
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-SPEC = importlib.util.spec_from_file_location(
-    "ascend_s2_numeric", ROOT / "tilelang/transform/ascend_z3_scheduler.py"
-)
+SPEC = importlib.util.spec_from_file_location("ascend_s2_numeric", ROOT / "tilelang/transform/ascend_z3_scheduler.py")
 scheduler = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = scheduler
 SPEC.loader.exec_module(scheduler)
@@ -51,9 +49,7 @@ def test_seeded_dags(seed):
     rng = random.Random(seed)
     n = rng.randint(1, 16)
     latencies = [rng.randint(1, 9) for _ in range(n)]
-    edges = [
-        (u, v, 0, latencies[u]) for u in range(n) for v in range(u + 1, n) if rng.random() < 0.2
-    ]
+    edges = [(u, v, 0, latencies[u]) for u in range(n) for v in range(u + 1, n) if rng.random() < 0.2]
     solved(
         problem(
             n,
@@ -301,9 +297,7 @@ def test_controlled_deadline_does_not_guess_a_hard_workload(monkeypatch):
     assert result["start_times"] == []
 
 
-@pytest.mark.parametrize(
-    "reason,status", [("timeout", "TIMEOUT"), ("max. resource limit exceeded", "UNKNOWN")]
-)
+@pytest.mark.parametrize("reason,status", [("timeout", "TIMEOUT"), ("max. resource limit exceeded", "UNKNOWN")])
 def test_backend_unknown_is_never_unsat(reason, status):
     import z3
 

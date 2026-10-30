@@ -14,9 +14,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
-SPEC = importlib.util.spec_from_file_location(
-    "s2_scheduler_oracle_subject", ROOT / "tilelang/transform/ascend_z3_scheduler.py"
-)
+SPEC = importlib.util.spec_from_file_location("s2_scheduler_oracle_subject", ROOT / "tilelang/transform/ascend_z3_scheduler.py")
 scheduler = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = scheduler
 SPEC.loader.exec_module(scheduler)
@@ -87,17 +85,9 @@ def _oracle_valid(problem, period, phases):
     for producer, consumer, distance, gap in problem.get("data_deps", []):
         if starts[consumer] + distance * period - starts[producer] < gap:
             return False
-        if (
-            producer != consumer
-            and distance == gap == 0
-            and starts[producer] == starts[consumer]
-            and keys[producer] >= keys[consumer]
-        ):
+        if producer != consumer and distance == gap == 0 and starts[producer] == starts[consumer] and keys[producer] >= keys[consumer]:
             return False
-    occupied = [
-        {(phases[task] + tick) % period for tick in range(issue)}
-        for task, issue in enumerate(problem["iis"])
-    ]
+    occupied = [{(phases[task] + tick) % period for tick in range(issue)} for task, issue in enumerate(problem["iis"])]
     explicit = {frozenset(pair) for pair in problem.get("resource_deps", [])}
     for left, right in itertools.combinations(range(len(phases)), 2):
         conflict = problem["resource_flags"][left] & problem["resource_flags"][right]
@@ -117,12 +107,7 @@ def _oracle_valid(problem, period, phases):
     for producer, consumer, wrap, gap in problem.get("register_phase_deps", []):
         if phases[consumer] + wrap * period - phases[producer] < gap:
             return False
-        if (
-            producer != consumer
-            and wrap == gap == 0
-            and phases[producer] == phases[consumer]
-            and keys[producer] >= keys[consumer]
-        ):
+        if producer != consumer and wrap == gap == 0 and phases[producer] == phases[consumer] and keys[producer] >= keys[consumer]:
             return False
     return True
 

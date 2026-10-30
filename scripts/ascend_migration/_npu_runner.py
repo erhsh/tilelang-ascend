@@ -34,9 +34,7 @@ def toolchain_identity() -> dict:
         raise RuntimeError("bisheng is not available on PATH")
     resolved = str(Path(selected).resolve())
     version = subprocess.check_output([selected, "--version"], text=True, timeout=10)
-    resource = subprocess.check_output(
-        [selected, "-print-resource-dir"], text=True, timeout=10
-    ).strip()
+    resource = subprocess.check_output([selected, "-print-resource-dir"], text=True, timeout=10).strip()
     ascend_home = os.environ.get("ASCEND_HOME_PATH") or os.environ.get("ASCEND_HOME")
     if not ascend_home:
         raise RuntimeError("ASCEND_HOME_PATH or ASCEND_HOME must identify CANN")
@@ -68,10 +66,7 @@ def prepare_worker(args, evidence: dict) -> tuple:
         import z3
 
         evidence["solver"] = {"version": z3.get_version_string()}
-    libraries = {
-        Path(item["path"]).name: Path(item["path"])
-        for item in evidence["native_build"]["libraries"]
-    }
+    libraries = {Path(item["path"]).name: Path(item["path"]) for item in evidence["native_build"]["libraries"]}
     os.environ["TVM_LIBRARY_PATH"] = str(libraries["libtvm.so"].parent)
     os.environ["TILELANG_LIBRARY_PATH"] = str(libraries["libtilelang_module.so"].parent)
     tvm_python = Path(evidence["native_build"]["tvm_source_root"]) / "python"
@@ -123,9 +118,7 @@ def prepare_worker(args, evidence: dict) -> tuple:
         "device_count": count,
     }
     if actual != args.platform:
-        raise RuntimeError(
-            f"Requested {args.platform}, but actual SoC {name!r} identifies {actual!r}"
-        )
+        raise RuntimeError(f"Requested {args.platform}, but actual SoC {name!r} identifies {actual!r}")
     evidence["inherited_platform_override"] = os.environ.get("TL_PLATFORM")
     os.environ["TL_PLATFORM"] = actual.upper()
     tilelang.disable_cache()
@@ -207,9 +200,7 @@ def run_worker(
             record = {"argv": list(map(str, command)), "status": "RUNNING"}
             record["compiler_realpath"] = str(Path(shutil.which(command[0])).resolve())
             record["source_sha256"] = [
-                {"path": str(part), "sha256": digest(part)}
-                for part in command
-                if str(part).endswith(".cpp") and Path(part).is_file()
+                {"path": str(part), "sha256": digest(part)} for part in command if str(part).endswith(".cpp") and Path(part).is_file()
             ]
             evidence["compilations"].append(record)
             save()
@@ -254,9 +245,7 @@ def run_worker(
             "tl.ascend_memory_planning": False,
             "tl.ascend_auto_sync_vs": False,
         }
-        record["effective_legacy_controls"] = {
-            key: kernel.pass_configs.get(key, default) for key, default in controls.items()
-        }
+        record["effective_legacy_controls"] = {key: kernel.pass_configs.get(key, default) for key, default in controls.items()}
         record["kernel_id"] = str(id(kernel))
         evidence["launches"][str(id(kernel))] = {"attempted": 0, "completed": 0}
         save()
@@ -279,17 +268,11 @@ def run_worker(
         expected_launches = args.repeat * launch_multiplier
         if len(evidence["compilations"]) != 1:
             raise AssertionError("Each case must invoke real Bisheng exactly once")
-        if len(evidence["launches"]) != 1 or any(
-            count["completed"] != expected_launches for count in evidence["launches"].values()
-        ):
-            raise AssertionError(
-                f"Each case must launch the same compiled kernel {expected_launches} times"
-            )
+        if len(evidence["launches"]) != 1 or any(count["completed"] != expected_launches for count in evidence["launches"].values()):
+            raise AssertionError(f"Each case must launch the same compiled kernel {expected_launches} times")
         evidence["status"] = "PASS"
         evidence["golden_checks"] = expected_launches
-        evidence["output_sentinel"] = sentinel_description or (
-            "NaN for floating point, -99 for integer, reset each launch"
-        )
+        evidence["output_sentinel"] = sentinel_description or ("NaN for floating point, -99 for integer, reset each launch")
         save()
         return 0
     except Exception as exc:
@@ -306,16 +289,12 @@ def run_cases(args, report, cases, entry_path, *, final_check=None) -> int:
     # Keep previous failures and their logs intact when rerunning an output path.
     destination = Path(args.output).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    artifacts = Path(
-        tempfile.mkdtemp(prefix=destination.stem + "-artifacts-", dir=destination.parent)
-    )
+    artifacts = Path(tempfile.mkdtemp(prefix=destination.stem + "-artifacts-", dir=destination.parent))
     report["artifacts"] = str(artifacts)
     report["required_cases"] = list(cases)
     report["cases"] = []
     report["counts"]["total"] = len(cases)
-    report["timeout_policy"] = (
-        "separate process group per case; stop the group on first failure or timeout"
-    )
+    report["timeout_policy"] = "separate process group per case; stop the group on first failure or timeout"
     for name in ("preflight", *cases):
         case_output = artifacts / f"{name}.json"
         case_output.unlink(missing_ok=True)
@@ -361,20 +340,10 @@ def run_cases(args, report, cases, entry_path, *, final_check=None) -> int:
         if result["exit_code"] or evidence.get("status") != "PASS":
             if name != "preflight":
                 report["counts"]["failed"] += 1
-            report["not_run"] = [
-                item for item in cases if item not in {case["name"] for case in report["cases"]}
-            ]
-            status = (
-                "TIMEOUT"
-                if result["exit_code"] == 124
-                else "BLOCKED"
-                if result["exit_code"] == 2
-                else "FAIL"
-            )
+            report["not_run"] = [item for item in cases if item not in {case["name"] for case in report["cases"]}]
+            status = "TIMEOUT" if result["exit_code"] == 124 else "BLOCKED" if result["exit_code"] == 2 else "FAIL"
             error = (
-                evidence.get("error")
-                or result.get("error")
-                or (f"{name} did not pass; see {result.get('log', 'process launch error')}")
+                evidence.get("error") or result.get("error") or (f"{name} did not pass; see {result.get('log', 'process launch error')}")
             )
             if status == "TIMEOUT":
                 error = f"{name} exceeded {args.timeout}s; its entire process group was stopped"

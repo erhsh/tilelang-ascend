@@ -24,9 +24,7 @@ TARGET = tvm.target.Target("c -keys=ascend -model=ascendc")
 
 def before_auto(function):
     with tvm.transform.PassContext(config=pass_configs("auto")):
-        module = LowerAndLegalize(
-            tvm.IRModule.from_expr(function.with_attr("npu_platform", "A3")), TARGET
-        )
+        module = LowerAndLegalize(tvm.IRModule.from_expr(function.with_attr("npu_platform", "A3")), TARGET)
         return tir.transform.PlanAndUpdateBufferAllocationLocation()(module)
 
 
@@ -56,9 +54,7 @@ def final_verifier_input(function):
     tilelang.transform.AscendVerifyAutoSchedule = observe
     try:
         with tvm.transform.PassContext(config=pass_configs("auto")):
-            module = LowerAndLegalize(
-                tvm.IRModule.from_expr(function.with_attr("npu_platform", "A3")), TARGET
-            )
+            module = LowerAndLegalize(tvm.IRModule.from_expr(function.with_attr("npu_platform", "A3")), TARGET)
             OptimizeForTarget(module, TARGET, "A3")
     finally:
         tilelang.transform.AscendVerifyAutoSchedule = original
@@ -96,9 +92,7 @@ def test_readonly_analysis_of_real_lowered_operations(kind):
     analysis = source_analysis(function)
     assert function.same_as(original) and tvm.ir.save_json(function) == before
     assert analysis["tasks"] and analysis["storages"]
-    assert sorted(int(task["id"]) for task in analysis["tasks"]) == list(
-        range(len(analysis["tasks"]))
-    )
+    assert sorted(int(task["id"]) for task in analysis["tasks"]) == list(range(len(analysis["tasks"])))
     assert all(task["reads"] or task["writes"] for task in analysis["tasks"])
 
 
@@ -107,9 +101,7 @@ def test_finite_source_loop_has_exact_operation_coverage(trips):
     analysis = source_analysis(before_auto(make_vector_kernel(trips))["main"])
     # Two independent Vector actors, four real operations per finite epoch.
     assert len(analysis["tasks"]) == trips * 2 * 4
-    assert {tuple(int(value) for value in task["epoch"]) for task in analysis["tasks"]} == {
-        (index,) for index in range(trips)
-    }
+    assert {tuple(int(value) for value in task["epoch"]) for task in analysis["tasks"]} == {(index,) for index in range(trips)}
 
 
 @pytest.mark.parametrize("kind", ["gemm", "reduce", "mixed_add", "mixed_reduce"])
@@ -169,12 +161,7 @@ def test_rectangular_gm_to_l1_footprint_matches_actual_tensor_geometry(m, n, k):
     analysis = source_analysis(function)
     a, b = [function.buffer_map[parameter].data for parameter in function.params[:2]]
     for variable, expected in ((a, m * k * 2), (b, k * n * 2)):
-        effects = [
-            effect
-            for task in analysis["tasks"]
-            for effect in task["reads"]
-            if effect["data"].same_as(variable)
-        ]
+        effects = [effect for task in analysis["tasks"] for effect in task["reads"] if effect["data"].same_as(variable)]
         assert effects
         # DMA analysis emits exact per-row byte intervals, rather than a padded hull.
         cursor = 0
@@ -196,11 +183,7 @@ def test_complete_new_backend_has_real_materialization_and_final_codegen(kind):
 
         def visit(node, old_annotations=old_annotations):
             if isinstance(node, tir.For):
-                old_annotations.extend(
-                    str(key)
-                    for key in node.annotations
-                    if str(key).startswith("software_pipeline_")
-                )
+                old_annotations.extend(str(key) for key in node.annotations if str(key).startswith("software_pipeline_"))
 
         tir.stmt_functor.post_order_visit(function.body, visit)
         assert not old_annotations
@@ -210,9 +193,7 @@ def test_complete_new_backend_has_real_materialization_and_final_codegen(kind):
         assert any(row["versions"] == 2 for record in records for row in record["buffer_remap"])
     source = artifact.kernel_source
     assert source and "PIPE_ALL" in source
-    assert not any(
-        token in source for token in ("DataCopyUB2L1", "DataCopyL0C2UB", "VFCall", "flag_spill")
-    )
+    assert not any(token in source for token in ("DataCopyUB2L1", "DataCopyL0C2UB", "VFCall", "flag_spill"))
 
 
 def test_materializer_does_not_silently_apply_versions_twice():
@@ -235,10 +216,7 @@ def test_four_core_mixed_resource_masks_preserve_all_physical_domains_above_bit3
     record = inspect_function(function)
     tasks = list(function.attrs["tl.ascend_s8_schedule"]["source_analysis"]["tasks"])
     masks = record["problem"]["resource_flags"]
-    domains = [
-        {(int(task["group"]), int(task["actor"]), str(pipe)) for pipe in task["resources"]}
-        for task in tasks
-    ]
+    domains = [{(int(task["group"]), int(task["actor"]), str(pipe)) for pipe in task["resources"]} for task in tasks]
     assert len(tasks) == len(masks) == 120
     assert max(masks) >= 1 << 32
     union = 0
@@ -256,11 +234,7 @@ def test_active_cube_call_in_conflicting_scope_is_rejected(mutation):
     function = make_gemm_kernel(1)
 
     def replace(node):
-        if (
-            isinstance(node, tir.AttrStmt)
-            and node.attr_key == "resource_scope"
-            and int(node.value) == 0
-        ):
+        if isinstance(node, tir.AttrStmt) and node.attr_key == "resource_scope" and int(node.value) == 0:
             if mutation == "wrong_actor":
                 return tir.AttrStmt(node.node, node.attr_key, 1, node.body)
             return tir.AttrStmt(

@@ -24,9 +24,7 @@ def _function(frame_factory):
 
 def _loops(function):
     loops = []
-    tir.stmt_functor.post_order_visit(
-        function.body, lambda node: loops.append(node) if isinstance(node, tir.For) else None
-    )
+    tir.stmt_functor.post_order_visit(function.body, lambda node: loops.append(node) if isinstance(node, tir.For) else None)
     return list(reversed(loops))
 
 
@@ -65,9 +63,7 @@ def test_pipelined_default_zero_none_and_manual_abi():
     with pytest.raises((TypeError, tvm.TVMError)):
         T.Pipelined(5, num_stages=None)
     metadata = {"user.loop_tag": "manual"}
-    function = _function(
-        lambda: T.Pipelined(1, 5, 0, [0], [0], [[0, 1]], [[0]], 3, annotations=metadata)
-    )
+    function = _function(lambda: T.Pipelined(1, 5, 0, [0], [0], [[0, 1]], [[0]], 3, annotations=metadata))
     annotation = _loops(function)[0].annotations
     assert "num_stages" not in annotation
     assert list(annotation["tl_pipeline_order"]) == [0]
@@ -140,9 +136,7 @@ def test_persistent_large_positive_domain_uses_wide_schedule_arithmetic():
     assert int(condition.a) == 2**32
     # The user-facing coordinate variables retain their declared int32 dtype.
     lets = []
-    tir.stmt_functor.post_order_visit(
-        function.body, lambda node: lets.append(node) if isinstance(node, tir.LetStmt) else None
-    )
+    tir.stmt_functor.post_order_visit(function.body, lambda node: lets.append(node) if isinstance(node, tir.LetStmt) else None)
     assert len(lets) == 2
     assert all(binding.var.dtype == binding.value.dtype == "int32" for binding in lets)
     for worker, wave, expected in [(0, 0, (0, 0)), (15, (2**32 - 1) // 20, (65535, 65535))]:
@@ -151,17 +145,11 @@ def test_persistent_large_positive_domain_uses_wide_schedule_arithmetic():
         bindings = []
         tir.stmt_functor.post_order_visit(
             sample.body,
-            lambda node, bindings=bindings: (
-                bindings.append(node) if isinstance(node, tir.LetStmt) else None
-            ),
+            lambda node, bindings=bindings: bindings.append(node) if isinstance(node, tir.LetStmt) else None,
         )
         coordinates = {
             str(binding.var.name): int(
-                tvm.arith.Analyzer().simplify(
-                    tir.stmt_functor.substitute(
-                        binding.value, {sample_loop.loop_var: tir.IntImm("int64", wave)}
-                    )
-                )
+                tvm.arith.Analyzer().simplify(tir.stmt_functor.substitute(binding.value, {sample_loop.loop_var: tir.IntImm("int64", wave)}))
             )
             for binding in bindings
         }
@@ -187,9 +175,7 @@ def test_persistent_static_padded_product_overflow_is_rejected():
         ([4, 2], 8, tir.const(True, "bool"), 8, 0, "integer scalar"),
     ],
 )
-def test_persistent_invalid_domain_is_rejected(
-    domain, wave_size, index, group_size, num_stages, error
-):
+def test_persistent_invalid_domain_is_rejected(domain, wave_size, index, group_size, num_stages, error):
     with pytest.raises(tvm.TVMError, match=error):
         _ffi_api.Persistent(domain, wave_size, index, group_size, num_stages, {})
 
@@ -238,9 +224,7 @@ def test_reserved_annotations_rejected_by_python_and_native(key, builder):
         python_error, native_error = "bool", "boolean"
     else:
         python_error = native_error = "reserved"
-    python_exception = (
-        TypeError if key == "enable_offset" and builder == "pipelined" else ValueError
-    )
+    python_exception = TypeError if key == "enable_offset" and builder == "pipelined" else ValueError
     with pytest.raises(python_exception, match=python_error):
         python()
     with pytest.raises(tvm.TVMError, match=native_error):

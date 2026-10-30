@@ -581,8 +581,18 @@ def test_layout_annotation(M, N, K, block_M, block_N, block_K, a_layout, b_layou
 # examples/gemm/example_gemm_persistent.py.
 # =============================================================================
 def persistent_gemm(
-    M, N, K, block_M, block_N, block_K, core_num, dtype="float16", accum_dtype="float",
-    launch_core_num=None, group_size=8, num_stages=0,
+    M,
+    N,
+    K,
+    block_M,
+    block_N,
+    block_K,
+    core_num,
+    dtype="float16",
+    accum_dtype="float",
+    launch_core_num=None,
+    group_size=8,
+    num_stages=0,
 ):
     """Persistent-scheduled GEMM (implicit L1 -> L0 copy via gemm_v0).
 
@@ -606,8 +616,11 @@ def persistent_gemm(
 
             with T.Scope("C"):
                 for bx, by in T.Persistent(
-                    [T.ceildiv(M, block_M), T.ceildiv(N, block_N)], core_num, cid,
-                    group_size=group_size, num_stages=num_stages,
+                    [T.ceildiv(M, block_M), T.ceildiv(N, block_N)],
+                    core_num,
+                    cid,
+                    group_size=group_size,
+                    num_stages=num_stages,
                 ):
                     loop_k = T.ceildiv(K, block_K)
                     for k in T.serial(loop_k):
@@ -622,12 +635,35 @@ def persistent_gemm(
 
 
 def run_test_persistent_gemm(
-    M, N, K, block_M, block_N, block_K, core_num, dtype, accum_dtype, target,
-    repeat=1, seed=0, launch_core_num=None, group_size=8, num_stages=0,
+    M,
+    N,
+    K,
+    block_M,
+    block_N,
+    block_K,
+    core_num,
+    dtype,
+    accum_dtype,
+    target,
+    repeat=1,
+    seed=0,
+    launch_core_num=None,
+    group_size=8,
+    num_stages=0,
 ):
     func = persistent_gemm(
-        M, N, K, block_M, block_N, block_K, core_num, dtype, accum_dtype,
-        launch_core_num=launch_core_num, group_size=group_size, num_stages=num_stages,
+        M,
+        N,
+        K,
+        block_M,
+        block_N,
+        block_K,
+        core_num,
+        dtype,
+        accum_dtype,
+        launch_core_num=launch_core_num,
+        group_size=group_size,
+        num_stages=num_stages,
     )
     func = tilelang.compile(func, out_idx=[], pass_configs=CUBE_PASS_CONFIGS, target=target)
     check_persistent_gemm(func, M, N, K, dtype, repeat=repeat, seed=seed)
@@ -644,8 +680,11 @@ def check_persistent_gemm(func, M, N, K, dtype, repeat=1, seed=0):
     c = torch.empty((M, N), dtype=td, device="npu")
     ref = (a.float() @ b.float()).to(td)
     repeat_launch(
-        func, (a, b, c), (c,),
-        lambda: torch.testing.assert_close(c, ref, rtol=1e-2, atol=1e-2), repeat,
+        func,
+        (a, b, c),
+        (c,),
+        lambda: torch.testing.assert_close(c, ref, rtol=1e-2, atol=1e-2),
+        repeat,
     )
 
 

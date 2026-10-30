@@ -36,9 +36,7 @@ def file_digest(path: Path) -> str:
 
 def tvm_provenance(tvm_source: Path) -> dict[str, Any]:
     try:
-        commit = subprocess.check_output(
-            ["git", "-C", str(tvm_source), "rev-parse", "HEAD"], text=True
-        ).strip()
+        commit = subprocess.check_output(["git", "-C", str(tvm_source), "rev-parse", "HEAD"], text=True).strip()
         for patch in TVM_PATCHES:
             subprocess.run(
                 ["git", "-C", str(tvm_source), "apply", "--reverse", "--check", str(ROOT / patch)],
@@ -53,9 +51,7 @@ def tvm_provenance(tvm_source: Path) -> dict[str, Any]:
     return {
         "reference_checkout": str(tvm_source),
         "reference_commit": commit,
-        "applied_patches": [
-            {"path": name, "sha256": file_digest(ROOT / name)} for name in TVM_PATCHES
-        ],
+        "applied_patches": [{"path": name, "sha256": file_digest(ROOT / name)} for name in TVM_PATCHES],
     }
 
 
@@ -74,9 +70,7 @@ def source_identity(root: Path, paths: tuple[str, ...]) -> dict[str, Any]:
                     directories[:] = []
                     continue
                 visited.add(resolved)
-                directories[:] = sorted(
-                    item for item in directories if item not in {".git", "__pycache__"}
-                )
+                directories[:] = sorted(item for item in directories if item not in {".git", "__pycache__"})
                 files.extend(Path(current) / item for item in names if item != ".git")
     if not files:
         raise ValueError(f"No source inputs found under {root}")
@@ -89,9 +83,7 @@ def source_identity(root: Path, paths: tuple[str, ...]) -> dict[str, Any]:
     return {"algorithm": "sha256", "digest": digest.hexdigest(), "files": len(files)}
 
 
-def verify_cmake_source(
-    cache: Path, tvm_source: Path, *, build_source_root: Path | None = None
-) -> None:
+def verify_cmake_source(cache: Path, tvm_source: Path, *, build_source_root: Path | None = None) -> None:
     entries = {}
     for line in cache.read_text().splitlines():
         if not line.startswith(("#", "//")) and ":" in line and "=" in line:
@@ -140,9 +132,7 @@ def write_manifest(
     return report
 
 
-def write_relocated_manifest(
-    original_manifest: str | Path, snapshot_root: str | Path, output: str | Path
-) -> dict[str, Any]:
+def write_relocated_manifest(original_manifest: str | Path, snapshot_root: str | Path, output: str | Path) -> dict[str, Any]:
     """Snapshot an already verified build, preserving its original build record.
 
     The caller prepares a source checkout with identical relative source
@@ -212,11 +202,7 @@ def _relocated_build_source(report: dict[str, Any]) -> Path:
         raise ValueError("Original build manifest copy changed")
     origin = json.loads(origin_path.read_text())
     build_source = Path(relocation["build_source_root"])
-    if (
-        not build_source.is_absolute()
-        or origin.get("schema_version") != 1
-        or origin.get("repo_root") != str(build_source)
-    ):
+    if not build_source.is_absolute() or origin.get("schema_version") != 1 or origin.get("repo_root") != str(build_source):
         raise ValueError("Relocated manifest does not identify the original build checkout")
     for field in ("project_source", "tvm_source_root", "tvm_source", "tvm_provenance"):
         if report[field] != origin[field]:
@@ -256,9 +242,7 @@ def verify_manifest(path: str | Path) -> dict[str, Any]:
     if report["project_source"] != source_identity(ROOT, SOURCE_PATHS):
         raise ValueError("Native build manifest does not match the current project sources")
     tvm_source = Path(report["tvm_source_root"])
-    verify_cmake_source(
-        Path(report["cmake_cache"]["path"]), tvm_source, build_source_root=build_source_root
-    )
+    verify_cmake_source(Path(report["cmake_cache"]["path"]), tvm_source, build_source_root=build_source_root)
     if report["tvm_provenance"] != tvm_provenance(tvm_source):
         raise ValueError("Native build manifest does not match the TVM commit and patches")
     if report["tvm_source"] != source_identity(tvm_source, TVM_PATHS):

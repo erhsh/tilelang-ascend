@@ -71,11 +71,7 @@ def install_fake_worker(monkeypatch, tmp_path, *, raw_ms=0.005, fail_golden=Fals
             assert not observed.active and self is not end
             return raw_ms
 
-    torch = SimpleNamespace(
-        npu=SimpleNamespace(
-            Stream=lambda **kwargs: Stream(), Event=Event, stream=lambda stream: nullcontext()
-        )
-    )
+    torch = SimpleNamespace(npu=SimpleNamespace(Stream=lambda **kwargs: Stream(), Event=Event, stream=lambda stream: nullcontext()))
 
     class State:
         input_hashes = {"A": "input"}
@@ -129,9 +125,7 @@ def install_fake_worker(monkeypatch, tmp_path, *, raw_ms=0.005, fail_golden=Fals
     monkeypatch.setattr(benchmark, "describe_kernel", lambda *a: {})
     monkeypatch.setattr(benchmark, "CaseData", State)
     monkeypatch.setattr(benchmark, "_save", save)
-    args = SimpleNamespace(
-        _case="gemm_batch3_legacy", device=0, repeat=2, output=tmp_path / "worker.json"
-    )
+    args = SimpleNamespace(_case="gemm_batch3_legacy", device=0, repeat=2, output=tmp_path / "worker.json")
     return args, observed
 
 
@@ -222,15 +216,10 @@ def paired_report():
         "output_sha256": "actual",
         "golden_status": "PASS",
     }
-    journal = [
-        {"index": index, "round": 0, "phase": phase, **checked}
-        for index, phase in enumerate(benchmark.round_phases())
-    ]
+    journal = [{"index": index, "round": 0, "phase": phase, **checked} for index, phase in enumerate(benchmark.round_phases())]
     worker = {
         "status": "PASS",
-        "compilations": [
-            {"status": "PASS", "argv": ["bisheng", "-O3", "worker.cpp", "-o", "worker.so"]}
-        ],
+        "compilations": [{"status": "PASS", "argv": ["bisheng", "-O3", "worker.cpp", "-o", "worker.so"]}],
         "kernels": [{"resolved_flags": ["-O2", "--cce-auto-sync=off", "-O3"]}],
         "launches": {"kernel": {"attempted": 4, "completed": 4}},
         "golden_checks": 4,
@@ -273,10 +262,7 @@ def test_pair_comparison_reports_regression_without_a_speedup_threshold():
         worker["summary"]["event_span_ns"] = benchmark.sample_summary([2000])
     benchmark.compare_performance(report)
     assert len(report["performance_comparisons"]) == 3
-    assert all(
-        row["measurements"]["event_span_ns"]["auto_change_percent"] == "100"
-        for row in report["performance_comparisons"]
-    )
+    assert all(row["measurements"]["event_span_ns"]["auto_change_percent"] == "100" for row in report["performance_comparisons"])
 
 
 @pytest.mark.parametrize("corruption", ["count", "warmup", "flags", "argv", "input", "span"])

@@ -8,9 +8,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-_spec = importlib.util.spec_from_file_location(
-    "s5_cost_model_host", ROOT / "tilelang/transform/ascend_pipeline_cost.py"
-)
+_spec = importlib.util.spec_from_file_location("s5_cost_model_host", ROOT / "tilelang/transform/ascend_pipeline_cost.py")
 cost = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cost)
 

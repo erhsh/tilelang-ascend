@@ -53,9 +53,7 @@ def _optional_loop_kernel(platform="A3"):
 
 
 @pytest.mark.parametrize("trip_count", [0, 1, 3])
-def test_optional_loop_preserves_the_previous_alias_value(
-    optional_loop_kernel, trip_count, repeat=1
-):
+def test_optional_loop_preserves_the_previous_alias_value(optional_loop_kernel, trip_count, repeat=1):
     from ascend_repeat import repeat_launch
 
     source = torch.arange(64, dtype=torch.float32, device="npu")
@@ -64,6 +62,9 @@ def test_optional_loop_preserves_the_previous_alias_value(
     expected = torch.full((2, 2, 64), 3.0, dtype=torch.float32)
     expected[:, 0, :] = 1.0
     repeat_launch(
-        optional_loop_kernel, (source, output, count), (output,),
-        lambda: torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0), repeat,
+        optional_loop_kernel,
+        (source, output, count),
+        (output,),
+        lambda: torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0),
+        repeat,
     )

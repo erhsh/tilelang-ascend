@@ -27,9 +27,7 @@ def main():
         "Every launch changes finite scratch/input/tile labels and checks golden plus canaries. "
         "No profiling."
     )
-    return run_cases(
-        args, report, tuple(PARAMETERS), Path(__file__).resolve(), final_check=compare_pairs
-    )
+    return run_cases(args, report, tuple(PARAMETERS), Path(__file__).resolve(), final_check=compare_pairs)
 
 
 if __name__ == "__main__":

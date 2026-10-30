@@ -25,10 +25,7 @@ def modules(monkeypatch):
         spec.loader.exec_module(module)
         return module
 
-    return {
-        name: load(name)
-        for name in ("_s5_calibration_matrix", "_s5_performance", "s5_run_pipeline_npu")
-    }
+    return {name: load(name) for name in ("_s5_calibration_matrix", "_s5_performance", "s5_run_pipeline_npu")}
 
 
 def test_controller_keeps_every_failed_attempt_sample(modules):
@@ -50,9 +47,7 @@ def test_controller_refuses_incomplete_or_excess_attempts(modules, batches):
 
 
 def test_controller_profiler_command_has_explicit_no_pmu_policy(modules, tmp_path):
-    command = modules["_s5_calibration_matrix"].profiler_command(
-        ["python", "/source with spaces/worker.py"], tmp_path
-    )
+    command = modules["_s5_calibration_matrix"].profiler_command(["python", "/source with spaces/worker.py"], tmp_path)
     assert command[0:2] == ["msprof", "op"]
     assert "--aic-metrics=BasicInfo" in command
     assert "--launch-count=375" in command
@@ -61,9 +56,7 @@ def test_controller_profiler_command_has_explicit_no_pmu_policy(modules, tmp_pat
 
 
 @pytest.mark.parametrize("combined_pass", [True, False])
-def test_reproduction_controller_uses_all_attempts_before_export(
-    modules, monkeypatch, tmp_path, combined_pass
-):
+def test_reproduction_controller_uses_all_attempts_before_export(modules, monkeypatch, tmp_path, combined_pass):
     """Exercise the public controller's whole matrix using explicit synthetic measurements."""
     from test_s5_calibration_export import _cases, _samples
     import _s5_calibration
@@ -81,27 +74,18 @@ def test_reproduction_controller_uses_all_attempts_before_export(
     )
     monkeypatch.setattr(controller.shutil, "which", lambda name: "/synthetic/msprof")
     cases = _cases(_s5_calibration)
-    index = {
-        tuple(
-            case["worker"]["parameters"][key] for key in ("operation", "dtype", "tile", "pattern")
-        ): case
-        for case in cases
-    }
+    index = {tuple(case["worker"]["parameters"][key] for key in ("operation", "dtype", "tile", "pattern")): case for case in cases}
     accuracy_seen, attempts = set(), {}
 
     def worker_key(command):
         return tuple(
-            int(command[command.index(flag) + 1])
-            if flag == "--tile"
-            else command[command.index(flag) + 1]
+            int(command[command.index(flag) + 1]) if flag == "--tile" else command[command.index(flag) + 1]
             for flag in ("--operation", "--dtype", "--tile", "--pattern")
         )
 
     def collect(command, directory, name, **kwargs):
         profiler = command[0] == "msprof"
-        worker_command = (
-            shlex.split(command[-1].removeprefix("--application=")) if profiler else command
-        )
+        worker_command = shlex.split(command[-1].removeprefix("--application=")) if profiler else command
         key = worker_key(worker_command)
         worker = copy.deepcopy(index[key]["worker"])
         worker["golden_checks"] = 15
@@ -119,9 +103,7 @@ def test_reproduction_controller_uses_all_attempts_before_export(
     first_key = next(iter(index))
 
     def measured(directory, worker):
-        key = tuple(
-            worker["parameters"][field] for field in ("operation", "dtype", "tile", "pattern")
-        )
+        key = tuple(worker["parameters"][field] for field in ("operation", "dtype", "tile", "pattern"))
         slopes = (16, 16, 16)
         if key == first_key and worker["synthetic_attempt"] == 0:
             slopes = (12, 16, 20) if combined_pass else (40, 80, 120)
@@ -167,9 +149,7 @@ def _paired(entry):
                         "output_sha256": "o",
                         "golden_sha256": "g",
                     },
-                    "kernels": [
-                        {"resolved_pass_configs": {"tl.ascend_pipeline_planner": spec["strategy"]}}
-                    ],
+                    "kernels": [{"resolved_pass_configs": {"tl.ascend_pipeline_planner": spec["strategy"]}}],
                 },
             }
             for name, spec in entry.PARAMETERS.items()
@@ -190,9 +170,7 @@ def test_strategy_comparison_cannot_accept_changed_data_or_strategy(modules, fie
     entry = modules["s5_run_pipeline_npu"]
     report = _paired(entry)
     if field == "strategy":
-        report["cases"][1]["evidence"]["kernels"][0]["resolved_pass_configs"][
-            "tl.ascend_pipeline_planner"
-        ] = "legacy"
+        report["cases"][1]["evidence"]["kernels"][0]["resolved_pass_configs"]["tl.ascend_pipeline_planner"] = "legacy"
     else:
         report["cases"][1]["evidence"]["case_parameters"][field] = "changed"
     with pytest.raises(AssertionError):

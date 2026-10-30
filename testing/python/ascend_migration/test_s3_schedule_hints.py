@@ -82,9 +82,7 @@ def _stage(body, stage=None):
 
 def _module(body=None, *, scope=1):
     a = _buffer("a")
-    return tvm.IRModule(
-        {"main": _function([a], _task(_fill(a)) if body is None else body(a), scope=scope)}
-    )
+    return tvm.IRModule({"main": _function([a], _task(_fill(a)) if body is None else body(a), scope=scope)})
 
 
 def _consume(module, target=TARGET, platform="A3"):
@@ -93,17 +91,13 @@ def _consume(module, target=TARGET, platform="A3"):
 
 def _attributes(function):
     nodes = []
-    tir.stmt_functor.post_order_visit(
-        function.body, lambda node: nodes.append(node) if isinstance(node, tir.AttrStmt) else None
-    )
+    tir.stmt_functor.post_order_visit(function.body, lambda node: nodes.append(node) if isinstance(node, tir.AttrStmt) else None)
     return nodes
 
 
 def test_task_stage_builders():
     function = make_task_stage_vector_kernel()
-    markers = {
-        node.attr_key: node for node in _attributes(function) if "tl.ascend_" in node.attr_key
-    }
+    markers = {node.attr_key: node for node in _attributes(function) if "tl.ascend_" in node.attr_key}
     assert set(markers) == {"tl.ascend_task", "tl.ascend_stage"}
     assert len(markers["tl.ascend_task"].node) == 0
     assert markers["tl.ascend_stage"].node.dtype == "int64"
@@ -113,10 +107,7 @@ def test_task_stage_builders():
         with pytest.raises(ValueError, match="nonnegative constant signed int32"):
             T.Stage(value)
     positive = make_task_stage_vector_kernel(stage=1)
-    assert any(
-        node.attr_key == "tl.ascend_stage" and int(node.node) == 1
-        for node in _attributes(positive)
-    )
+    assert any(node.attr_key == "tl.ascend_stage" and int(node.node) == 1 for node in _attributes(positive))
     with pytest.raises(tvm.TVMError, match="constraint mode"):
         _consume(tvm.IRModule.from_expr(positive))
     for kwargs in ({"latency": 0}, {"ii": 1}, {"latency": "bad"}):
@@ -223,10 +214,7 @@ def test_analysis_consumes_task_stage_markers():
     assert isinstance(explicit[0]["statement"], tir.AttrStmt)
     consumed = _consume(module)
     assert "tl.ascend_schedule_hints_pending" not in consumed["main"].attrs
-    assert all(
-        node.attr_key not in {"tl.ascend_task", "tl.ascend_stage"}
-        for node in _attributes(consumed["main"])
-    )
+    assert all(node.attr_key not in {"tl.ascend_task", "tl.ascend_stage"} for node in _attributes(consumed["main"]))
 
 
 @pytest.mark.parametrize("dtype", ["float16", "float32"])
@@ -254,13 +242,9 @@ def test_single_audited_call_preserves_group_and_pipe(dtype, operation):
 @pytest.mark.parametrize("target", ["ascendc", "auto"])
 @pytest.mark.parametrize("automatic_sync", [False, True])
 def test_lower_consumes_markers_without_behavior_change(target, automatic_sync):
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": automatic_sync, "tl.ascend_auto_sync_vs": False}
-    ):
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": automatic_sync, "tl.ascend_auto_sync_vs": False}):
         marked = tilelang.lower(make_task_stage_vector_kernel(), target=target, platform="A3")
-        plain = tilelang.lower(
-            make_task_stage_vector_kernel(marked=False), target=target, platform="A3"
-        )
+        plain = tilelang.lower(make_task_stage_vector_kernel(marked=False), target=target, platform="A3")
     assert marked.kernel_source == plain.kernel_source
     assert "tl.ascend_task" not in marked.kernel_source
     assert "tl.ascend_stage" not in marked.kernel_source
@@ -295,11 +279,7 @@ def test_task_validation_ignores_unmarked_siblings_and_preserves_outer_environme
     assert "tl.ascend_stage" not in result.script()
     # A Task alone retains the established loop pipeline contract.
     i = tir.Var("i", "int32")
-    pipeline = _module(
-        lambda a: tir.For(
-            i, 0, 2, tir.ForKind.SERIAL, _task(_fill(a)), annotations={"num_stages": 2}
-        )
-    )
+    pipeline = _module(lambda a: tir.For(i, 0, 2, tir.ForKind.SERIAL, _task(_fill(a)), annotations={"num_stages": 2}))
     assert "tl.ascend_task" not in _consume(pipeline).script()
     with pytest.raises(tvm.TVMError, match="explicit V owner"):
         _consume(_module(scope=0))

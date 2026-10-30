@@ -28,9 +28,7 @@ def make_reuse_kernel(kind="readonly", trips=5, dtype="float32", tile=64, tiles=
     input_steps = max(steps, 1)
     declarations = "        u = T.alloc_ub((tile,), dtype)\n"
     if kind == "dtype_views":
-        declarations += (
-            '        v = T.decl_buffer((64,), "float16", data=u.data, scope="shared.ub")\n'
-        )
+        declarations += '        v = T.decl_buffer((64,), "float16", data=u.data, scope="shared.ub")\n'
         initialize = "                T.copy(Scratch[t, :], u)\n"
     elif kind == "views":
         declarations += (
@@ -41,9 +39,7 @@ def make_reuse_kernel(kind="readonly", trips=5, dtype="float32", tile=64, tiles=
     else:
         declarations += "        a = T.alloc_ub((tile,), dtype)\n"
         # Both allocations have real, initialized work even for a zero-trip loop.
-        initialize = (
-            "                T.copy(Scratch[t, :], a)\n                T.tile.add(u, a, a)\n"
-        )
+        initialize = "                T.copy(Scratch[t, :], a)\n                T.tile.add(u, a, a)\n"
 
     def operations(index, indentation):
         prefix = " " * indentation
@@ -78,13 +74,10 @@ def make_reuse_kernel(kind="readonly", trips=5, dtype="float32", tile=64, tiles=
     elif kind == "nested":
         loop = (
             "                for epoch in T.serial(2):\n"
-            "                    for i in T.Pipelined(trips, num_stages=num_stages):\n"
-            + operations("epoch * trips + i", 24)
+            "                    for i in T.Pipelined(trips, num_stages=num_stages):\n" + operations("epoch * trips + i", 24)
         )
     else:
-        loop = "                for i in T.Pipelined(trips, num_stages=num_stages):\n" + operations(
-            "i", 20
-        )
+        loop = "                for i in T.Pipelined(trips, num_stages=num_stages):\n" + operations("i", 20)
     source = f"""@T.prim_func
 def main(A: T.Tensor((tiles, input_steps, input_elements), dtype),
          Scratch: T.Tensor((tiles, tile), dtype),
@@ -118,15 +111,8 @@ def make_dtype_version_kernel(trips=5, num_stages=3, *, manual_stages=True, deve
     The manual lifetime spans three stages; actual N and physical byte pitch
     must be inspected after planning and injection, rather than inferred here.
     """
-    if (
-        type(trips) is not int
-        or trips < 1
-        or type(num_stages) is not int
-        or num_stages not in (0, 3)
-    ):
-        raise ValueError(
-            "The private alias probe uses positive trips and bound3 or serial baseline0"
-        )
+    if type(trips) is not int or trips < 1 or type(num_stages) is not int or num_stages not in (0, 3):
+        raise ValueError("The private alias probe uses positive trips and bound3 or serial baseline0")
     if type(manual_stages) is not bool or type(developer) is not bool:
         raise ValueError("manual_stages and developer must be bool")
     if manual_stages and num_stages != 3:
@@ -137,8 +123,7 @@ def make_dtype_version_kernel(trips=5, num_stages=3, *, manual_stages=True, deve
     body = ""
     for stage, call in zip((0, 3, 3), calls):
         body += (
-            f"                with T.Stage({stage}):\n"
-            f"                    with T.Task():\n                        {call}\n"
+            f"                with T.Stage({stage}):\n                    with T.Task():\n                        {call}\n"
             if manual_stages
             else f"                {call}\n"
         )
@@ -157,6 +142,4 @@ def main(A: T.Tensor((trips, 32), "float32"), Scratch: T.Tensor((32,), "float32"
             for i in T.Pipelined(trips, num_stages=num_stages{annotation}):
 {body}
 """
-    return tvm.script.from_source(
-        source, extra_vars={"T": T, "trips": trips, "num_stages": num_stages}
-    )
+    return tvm.script.from_source(source, extra_vars={"T": T, "trips": trips, "num_stages": num_stages})

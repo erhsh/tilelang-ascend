@@ -65,9 +65,7 @@ def data_and_golden(spec, args, torch):
 
     def check():
         tolerance = 1e-2 if dtype == "float16" else 1e-5
-        torch.testing.assert_close(
-            output.cpu(), expected, rtol=tolerance, atol=tolerance, equal_nan=True
-        )
+        torch.testing.assert_close(output.cpu(), expected, rtol=tolerance, atol=tolerance, equal_nan=True)
 
     metadata = {
         **spec,
@@ -82,9 +80,7 @@ def data_and_golden(spec, args, torch):
 
 def describe_kernel(kernel, spec, indices):
     physical = physical_evidence(kernel)
-    actual = sorted(
-        {remap["versions"] for function in physical for remap in function["buffer_remap"]}
-    )
+    actual = sorted({remap["versions"] for function in physical for remap in function["buffer_remap"]})
     required = spec.get("required_actual_versions")
     if spec["strategy"] == "constraint" and required is not None and required not in actual:
         raise AssertionError(f"Required actual {required} versions, observed {actual}")
@@ -130,11 +126,7 @@ def compare_pairs(report, parameters):
                 if value[key] != expected:
                     raise AssertionError(f"Wrong actual fixture parameters: {name}/{key}")
             kernels = observed[name]["kernels"]
-            if (
-                len(kernels) != 1
-                or kernels[0]["resolved_pass_configs"].get("tl.ascend_pipeline_planner")
-                != parameters[name]["strategy"]
-            ):
+            if len(kernels) != 1 or kernels[0]["resolved_pass_configs"].get("tl.ascend_pipeline_planner") != parameters[name]["strategy"]:
                 raise AssertionError(f"Wrong resolved planner strategy: {name}")
         for key in ("input_sha256", "output_sha256", "golden_sha256"):
             if values[0][key] != values[1][key]:

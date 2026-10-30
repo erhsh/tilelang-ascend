@@ -93,9 +93,7 @@ def test_an_unverified_old_key_does_not_restore_an_auto_kernel(tmp_path, monkeyp
     monkeypatch.setattr(cache_module, "is_cache_enabled", lambda: True)
     monkeypatch.setattr(cache_module, "JITKernel", construct)
     monkeypatch.setattr(instance, "_load_kernel_from_disk", load)
-    monkeypatch.setattr(
-        instance, "_save_kernel_to_disk", lambda key, value, *rest: disk.update({key: value})
-    )
+    monkeypatch.setattr(instance, "_save_kernel_to_disk", lambda key, value, *rest: disk.update({key: value}))
     args.pop("args")
     assert instance.cached(**args) == {"compiler": "new complete auto contract"}
     assert len(constructed) == 1 and loaded == [current] and old not in loaded

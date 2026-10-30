@@ -74,16 +74,8 @@ def parser():
 def validate(args, report):
     if sys.flags.optimize:
         return finish(args, report, "BLOCKED", "Python optimization disables mandatory assertions")
-    if (
-        args.device < 0
-        or args.seed < 0
-        or args.repeat < 1
-        or not math.isfinite(args.timeout)
-        or args.timeout <= 0
-    ):
-        return finish(
-            args, report, "BLOCKED", "device/seed nonnegative and repeat/timeout positive required"
-        )
+    if args.device < 0 or args.seed < 0 or args.repeat < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
+        return finish(args, report, "BLOCKED", "device/seed nonnegative and repeat/timeout positive required")
     try:
         args.cost_model = load_cost_module().load_cost_model(args.cost_profile)
     except (OSError, ValueError, TypeError, KeyError) as error:
@@ -198,18 +190,14 @@ def mixed_owner_evidence(kernel):
         half_roots = []
         for task in lifetime["source_graph"]["tasks"]:
             for pointer in pointers(task["statement"]):
-                if str(pointer.args[0].dtype) == "float16" and not any(
-                    pointer.args[1].same_as(value) for value in half_roots
-                ):
+                if str(pointer.args[0].dtype) == "float16" and not any(pointer.args[1].same_as(value) for value in half_roots):
                     half_roots.append(pointer.args[1])
         if len(half_roots) != 1:
             raise AssertionError("The private half view must resolve to one canonical owner")
         owners = [
             row
             for row in lifetime["storage_catalog"]["storages"]
-            if bool(row["physical_allocation"])
-            and row["data"].same_as(half_roots[0])
-            and number(row["capacity_bytes"]) == 128
+            if bool(row["physical_allocation"]) and row["data"].same_as(half_roots[0]) and number(row["capacity_bytes"]) == 128
         ]
         if len(owners) != 1 or str(owners[0]["allocation"].dtype) != "float32":
             raise AssertionError("The half view must share the actual 128-byte float32 allocation")
@@ -226,8 +214,7 @@ def mixed_owner_evidence(kernel):
         remaps = [
             row
             for row in function.attrs["tl.ascend_s5_buffer_remap"]
-            if row["logical_data"].same_as(owner["data"])
-            or original(row["logical_data"]).same_as(owner["source_data"])
+            if row["logical_data"].same_as(owner["data"]) or original(row["logical_data"]).same_as(owner["source_data"])
         ]
         if len(remaps) != 1:
             raise AssertionError("The actual mixed owner requires exactly one materializer remap")
@@ -236,9 +223,7 @@ def mixed_owner_evidence(kernel):
         pitch = number(remap["version_stride_bytes"])
         total = number(remap["total_bytes"])
         if not 2 <= versions <= 3 or pitch != 128 or total != versions * pitch:
-            raise AssertionError(
-                "Private mixed-dtype storage must use actual multiple 128-byte slots"
-            )
+            raise AssertionError("Private mixed-dtype storage must use actual multiple 128-byte slots")
         if number(remap["version_span_bytes"]) != pitch:
             raise AssertionError("The mixed owner's slot span and byte pitch differ")
         datatypes = set()
@@ -248,9 +233,7 @@ def mixed_owner_evidence(kernel):
             dtype = str(pointer.args[0].dtype)
             datatypes.add(dtype)
             width = tvm.DataType(dtype).bits // 8
-            if number(pointer.args[3]) * width != 128 or not analyzer.can_prove(
-                tir.floormod(pointer.args[2] * width, pitch) == 0
-            ):
+            if number(pointer.args[3]) * width != 128 or not analyzer.can_prove(tir.floormod(pointer.args[2] * width, pitch) == 0):
                 raise AssertionError("Typed accesses disagree on the actual mixed-owner byte pitch")
         allocations = []
 
@@ -310,20 +293,13 @@ def run_case(name, args, torch):
     indices = (
         range((steps + 1) * tile)
         if private_dtype
-        else [
-            (owner * (steps + 3) + epoch) * tile + lane
-            for owner in range(tiles)
-            for epoch in range(steps + 2)
-            for lane in range(tile)
-        ]
+        else [(owner * (steps + 3) + epoch) * tile + lane for owner in range(tiles) for epoch in range(steps + 2) for lane in range(tile)]
     )
     metadata = {
         **spec,
         "requested_directives": {
             "num_stages": requested_stages(spec),
-            "manual_stages": [0, 3, 3]
-            if private_dtype and spec["strategy"] == "constraint"
-            else [],
+            "manual_stages": [0, 3, 3] if private_dtype and spec["strategy"] == "constraint" else [],
             "enable_offset": private_dtype and spec["strategy"] == "constraint",
         },
         "physical_ir": physical_evidence(kernel),
@@ -346,12 +322,8 @@ def run_case(name, args, torch):
     def reset():
         index = len(metadata["rounds"])
         if dtype_view:
-            a_half = torch.randint(0, 32, (*a.shape[:-1], 64), generator=generator).to(
-                torch.float16
-            )
-            scratch_half = torch.randint(0, 32, (*scratch.shape[:-1], 64), generator=generator).to(
-                torch.float16
-            )
+            a_half = torch.randint(0, 32, (*a.shape[:-1], 64), generator=generator).to(torch.float16)
+            scratch_half = torch.randint(0, 32, (*scratch.shape[:-1], 64), generator=generator).to(torch.float16)
             a_half = a_half / 128 + 0.25 + (index + 1) / 8192
             scratch_half = scratch_half / 128 + 0.25 + (index + 1) / 4096
             if not private_dtype:
@@ -361,11 +333,7 @@ def run_case(name, args, torch):
             a_host = a_half.contiguous().view(torch.float32)
             scratch_host = scratch_half.contiguous().view(torch.float32)
             doubled = (a_half + a_half).contiguous().view(torch.float32)
-            if not (
-                torch.isfinite(a_host).all()
-                and torch.isfinite(scratch_host).all()
-                and torch.isfinite(doubled).all()
-            ):
+            if not (torch.isfinite(a_host).all() and torch.isfinite(scratch_host).all() and torch.isfinite(doubled).all()):
                 raise AssertionError("Packed half pairs must remain finite in both dtype views")
             expected = torch.full(output.shape, float("nan"), dtype=dtype)
             if private_dtype:
@@ -417,9 +385,7 @@ def run_case(name, args, torch):
 
     def check():
         tolerance = 0 if dtype_view else 1e-2 if spec["dtype"] == "float16" else 1e-5
-        torch.testing.assert_close(
-            output.cpu(), state["expected"], rtol=tolerance, atol=tolerance, equal_nan=True
-        )
+        torch.testing.assert_close(output.cpu(), state["expected"], rtol=tolerance, atol=tolerance, equal_nan=True)
         metadata["rounds"].append(
             {
                 "index": len(metadata["rounds"]),
@@ -433,9 +399,7 @@ def run_case(name, args, torch):
     repeat_launch(kernel, (a, scratch, output), (output,), check, args.repeat, reset=reset)
     if len(metadata["rounds"]) != args.repeat:
         raise AssertionError("Every actual launch requires its own golden and hash record")
-    metadata["output_sentinel"] = (
-        "NaN every launch; complete finite scratch initialization and changing tile/launch tags"
-    )
+    metadata["output_sentinel"] = "NaN every launch; complete finite scratch initialization and changing tile/launch tags"
     return metadata
 
 
@@ -458,16 +422,8 @@ def compare_pairs(report):
             for key, value in PARAMETERS[name].items():
                 if evidence["case_parameters"][key] != value:
                     raise AssertionError(f"Wrong actual reuse fixture parameters: {name}/{key}")
-            if (
-                evidence["kernels"][0]["resolved_pass_configs"].get("tl.ascend_pipeline_planner")
-                != PARAMETERS[name]["strategy"]
-            ):
+            if evidence["kernels"][0]["resolved_pass_configs"].get("tl.ascend_pipeline_planner") != PARAMETERS[name]["strategy"]:
                 raise AssertionError("Wrong actual strategy in paired reuse validation")
-        if (
-            results[names[0]]["kernels"][0]["resolved_flags"]
-            != results[names[1]]["kernels"][0]["resolved_flags"]
-        ):
+        if results[names[0]]["kernels"][0]["resolved_flags"] != results[names[1]]["kernels"][0]["resolved_flags"]:
             raise AssertionError("Paired reuse strategies use different compiler flags")
-        comparisons.append(
-            {"cases": names, "status": "PASS", "compared_launches": report["repeat"]}
-        )
+        comparisons.append({"cases": names, "status": "PASS", "compared_launches": report["repeat"]})

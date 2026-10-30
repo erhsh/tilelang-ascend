@@ -386,8 +386,11 @@ def test_gemm_v0_ktail_pipeline(K, num_stages, repeat=1, seed=0):
     c = torch.zeros(M, N, dtype=torch.float16, device="npu")
     ref = a.float() @ b.float()
     repeat_launch(
-        kernel, (a, b, c), (c,),
-        lambda: torch.testing.assert_close(c.float(), ref, rtol=2e-2, atol=2e-2), repeat,
+        kernel,
+        (a, b, c),
+        (c,),
+        lambda: torch.testing.assert_close(c.float(), ref, rtol=2e-2, atol=2e-2),
+        repeat,
     )
 
 
@@ -502,8 +505,11 @@ def test_gemm_v0_ktail_pipeline_parallel(K_L1, repeat=1, seed=0):
     c = torch.zeros(M, N, dtype=torch.float16, device="npu")
     ref = a.float() @ b.float()
     repeat_launch(
-        kernel, (a, b, c), (c,),
-        lambda: torch.testing.assert_close(c.float(), ref, rtol=2e-2, atol=2e-2), repeat,
+        kernel,
+        (a, b, c),
+        (c,),
+        lambda: torch.testing.assert_close(c.float(), ref, rtol=2e-2, atol=2e-2),
+        repeat,
     )
 
 

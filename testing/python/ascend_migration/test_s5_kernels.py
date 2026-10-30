@@ -42,9 +42,7 @@ def make_calibration_kernel(operation="add", pattern="dependent", dtype="float32
             final = "            T.copy(a, O)\n"
         pipe = "V"
     elif operation == "fill":
-        setup = (
-            "            T.copy(A, a)\n" if not independent else "            T.tile.fill(a, 0.0)\n"
-        )
+        setup = "            T.copy(A, a)\n" if not independent else "            T.tile.fill(a, 0.0)\n"
         measured = f"T.tile.fill(a[{row}, :], 1.0)"
         final = "            T.copy(a, O)\n"
         pipe = "V"
@@ -58,8 +56,7 @@ def make_calibration_kernel(operation="add", pattern="dependent", dtype="float32
         measured = f"T.copy(a[{row}, :], O[{row}, :])"
         pipe = "MTE3"
     inner_barrier = (
-        f"                if (i + 1) % 128 == 0 and i + 1 < n:\n"
-        f'                    T.pipe_barrier("{pipe}")\n'
+        f'                if (i + 1) % 128 == 0 and i + 1 < n:\n                    T.pipe_barrier("{pipe}")\n'
         if independent
         else f'                T.pipe_barrier("{pipe}")\n'
     )
@@ -229,9 +226,7 @@ def persistent_layout(domain, cores, group_size):
     }
 
 
-def make_persistent_pipeline_kernel(
-    domain=(3, 10), cores=8, group_size=4, num_stages=2, dtype="float32", tile=64
-):
+def make_persistent_pipeline_kernel(domain=(3, 10), cores=8, group_size=4, num_stages=2, dtype="float32", tile=64):
     """Vector add over logical tiles with finite padded inputs and NaN output canaries."""
     _check_vector_arguments(dtype, tile, num_stages)
     layout = persistent_layout(domain, cores, group_size)

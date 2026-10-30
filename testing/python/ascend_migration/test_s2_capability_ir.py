@@ -21,14 +21,8 @@ tir = tvm.tir
 
 
 def _plan(scope: str, size_bytes: int, overlapping: bool = False):
-    buffers = [
-        tir.decl_buffer((size_bytes // 2,), "float16", name=name, scope=scope)
-        for name in ("a", "b")
-    ]
-    statements = [
-        tir.Evaluate(tir.call_extern("handle", "AscendC::Duplicate", buffer.access_ptr("w")))
-        for buffer in buffers
-    ]
+    buffers = [tir.decl_buffer((size_bytes // 2,), "float16", name=name, scope=scope) for name in ("a", "b")]
+    statements = [tir.Evaluate(tir.call_extern("handle", "AscendC::Duplicate", buffer.access_ptr("w"))) for buffer in buffers]
     if overlapping:
         statements.append(
             tir.Evaluate(
@@ -43,19 +37,12 @@ def _plan(scope: str, size_bytes: int, overlapping: bool = False):
         )
     body = tir.SeqStmt(statements)
     for buffer in buffers:
-        body = tir.Allocate(
-            buffer.data, buffer.dtype, [size_bytes // 2], tir.const(True, "bool"), body
-        )
+        body = tir.Allocate(buffer.data, buffer.dtype, [size_bytes // 2], tir.const(True, "bool"), body)
     function = tir.PrimFunc([], body).with_attr("global_symbol", "main")
-    function = function.with_attr(
-        "logic_buffer_shapes", {buffer.data: [size_bytes // 2] for buffer in buffers}
-    )
+    function = function.with_attr("logic_buffer_shapes", {buffer.data: [size_bytes // 2] for buffer in buffers})
     with tvm.transform.PassContext(config={"tl.ascend_memory_planning": True}):
         result = tilelang.transform.AscendMemoryPlanning()(tvm.IRModule({"main": function}))["main"]
-    return [
-        (int(result.attrs["address_map"][buffer.data]), int(result.attrs["size_map"][buffer.data]))
-        for buffer in buffers
-    ]
+    return [(int(result.attrs["address_map"][buffer.data]), int(result.attrs["size_map"][buffer.data])) for buffer in buffers]
 
 
 @pytest.mark.parametrize("scope", SCOPES)
@@ -90,10 +77,7 @@ def test_capability_budgets_match_ascendc_codegen_buffers():
                 T.copy(u, O)
 
     source = tilelang.lower(vector, target="ascendc", platform="A3").kernel_source
-    observed = {
-        name: int(size)
-        for name, size in re.findall(r"pipe\.InitBuffer\(ascend_(\w+),\s*(\d+)\)", source)
-    }
+    observed = {name: int(size) for name, size in re.findall(r"pipe\.InitBuffer\(ascend_(\w+),\s*(\d+)\)", source)}
     scopes = {
         "ub": "shared.ub",
         "l1": "shared.l1",

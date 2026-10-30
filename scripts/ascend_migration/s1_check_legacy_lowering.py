@@ -109,9 +109,7 @@ print('S1_NATIVE_ENV=' + json.dumps(result))
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=("a2", "a3"), required=True)
-    parser.add_argument(
-        "--timeout", type=float, default=120, help="Pytest process timeout in seconds"
-    )
+    parser.add_argument("--timeout", type=float, default=120, help="Pytest process timeout in seconds")
     parser.add_argument("--output", type=Path, required=True, help="Machine-readable JSON result")
     parser.add_argument(
         "--build-manifest",
@@ -172,10 +170,7 @@ def main() -> int:
             "selection": "TL_ASCEND_MIGRATION_PLATFORM for the new S1 native fixtures",
         },
     }
-    report["contracts"] = {
-        name: [f"{LANGUAGE}{file}::{node}" for node in nodes]
-        for name, (file, nodes) in CONTRACT_TESTS.items()
-    }
+    report["contracts"] = {name: [f"{LANGUAGE}{file}::{node}" for node in nodes] for name, (file, nodes) in CONTRACT_TESTS.items()}
     nodes = [node for group in report["contracts"].values() for node in group]
     artifacts = args.output.resolve().parent / f"{args.output.stem}-artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -210,21 +205,13 @@ def main() -> int:
         report["native_preflight"] = {"command": command, "log": str(log)}
         if result.returncode:
             return finish(args, report, "BLOCKED", "Native imports failed; see environment log")
-        payload = next(
-            line.removeprefix("S1_NATIVE_ENV=")
-            for line in result.stdout.splitlines()
-            if line.startswith("S1_NATIVE_ENV=")
-        )
+        payload = next(line.removeprefix("S1_NATIVE_ENV=") for line in result.stdout.splitlines() if line.startswith("S1_NATIVE_ENV="))
         loaded = json.loads(payload)
         expected = {item["path"] for item in report["native_build"]["libraries"]}
         if loaded["tilelang_library"] not in expected or loaded["tvm_library"] not in expected:
-            return finish(
-                args, report, "BLOCKED", "Native imports loaded libraries outside manifest"
-            )
+            return finish(args, report, "BLOCKED", "Native imports loaded libraries outside manifest")
         if not Path(loaded["tilelang_python"]).resolve().is_relative_to(ROOT / "tilelang"):
-            return finish(
-                args, report, "BLOCKED", "Native imports loaded a different TileLang package"
-            )
+            return finish(args, report, "BLOCKED", "Native imports loaded a different TileLang package")
         if not Path(loaded["tvm_python"]).resolve().is_relative_to(tvm_python):
             return finish(args, report, "BLOCKED", "Native imports loaded unverified TVM Python")
         report["native_environment"] = loaded

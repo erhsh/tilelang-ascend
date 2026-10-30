@@ -39,10 +39,7 @@ def make_vector_kernel(total=192, dtype="float32", inplace=False, noalias=True):
     tail_body = ""
     if tail:
         tail_destination = "tail_a" if inplace else "tail_c"
-        tail_allocation = (
-            "            tail_a = T.alloc_ub((32,), dtype)\n"
-            "            tail_b = T.alloc_ub((32,), dtype)\n"
-        )
+        tail_allocation = "            tail_a = T.alloc_ub((32,), dtype)\n            tail_b = T.alloc_ub((32,), dtype)\n"
         if not inplace:
             tail_allocation += "            tail_c = T.alloc_ub((32,), dtype)\n"
         tail_body = f"""                for last in T.Pipelined(1, num_stages=1):
@@ -65,6 +62,4 @@ def main(A: T.Tensor((total,), dtype), B: T.Tensor((total,), dtype),
                     T.tile.add({destination}, a, b)
                     T.copy({destination}, O[block * 64:(block + 1) * 64])
 {tail_body}"""
-    return tvm.script.from_source(
-        source, extra_vars={"T": T, "total": total, "dtype": dtype, "trips": trips}
-    )
+    return tvm.script.from_source(source, extra_vars={"T": T, "total": total, "dtype": dtype, "trips": trips})

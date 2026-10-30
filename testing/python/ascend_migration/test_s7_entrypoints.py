@@ -136,11 +136,7 @@ def paired_report(module):
                     "round": i,
                     "pending": [True] * spec["streams"],
                     "both_pending": spec["streams"] == 2,
-                    "enqueues": [
-                        {"stream": s, "batch": b}
-                        for s in range(spec["streams"])
-                        for b in range(spec["batches"])
-                    ],
+                    "enqueues": [{"stream": s, "batch": b} for s in range(spec["streams"]) for b in range(spec["batches"])],
                     "queries": [{"stream": s, "complete": False} for s in range(spec["streams"])],
                     "done_queries": [{"stream": s, "complete": False} for s in range(2)],
                     "armed_streams": [0, 1],
@@ -157,9 +153,7 @@ def paired_report(module):
                 "done_handles": [20, 21],
                 "release_stream_handle": 99,
             },
-            "submission_environment": {
-                "effective": {"PER_STREAM_QUEUE": "0", "ASCEND_LAUNCH_BLOCKING": "0"}
-            },
+            "submission_environment": {"effective": {"PER_STREAM_QUEUE": "0", "ASCEND_LAUNCH_BLOCKING": "0"}},
         }
         cases.append(
             {
@@ -224,9 +218,7 @@ def test_concurrency_description_matches_the_actual_scope(stress, streams):
 )
 def test_incomplete_or_forged_concurrent_evidence_is_rejected(stress, damage):
     report = copy.deepcopy(paired_report(stress))
-    pair = [
-        row["evidence"] for row in report["cases"] if row["name"].startswith("streams_workspace_")
-    ]
+    pair = [row["evidence"] for row in report["cases"] if row["name"].startswith("streams_workspace_")]
     left, right = [item["case_parameters"] for item in pair]
     if damage in ("input", "output", "golden"):
         if damage == "input":
@@ -256,9 +248,7 @@ def test_incomplete_or_forged_concurrent_evidence_is_rejected(stress, damage):
             elif damage == "missing_window":
                 data["submission_windows"].pop()
             elif damage == "aliased_workspace":
-                data["independent_buffer_pointers"][1]["Workspace"] = data[
-                    "independent_buffer_pointers"
-                ][0]["Workspace"]
+                data["independent_buffer_pointers"][1]["Workspace"] = data["independent_buffer_pointers"][0]["Workspace"]
             elif damage == "gate_alias":
                 data["submission_control"]["gate_handles"] = [10, 10]
             elif damage == "release_alias":
@@ -301,9 +291,7 @@ def test_worker_catch_preserves_live_window_evidence(stress, tmp_path, monkeypat
     ):
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(_npu_runner, "prepare_worker", lambda *args: (fake_tilelang, None))
-    spec = importlib.util.spec_from_file_location(
-        "s7_fault_entry", RUNNERS / "s7_run_sync_stress_npu.py"
-    )
+    spec = importlib.util.spec_from_file_location("s7_fault_entry", RUNNERS / "s7_run_sync_stress_npu.py")
     entry = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(entry)
     output = tmp_path / "failure.json"

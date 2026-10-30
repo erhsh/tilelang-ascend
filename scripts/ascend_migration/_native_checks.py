@@ -55,15 +55,9 @@ def run(args, entry: str, nodes, *, step: str = "S3", require_solver: bool = Fal
     env["TL_ASCEND_MIGRATION_BUILD_MANIFEST"] = str(args.build_manifest.resolve())
     env["TL_ASCEND_MIGRATION_PLATFORM"] = args.platform.upper()
     args.output.resolve().parent.mkdir(parents=True, exist_ok=True)
-    artifacts = Path(
-        tempfile.mkdtemp(prefix=f"{args.output.stem}-artifacts-", dir=args.output.resolve().parent)
-    )
+    artifacts = Path(tempfile.mkdtemp(prefix=f"{args.output.stem}-artifacts-", dir=args.output.resolve().parent))
     report["artifacts"] = str(artifacts)
-    solver_preflight = (
-        "import z3\nsolver_version = z3.get_version_string()\n"
-        if require_solver
-        else "solver_version = None\n"
-    )
+    solver_preflight = "import z3\nsolver_version = z3.get_version_string()\n" if require_solver else "solver_version = None\n"
     preflight = (
         solver_preflight
         + """import json
@@ -81,9 +75,7 @@ print('NATIVE_IDENTITY=' + json.dumps({
 """
     )
     try:
-        checked = run_process(
-            [sys.executable, "-c", preflight], artifacts, "preflight", env=env, timeout=args.timeout
-        )
+        checked = run_process([sys.executable, "-c", preflight], artifacts, "preflight", env=env, timeout=args.timeout)
         report["native_preflight"] = checked
         if checked["exit_code"]:
             status = "TIMEOUT" if checked["exit_code"] == 124 else "BLOCKED"
@@ -96,13 +88,9 @@ print('NATIVE_IDENTITY=' + json.dumps({
         loaded = json.loads(payload)
         expected = {item["path"] for item in manifest["libraries"]}
         if loaded["tilelang_library"] not in expected or loaded["tvm_library"] not in expected:
-            return finish(
-                args, report, "BLOCKED", "Native preflight loaded libraries outside manifest"
-            )
+            return finish(args, report, "BLOCKED", "Native preflight loaded libraries outside manifest")
         if Path(loaded["tilelang_python"]).resolve() != (ROOT / "tilelang/__init__.py").resolve():
-            return finish(
-                args, report, "BLOCKED", "Native preflight loaded a different TileLang package"
-            )
+            return finish(args, report, "BLOCKED", "Native preflight loaded a different TileLang package")
         if Path(loaded["tvm_python"]).resolve() != (tvm_python / "tvm/__init__.py").resolve():
             return finish(args, report, "BLOCKED", "Native preflight loaded unverified TVM Python")
         report["native_environment"] = loaded

@@ -74,9 +74,7 @@ def load_phase(monkeypatch, config):
     }
     path = ROOT / "tilelang/engine/phase.py"
     source = ast.parse(path.read_text())
-    functions = [
-        node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in names
-    ]
+    functions = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in names]
     assert {node.name for node in functions} == names
     future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
     module = ast.fix_missing_locations(ast.Module(body=[future, *functions], type_ignores=[]))

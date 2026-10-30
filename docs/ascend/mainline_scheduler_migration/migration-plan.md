@@ -66,11 +66,15 @@ Vector 指令选择、mask 合法化、Persistent 参数/partial-wave 保护及 
 | 正式代码整理 | 内部协议、标识符与诊断按功能命名 | 已完成，保留调度、同步及 schema 行为 | 静态与主机检查通过；native/NPU 待重建验证 | 待用户审核 |
 | 关键源码修复 | Fill 操作数及 Block 别名访问元数据 | 两处修复已实现，临时 native 回归已准备 | 格式、静态及缓存检查通过；native/NPU 待环境验证 | 待用户审核 |
 | 正式 Python 格式 | 5 个正式 Python 文件与 CI 格式对齐 | 已完成，无逻辑修改 | Ruff 0.17.3 格式及 lint、AST 一致性、diff 检查通过 | 待用户审核 |
+| 完整 PR 格式门禁 | CI 覆盖的全部 Python 文件 | 剩余 25 个脚本及 53 个测试文件已机械格式化 | 全部 111 个 Python 文件通过 Ruff 格式及 lint；语义 AST 和 diff 检查通过 | 待用户审核 |
 
-当前工作仅格式化 `phase.py`、`persistent.py`、`schedule_hint.py`、
-`ascend_pipeline_cost.py` 和 `ascend_z3_scheduler.py`，使用与 CI 一致的
-Ruff 0.17.3。五个文件格式化前后的 AST（含 type comments）一致；本步不包含
-功能修改或 native/NPU 验证。提交范围为这五个正式文件及本计划，推送后等待审核。
+当前工作对齐完整 PR 的格式门禁。正式 Python 文件与 C++ 已通过对应格式检查；
+CI 剩余差异来自仍保留在 PR 中的 25 个验收脚本和 53 个测试文件，已使用
+Ruff 0.17.3 机械格式化。按 CI 的完整清单，全部 111 个 Python 文件通过格式和
+lint 检查。格式化前后语义 AST（含 type comments）一致；type-ignore 的标签及
+所属语句保持一致，位置行号仅随排版移动。没有逻辑或 docstring 改动。
+本步提交范围为这 78 个文件及本计划，不包含功能修改或 native/NPU 验证，也不
+改变中间验证材料的最终合入范围；推送后等待审核。
 
 关键源码修复已实现：Auto 调用审计按公开 ABI 区分 Fill 与 Add 的目标
 操作数，并验证 Fill helper、目标类型及无访存副作用的算术标量。存储别名规范化

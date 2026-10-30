@@ -45,10 +45,7 @@ def _integer(expression, bindings):
 
 def trace_domain(function, bindings=None):
     """Interpret native-generated loops, predicates and output indices, not a replica formula."""
-    bindings = {
-        variable: tvm.tir.IntImm(variable.dtype, value)
-        for variable, value in (bindings or {}).items()
-    }
+    bindings = {variable: tvm.tir.IntImm(variable.dtype, value) for variable, value in (bindings or {}).items()}
     # Native Persistent currently emits pure coordinate Lets outside the wave
     # For. The same standard simplifier used by lowering substitutes those Lets
     # into the loop before concrete execution; evaluating raw Lets first would
@@ -73,18 +70,12 @@ def trace_domain(function, bindings=None):
                 except _BreakWave:
                     break
         elif isinstance(statement, tvm.tir.IfThenElse):
-            selected = (
-                statement.then_case
-                if _integer(statement.condition, environment)
-                else statement.else_case
-            )
+            selected = statement.then_case if _integer(statement.condition, environment) else statement.else_case
             if selected is not None:
                 execute(selected, environment, owner)
         elif isinstance(statement, tvm.tir.LetStmt):
             nested = dict(environment)
-            nested[statement.var] = tvm.tir.IntImm(
-                statement.var.dtype, _integer(statement.value, environment)
-            )
+            nested[statement.var] = tvm.tir.IntImm(statement.var.dtype, _integer(statement.value, environment))
             execute(statement.body, nested, owner)
         elif isinstance(statement, tvm.tir.AttrStmt):
             if statement.attr_key == "thread_extent":
@@ -110,9 +101,7 @@ def trace_domain(function, bindings=None):
             if _integer(statement.predicate, environment):
                 nested = dict(environment)
                 for variable, value in zip(statement.block.iter_vars, statement.iter_values):
-                    nested[variable.var] = tvm.tir.IntImm(
-                        variable.var.dtype, _integer(value, environment)
-                    )
+                    nested[variable.var] = tvm.tir.IntImm(variable.var.dtype, _integer(value, environment))
                 execute(statement.block, nested, owner)
         elif isinstance(statement, tvm.tir.Block):
             if statement.init is not None:
@@ -128,17 +117,12 @@ def trace_domain(function, bindings=None):
             stores.append(tuple(_integer(index, environment) for index in statement.indices))
         elif isinstance(statement, tvm.tir.Evaluate):
             value = statement.value
-            if (
-                isinstance(value, tvm.tir.Call)
-                and getattr(value.op, "name", None) == "tl.loop_break"
-            ):
+            if isinstance(value, tvm.tir.Call) and getattr(value.op, "name", None) == "tl.loop_break":
                 raise _BreakWave
             if not isinstance(value, tvm.tir.IntImm) or int(value) != 0:
                 raise AssertionError(f"Unsupported probe evaluation: {value}")
         else:
-            raise AssertionError(
-                f"Unsupported statement in domain probe: {type(statement).__name__}"
-            )
+            raise AssertionError(f"Unsupported statement in domain probe: {type(statement).__name__}")
 
     execute(module["main"].body, bindings)
     return Counter(stores)
@@ -148,18 +132,13 @@ def assert_exact_domain(function, domain, bindings=None):
     concrete = [
         _integer(
             value,
-            {
-                variable: tvm.tir.IntImm(variable.dtype, bound)
-                for variable, bound in (bindings or {}).items()
-            },
+            {variable: tvm.tir.IntImm(variable.dtype, bound) for variable, bound in (bindings or {}).items()},
         )
         for value in domain
     ]
     if any(value <= 0 for value in concrete):
         raise AssertionError("Only positive symbolic-domain bindings satisfy the API contract")
-    expected = Counter(
-        {point: 1 for point in itertools.product(*(range(value) for value in concrete))}
-    )
+    expected = Counter({point: 1 for point in itertools.product(*(range(value) for value in concrete))})
     observed = trace_domain(function, bindings)
     assert observed == expected, {
         "missing": list((expected - observed).items())[:8],

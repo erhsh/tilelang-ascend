@@ -84,9 +84,7 @@ def run_calibration(args, report):
             raise ValueError("msprof op is required for real calibration")
     except (OSError, ValueError, KeyError, ImportError) as error:
         return finish(args, report, "BLOCKED", f"Legacy calibration preflight: {error}")
-    directory = Path(
-        tempfile.mkdtemp(prefix=args.output.stem + "-calibration-", dir=args.output.parent)
-    )
+    directory = Path(tempfile.mkdtemp(prefix=args.output.stem + "-calibration-", dir=args.output.parent))
     report.update(
         calibration_source_root=str(source),
         artifacts=str(directory),
@@ -141,11 +139,7 @@ def run_calibration(args, report):
                         )
                         if checked["exit_code"]:
                             raise CollectionFailure(
-                                "TIMEOUT"
-                                if checked["exit_code"] == 124
-                                else "BLOCKED"
-                                if checked["exit_code"] == 2
-                                else "FAIL",
+                                "TIMEOUT" if checked["exit_code"] == 124 else "BLOCKED" if checked["exit_code"] == 2 else "FAIL",
                                 f"Accuracy process failed: {checked}",
                             )
                         accuracy_report = json.loads(accuracy.read_text())
@@ -154,18 +148,14 @@ def run_calibration(args, report):
                             or accuracy_report.get("golden_checks") != 15
                             or len(accuracy_report.get("compilations", [])) != 1
                         ):
-                            raise CollectionFailure(
-                                "FAIL", f"Incomplete accuracy checks: {accuracy}"
-                            )
+                            raise CollectionFailure("FAIL", f"Incomplete accuracy checks: {accuracy}")
                         batches, attempts, commands, worker_reports = [], [], [], []
                         first_worker = None
                         for attempt in range(2):
                             target = root / f"attempt-{attempt}"
                             target.mkdir()
                             output, collector = target / "profile.json", target / "msprof"
-                            command = profiler_command(
-                                [*common, "--mode", "profile", "--output", str(output)], collector
-                            )
+                            command = profiler_command([*common, "--mode", "profile", "--output", str(output)], collector)
                             report["active_phase"] = f"BasicInfo-attempt-{attempt}"
                             save(report, args.output)
                             result = run_process(
@@ -185,13 +175,10 @@ def run_calibration(args, report):
                             if first_worker is None:
                                 first_worker = observed
                             elif (
-                                first_worker["kernel"]["source"]["sha256"]
-                                != observed["kernel"]["source"]["sha256"]
+                                first_worker["kernel"]["source"]["sha256"] != observed["kernel"]["source"]["sha256"]
                                 or first_worker["toolchain"] != observed["toolchain"]
                             ):
-                                raise ValueError(
-                                    "A bounded repeat changed implementation/toolchain"
-                                )
+                                raise ValueError("A bounded repeat changed implementation/toolchain")
                             batch = read_profiler_samples(collector, observed)
                             batch_fit = fit_effective_cost(batch)
                             save({"fit": batch_fit, "raw_samples": batch}, target / "fit.json")
@@ -247,9 +234,7 @@ def run_calibration(args, report):
                         report["counts"]["passed"] += 1
                         save(report, args.output)
         profile = assemble_profile(cases, quantum_ns=1)
-        validator = _module(
-            "s5_calibration_cost_validator", ROOT / "tilelang/transform/ascend_pipeline_cost.py"
-        )
+        validator = _module("s5_calibration_cost_validator", ROOT / "tilelang/transform/ascend_pipeline_cost.py")
         validator.validate_cost_model(profile)
         save(profile, args.calibrate_profile)
         report.update(
@@ -257,12 +242,8 @@ def run_calibration(args, report):
             profile_sha256=profile["profile_sha256"],
             application_launches=profile["evidence"]["application_launches"],
             measured_samples=profile["evidence"]["measured_samples"],
-            accuracy_launches_and_golden_checks=sum(
-                case["accuracy_golden_checks"] for case in report["cases"]
-            ),
-            profile_post_group_golden_checks=sum(
-                15 * len(case["profile_attempts"]) for case in report["cases"]
-            ),
+            accuracy_launches_and_golden_checks=sum(case["accuracy_golden_checks"] for case in report["cases"]),
+            profile_post_group_golden_checks=sum(15 * len(case["profile_attempts"]) for case in report["cases"]),
         )
     except CollectionFailure as error:
         return finish(args, report, error.status, str(error))

@@ -45,9 +45,7 @@ def test_s4_missing_manifest_prevents_runtime_load(tmp_path, entry):
     output = tmp_path / "missing.json"
     env = isolated_environment(tmp_path, block_z3=True)
     env["TL_ASCEND_MIGRATION_BUILD_MANIFEST"] = str(tmp_path / "absent.json")
-    result = subprocess.run(
-        command(entry, output), env=env, text=True, capture_output=True, timeout=30
-    )
+    result = subprocess.run(command(entry, output), env=env, text=True, capture_output=True, timeout=30)
     assert result.returncode == 2, result.stdout + result.stderr
     report = json.loads(output.read_text())
     assert report["step"] == "S4"
@@ -119,9 +117,7 @@ def _paired_results(module):
                         "input_sha256": {"A": "a" * 64, "B": "b" * 64},
                         "output_sha256": "c" * 64,
                     },
-                    "kernels": [
-                        {"resolved_pass_configs": {"tl.ascend_pipeline_planner": strategy}}
-                    ],
+                    "kernels": [{"resolved_pass_configs": {"tl.ascend_pipeline_planner": strategy}}],
                 },
             }
             for name, (_, _, strategy) in module.PARAMETERS.items()
@@ -177,9 +173,7 @@ def test_s4_final_comparison_failure_cannot_leave_a_pass_report(tmp_path, monkey
 
     monkeypatch.setattr(_npu_runner, "run_process", successful_worker)
     report = {"counts": {"passed": 0, "failed": 0, "skipped": 0, "total": 0}}
-    result = _npu_runner.run_cases(
-        args, report, ("one",), Path(__file__), final_check=reject_outputs
-    )
+    result = _npu_runner.run_cases(args, report, ("one",), Path(__file__), final_check=reject_outputs)
     final = json.loads(args.output.read_text())
     assert result == 1
     assert final["status"] == "FAIL"
@@ -193,10 +187,7 @@ def test_s4_solver_preflight_blocks_before_any_runtime_import(tmp_path, entry, f
     imports = tmp_path / "imports.txt"
     manifest = {
         "tvm_source_root": str(tmp_path / "tvm-source"),
-        "libraries": [
-            {"path": str(tmp_path / "build" / name)}
-            for name in ("libtilelang_module.so", "libtvm.so", "libtvm_runtime.so")
-        ],
+        "libraries": [{"path": str(tmp_path / "build" / name)} for name in ("libtilelang_module.so", "libtvm.so", "libtvm_runtime.so")],
     }
     # The test never loads any library. Supplying a manifest stub reaches the
     # dependency preflight without borrowing unrelated native build artifacts.

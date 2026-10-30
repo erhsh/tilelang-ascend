@@ -59,9 +59,7 @@ def _dma(source, destination, *, count=64, valid=None, offset=0):
         destination.access_ptr("w"),
         tir.const(count, "int32"),
         tir.const(1, "int32"),
-        tir.const(count if valid is None else valid, "int32")
-        if valid is None or isinstance(valid, int)
-        else valid,
+        tir.const(count if valid is None else valid, "int32") if valid is None or isinstance(valid, int) else valid,
     ]
     if load:
         args.append(tir.const(0.0, source.dtype))
@@ -70,13 +68,7 @@ def _dma(source, destination, *, count=64, valid=None, offset=0):
 
 
 def _function(buffers, statements, *, scalars=(), noalias=False, scope=1, addresses=None):
-    body = (
-        statements
-        if isinstance(statements, tir.Stmt)
-        else statements[0]
-        if len(statements) == 1
-        else tir.SeqStmt(statements)
-    )
+    body = statements if isinstance(statements, tir.Stmt) else statements[0] if len(statements) == 1 else tir.SeqStmt(statements)
     if scope is not None:
         body = tir.AttrStmt(tir.const(0, "int32"), "resource_scope", scope, body)
     local = [b for b in buffers if b.scope() != "global"]
@@ -121,11 +113,7 @@ def test_native_registration_is_read_only_and_uses_verified_libraries():
         libraries = {entry["path"] for entry in manifest["libraries"]}
         assert str(Path(tilelang._LIB_PATH).resolve()) in libraries
         assert str(Path(tvm._ffi.base._LIB._name).resolve()) in libraries
-        assert (
-            Path(tvm.__file__)
-            .resolve()
-            .is_relative_to(Path(manifest["tvm_source_root"]) / "python")
-        )
+        assert Path(tvm.__file__).resolve().is_relative_to(Path(manifest["tvm_source_root"]) / "python")
 
 
 @pytest.mark.parametrize("dtype,bytes_per_element", [("float16", 2), ("float32", 4)])
@@ -206,26 +194,20 @@ def test_equal_names_do_not_merge_distinct_local_allocations():
 def test_distinct_gm_parameters_may_alias_without_noalias(noalias):
     source, output = [_buffer(n, "global", shape=(256,)) for n in ("source", "output")]
     a, b = [_buffer(n) for n in "ab"]
-    function = _function(
-        [source, output, a, b], [_dma(a, output), _dma(source, b, offset=128)], noalias=noalias
-    )
+    function = _function([source, output, a, b], [_dma(a, output), _dma(source, b, offset=128)], noalias=noalias)
     assert ((0, 1, "RAW") in _edges(_analyze(function))) is not noalias
 
 
 @pytest.mark.parametrize("address", [0, 32, 1024])
 def test_explicit_addresses_are_conservative_before_final_planning(address):
     a, b = [_buffer(n) for n in "ab"]
-    graph = _analyze(
-        _function([a, b], [_fill(a), _fill(b)], addresses={a.data: 0, b.data: address})
-    )
+    graph = _analyze(_function([a, b], [_fill(a), _fill(b)], addresses={a.data: 0, b.data: address}))
     assert (0, 1, "WAW") in _edges(graph)
 
 
 def test_nested_block_groups_follow_injector_flattening():
     a, b = [_buffer(n) for n in "ab"]
-    nested = tir.BlockRealize(
-        [], True, tir.Block([], [], [], "nested", tir.SeqStmt([_fill(a), _fill(b)]))
-    )
+    nested = tir.BlockRealize([], True, tir.Block([], [], [], "nested", tir.SeqStmt([_fill(a), _fill(b)])))
     graph = _analyze(_function([a, b], [_fill(a), nested]))
     assert [list(map(int, g["source_path"])) for g in graph["groups"]] == [[0], [1, 0], [1, 1]]
     assert [list(map(int, g["task_ids"])) for g in graph["groups"]] == [[0], [1], [2]]
@@ -263,9 +245,7 @@ def test_index_arithmetic_is_widened_before_endpoint_construction():
     offset = tir.Mul(index, tir.IntImm("int32", 1 << 30))
     graph = _analyze(_function([source, a], [_dma(source, a, offset=offset)], scalars=[index]))
     start = graph["tasks"][0]["reads"][0]["start"]
-    value = tvm.arith.Analyzer().simplify(
-        tir.stmt_functor.substitute(start, {index: tir.IntImm("int32", 4)})
-    )
+    value = tvm.arith.Analyzer().simplify(tir.stmt_functor.substitute(start, {index: tir.IntImm("int32", 4)}))
     assert int(value) == (4 * (1 << 30) * 4)
 
 
@@ -279,12 +259,8 @@ def test_unknown_manual_state_and_compound_effects_are_rejected(kind):
             tvm.ir.Op.get("tl.ascend_set_flag"),
             [tir.StringImm("V"), tir.StringImm("MTE3"), tir.IntImm("int32", 0)],
         ),
-        "mask": tir.Call(
-            "handle", tvm.ir.Op.get("tl.ascend_set_mask_mode"), [tir.IntImm("int32", 0)]
-        ),
-        "compound": tir.call_extern(
-            "handle", "atomic_add_ub_to_gm<float,64>", a.access_ptr("r"), a.access_ptr("w")
-        ),
+        "mask": tir.Call("handle", tvm.ir.Op.get("tl.ascend_set_mask_mode"), [tir.IntImm("int32", 0)]),
+        "compound": tir.call_extern("handle", "atomic_add_ub_to_gm<float,64>", a.access_ptr("r"), a.access_ptr("w")),
         "unknown": tir.call_extern("handle", "opaque_helper", a.access_ptr("w")),
     }
     with pytest.raises(tvm.TVMError, match="Unsupported schedule"):
@@ -411,9 +387,7 @@ def test_equivalent_new_functions_have_the_same_stable_ids():
 def test_unproven_dynamic_bounds_cannot_prove_disjoint_accesses():
     a = _buffer("a")
     n = tir.Var("n", "int32")
-    graph = _analyze(
-        _function([a], [_fill(a, count=tir.Min(n, 64)), _fill(a, offset=64)], scalars=[n])
-    )
+    graph = _analyze(_function([a], [_fill(a, count=tir.Min(n, 64)), _fill(a, offset=64)], scalars=[n]))
     assert not bool(graph["tasks"][0]["writes"][0]["bounded"])
     assert (0, 1, "WAW") in _edges(graph)
 

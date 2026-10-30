@@ -71,20 +71,14 @@ def test_cost_contents_cannot_restore_a_kernel_for_the_other_profile(tmp_path, m
     disk, constructed = {}, []
 
     def construct(*args, **kwargs):
-        value = {
-            "profile_sha256": kwargs["pass_configs"]["tl.ascend_pipeline_cost_model"][
-                "profile_sha256"
-            ]
-        }
+        value = {"profile_sha256": kwargs["pass_configs"]["tl.ascend_pipeline_cost_model"]["profile_sha256"]}
         constructed.append(value)
         return value
 
     monkeypatch.setattr(cache_module, "is_cache_enabled", lambda: True)
     monkeypatch.setattr(cache_module, "JITKernel", construct)
     monkeypatch.setattr(cache, "_load_kernel_from_disk", lambda key, *args: disk.get(key))
-    monkeypatch.setattr(
-        cache, "_save_kernel_to_disk", lambda key, kernel, *args: disk.update({key: kernel})
-    )
+    monkeypatch.setattr(cache, "_save_kernel_to_disk", lambda key, kernel, *args: disk.update({key: kernel}))
     profiles = _profiles()
     for profile in (*profiles, *profiles):
         if layer == "disk":
@@ -111,10 +105,6 @@ with tvm.transform.PassContext(config={'tl.ascend_pipeline_planner':'legacy','tl
 assert tvm.get_global_func('tl.ascend.solve_schedule',allow_missing=True) is None
 """
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(Path(__file__).resolve().parent), env.get("PYTHONPATH", "")]
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", source], env=env, text=True, capture_output=True, timeout=60
-    )
+    env["PYTHONPATH"] = os.pathsep.join([str(Path(__file__).resolve().parent), env.get("PYTHONPATH", "")])
+    result = subprocess.run([sys.executable, "-c", source], env=env, text=True, capture_output=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr

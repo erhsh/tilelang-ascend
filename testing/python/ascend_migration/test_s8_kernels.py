@@ -35,9 +35,7 @@ def main(A: T.Tensor((cores, input_trips, 128), "float32"),
                 T.tile.add(c, a, b)
                 T.copy(c, O[cid, iteration, vid * 64:(vid + 1) * 64])
 """
-    return tvm.script.from_source(
-        source, extra_vars={"T": T, "trips": trips, "cores": cores, "input_trips": max(trips, 1)}
-    )
+    return tvm.script.from_source(source, extra_vars={"T": T, "trips": trips, "cores": cores, "input_trips": max(trips, 1)})
 
 
 def make_gemm_kernel(trips=3, cores=1, *, m=128, n=128, k=128, k_l0=128, noalias=True):
@@ -118,19 +116,9 @@ def make_mixed_kernel(trips=3, cores=1, *, operation="reduce", manual_legacy=Fal
         raise ValueError("Mixed operation must be add or reduce")
     if type(manual_legacy) is not bool or type(noalias) is not bool:
         raise ValueError("manual_legacy and noalias must be bool")
-    extra_parameter = (
-        '         D: T.Tensor((cores, input_trips, 128, 128), "float32"),\n'
-        if operation == "add"
-        else ""
-    )
-    output_shape = (
-        "(cores, trips + 1, 128, 128)" if operation == "add" else "(cores, trips + 1, 128)"
-    )
-    allocation = (
-        '        d = T.alloc_ub((64, 128), "float32")'
-        if operation == "add"
-        else '        total = T.alloc_ub((64,), "float32")'
-    )
+    extra_parameter = '         D: T.Tensor((cores, input_trips, 128, 128), "float32"),\n' if operation == "add" else ""
+    output_shape = "(cores, trips + 1, 128, 128)" if operation == "add" else "(cores, trips + 1, 128)"
+    allocation = '        d = T.alloc_ub((64, 128), "float32")' if operation == "add" else '        total = T.alloc_ub((64,), "float32")'
     compute = (
         "                T.copy(D[cid, vr, vid * 64:(vid + 1) * 64, :], d)\n"
         "                T.tile.add(u, u, d)\n"
@@ -139,11 +127,7 @@ def make_mixed_kernel(trips=3, cores=1, *, operation="reduce", manual_legacy=Fal
         else "                T.reduce_sum(u, total, dim=-1, clear=True)\n"
         "                T.copy(total, O[cid, vr, vid * 64:(vid + 1) * 64])"
     )
-    producer_events = (
-        '                T.set_cross_flag("FIX", 0)\n                T.wait_cross_flag(1)\n'
-        if manual_legacy
-        else ""
-    )
+    producer_events = '                T.set_cross_flag("FIX", 0)\n                T.wait_cross_flag(1)\n' if manual_legacy else ""
     consumer_wait = "                T.wait_cross_flag(0)\n" if manual_legacy else ""
     consumer_release = '                T.set_cross_flag("MTE2", 1)\n' if manual_legacy else ""
     source = f"""@T.prim_func
@@ -169,6 +153,4 @@ def main(A: T.Tensor((cores, input_trips, 128, 128), "float16"),
 {consumer_wait}                T.copy(Workspace[cid, vid * 64:(vid + 1) * 64, :], u)
 {consumer_release}{compute}
 """
-    return tvm.script.from_source(
-        source, extra_vars={"T": T, "trips": trips, "cores": cores, "input_trips": max(trips, 1)}
-    )
+    return tvm.script.from_source(source, extra_vars={"T": T, "trips": trips, "cores": cores, "input_trips": max(trips, 1)})

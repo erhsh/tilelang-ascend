@@ -89,8 +89,11 @@ def _run_precision_case(target, kL0Size, shape_group, repeat=1):
 
     ref_c = a @ b
     repeat_launch(
-        kernel, (a, b, c), (c,),
-        lambda: torch.testing.assert_close(c, ref_c, rtol=1e-2, atol=1e-2), repeat,
+        kernel,
+        (a, b, c),
+        (c,),
+        lambda: torch.testing.assert_close(c, ref_c, rtol=1e-2, atol=1e-2),
+        repeat,
     )
 
 

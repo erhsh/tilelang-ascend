@@ -30,9 +30,7 @@ def _flag(kind, domain="MTE2_V", slot=0):
 
 
 def _barrier(pipe="PIPE_V"):
-    return tir.Evaluate(
-        tir.Call("handle", tvm.ir.Op.get("tl.ascend_auto_barrier"), [tir.StringImm(pipe)])
-    )
+    return tir.Evaluate(tir.Call("handle", tvm.ir.Op.get("tl.ascend_auto_barrier"), [tir.StringImm(pipe)]))
 
 
 def _pair(domain, slot=0):
@@ -42,18 +40,12 @@ def _pair(domain, slot=0):
 def _fixture(buffers, statements, emitted, *, addresses=None, noalias=True):
     source = _function(buffers, statements, noalias=noalias)
     graph = tilelang.transform.AnalyzeAscendSchedule(source, "A3")
-    marked = [
-        tir.AttrStmt(tir.const(index, "int64"), "tl.ascend_s4_task", 1, statement)
-        for index, statement in enumerate(statements)
-    ]
+    marked = [tir.AttrStmt(tir.const(index, "int64"), "tl.ascend_s4_task", 1, statement) for index, statement in enumerate(statements)]
     source = _function(buffers, marked, noalias=noalias)
     body = [marked[item] if isinstance(item, int) else item for item in emitted]
     final = _function(buffers, body, noalias=noalias)
     local = [buffer for buffer in buffers if buffer.scope() != "global"]
-    size_map = {
-        buffer.data: math.prod(map(int, buffer.shape)) * tvm.DataType(buffer.dtype).bits // 8
-        for buffer in local
-    }
+    size_map = {buffer.data: math.prod(map(int, buffer.shape)) * tvm.DataType(buffer.dtype).bits // 8 for buffer in local}
     offset = 0
     address_map = {}
     for buffer in local:
@@ -231,9 +223,7 @@ def test_corrupt_iteration_identity_is_not_ignored(boolean):
         _verify(function.with_body(body))
 
 
-@pytest.mark.parametrize(
-    "corruption", ["missing_address", "missing_size", "unaligned", "too_small"]
-)
+@pytest.mark.parametrize("corruption", ["missing_address", "missing_size", "unaligned", "too_small"])
 def test_final_physical_metadata_is_validated(corruption):
     function = _copy_add_store()
     addresses = dict(function.attrs["address_map"].items())
@@ -288,9 +278,7 @@ def test_real_loop_and_tail_have_verified_single_version_coverage(dtype, total, 
     )
 
     with tvm.transform.PassContext(config=vector_pass_configs("constraint")):
-        artifact = tilelang.lower(
-            make_vector_kernel(total, dtype, inplace=inplace), target="ascendc", platform="A3"
-        )
+        artifact = tilelang.lower(make_vector_kernel(total, dtype, inplace=inplace), target="ascendc", platform="A3")
     assert "AscendC::SetFlag" in artifact.kernel_source
     assert "AscendC::WaitFlag" in artifact.kernel_source
 

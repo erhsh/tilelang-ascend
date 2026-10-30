@@ -39,17 +39,13 @@ def strip_sync(function):
             return tir.Evaluate(0)
         return node
 
-    return function.with_body(
-        tir.stmt_functor.ir_transform(function.body, None, remove, ["tir.Evaluate"])
-    )
+    return function.with_body(tir.stmt_functor.ir_transform(function.body, None, remove, ["tir.Evaluate"]))
 
 
 def generate(function):
     before = tvm.ir.save_json(function)
     with tvm.transform.PassContext(config=configs()):
-        result = tilelang.transform.AscendInsertSyncA3(TARGET, "A3")(
-            tvm.IRModule.from_expr(function)
-        )["main"]
+        result = tilelang.transform.AscendInsertSyncA3(TARGET, "A3")(tvm.IRModule.from_expr(function))["main"]
     assert tvm.ir.save_json(function) == before
     record = result.attrs[LOCAL]
     assert int(record["schema_version"]) == 1 and str(record["generator"]) == "a3"
@@ -62,9 +58,7 @@ def generate(function):
 def verify(function):
     before = tvm.ir.save_json(function)
     with tvm.transform.PassContext(config=configs()):
-        result = tilelang.transform.AscendVerifyConstraintSync(TARGET, "A3")(
-            tvm.IRModule.from_expr(function)
-        )["main"]
+        result = tilelang.transform.AscendVerifyConstraintSync(TARGET, "A3")(tvm.IRModule.from_expr(function))["main"]
     assert result.same_as(function) and tvm.ir.save_json(function) == before
 
 
@@ -101,9 +95,7 @@ def test_final_physical_reuse_after_the_read_gets_a_real_completion_path(base):
     # Keep the old disjoint logical graph: the actual final ranges are exact
     # alias, partial overlap, or disjoint. Overwrite remains after the GM read.
     result = generate(function)
-    assert all(
-        int(result.attrs["address_map"][data]) == int(value) for data, value in addresses.items()
-    )
+    assert all(int(result.attrs["address_map"][data]) == int(value) for data, value in addresses.items())
     verify(result)
 
 
@@ -118,9 +110,7 @@ def test_removing_generated_completion_is_rejected_independently(operation):
             return tir.Evaluate(0)
         return node
 
-    broken = result.with_body(
-        tir.stmt_functor.ir_transform(result.body, None, remove, ["tir.Evaluate"])
-    )
+    broken = result.with_body(tir.stmt_functor.ir_transform(result.body, None, remove, ["tir.Evaluate"]))
     assert removed
     with pytest.raises(tvm.TVMError):
         verify(broken)
@@ -132,17 +122,12 @@ def test_actual_noop_guard_does_not_count_as_a_consumed_wait(condition):
     changed = []
 
     def guard(node):
-        if (
-            isinstance(node.value, tir.Call)
-            and getattr(node.value.op, "name", "") == "tl.ascend_auto_wait_flag"
-        ):
+        if isinstance(node.value, tir.Call) and getattr(node.value.op, "name", "") == "tl.ascend_auto_wait_flag":
             changed.append(node)
             return tir.IfThenElse(tir.IntImm("bool", condition), node, None)
         return node
 
-    altered = result.with_body(
-        tir.stmt_functor.ir_transform(result.body, None, guard, ["tir.Evaluate"])
-    )
+    altered = result.with_body(tir.stmt_functor.ir_transform(result.body, None, guard, ["tir.Evaluate"]))
     assert changed
     if condition:
         verify(altered)
@@ -162,11 +147,7 @@ def test_whitelisted_fill_cannot_hide_an_unmodeled_nested_call(false_branch):
     changed = []
 
     def inject(node):
-        if (
-            not changed
-            and isinstance(node.value, tir.Call)
-            and getattr(node.value.op, "name", "") == "tl.ascend_fill"
-        ):
+        if not changed and isinstance(node.value, tir.Call) and getattr(node.value.op, "name", "") == "tl.ascend_fill":
             call = node.value
             args = list(call.args)
             unknown = tir.call_extern("float32", "unmodeled_fill_scalar")
@@ -183,9 +164,7 @@ def test_whitelisted_fill_cannot_hide_an_unmodeled_nested_call(false_branch):
             return tir.Evaluate(tir.Call(call.dtype, call.op, args))
         return node
 
-    function = function.with_body(
-        tir.stmt_functor.ir_transform(function.body, None, inject, ["tir.Evaluate"])
-    )
+    function = function.with_body(tir.stmt_functor.ir_transform(function.body, None, inject, ["tir.Evaluate"]))
     assert len(changed) == 1
     with pytest.raises(tvm.TVMError):
         generate(function)
@@ -203,9 +182,7 @@ def independent_dma_source():
     ]
     source = _function([first, second, left, right], calls, noalias=True)
     contract = _analyze(source)
-    final = _function(
-        [first, second, left, right], [_unit(call, i) for i, call in enumerate(calls)], noalias=True
-    )
+    final = _function([first, second, left, right], [_unit(call, i) for i, call in enumerate(calls)], noalias=True)
     return (
         final.with_attr("address_map", {left.data: 0, right.data: 256})
         .with_attr("size_map", {left.data: 256, right.data: 256})
@@ -345,9 +322,7 @@ def test_linear_set_wait_pairs_cannot_hide_early_binary_flag_reuse(damage):
             )
         return node
 
-    broken = result.with_body(
-        tir.stmt_functor.ir_transform(result.body, None, remove, ["tir.Evaluate"])
-    )
+    broken = result.with_body(tir.stmt_functor.ir_transform(result.body, None, remove, ["tir.Evaluate"]))
     assert changed
     if damage == "late_all":
         # A terminal ALL cannot retroactively prevent the earlier double Set.
@@ -358,17 +333,11 @@ def test_linear_set_wait_pairs_cannot_hide_early_binary_flag_reuse(damage):
         verify(broken)
 
 
-@pytest.mark.parametrize(
-    "versions,trips,cores", [(1, 0, 1), (1, 1, 1), (1, 3, 1), (2, 8, 8), (3, 8, 8)]
-)
+@pytest.mark.parametrize("versions,trips,cores", [(1, 0, 1), (1, 1, 1), (1, 3, 1), (2, 8, 8), (3, 8, 8)])
 def test_complete_lowering_preserves_actual_version_and_event_contract(versions, trips, cores):
     with tvm.transform.PassContext(config=configs()):
-        artifact = tilelang.lower(
-            make_vector_sync_kernel(trips, versions, cores), target="ascendc", platform="A3"
-        )
-    assert any(
-        "PipeBarrier" in line and "PIPE_ALL" in line for line in artifact.kernel_source.splitlines()
-    )
+        artifact = tilelang.lower(make_vector_sync_kernel(trips, versions, cores), target="ascendc", platform="A3")
+    assert any("PipeBarrier" in line and "PIPE_ALL" in line for line in artifact.kernel_source.splitlines())
     for function in artifact.device_mod.functions.values():
         assert LOCAL in function.attrs
         assert int(function.attrs["tl.ascend_s4_manifest"]["schema_version"]) == 3
@@ -381,6 +350,4 @@ def test_complete_lowering_preserves_actual_version_and_event_contract(versions,
 @pytest.mark.parametrize("platform", ["A5", "unknown"])
 def test_new_local_generation_cannot_relabel_other_platforms(platform):
     with tvm.transform.PassContext(config=configs()), pytest.raises(tvm.TVMError):
-        tilelang.transform.AscendInsertSyncA3(TARGET, platform)(
-            tvm.IRModule.from_expr(strip_sync(_union_fixture()))
-        )
+        tilelang.transform.AscendInsertSyncA3(TARGET, platform)(tvm.IRModule.from_expr(strip_sync(_union_fixture())))

@@ -38,17 +38,11 @@ FIXTURES = {
     "mixed_add": {"kind": "mixed", "operation": "add", "trips": 3, "cores": 1},
     "mixed_reduce": {"kind": "mixed", "operation": "reduce", "trips": 3, "cores": 4},
 }
-PARAMETERS = {
-    f"{name}_{strategy}": {**spec, "strategy": strategy}
-    for name, spec in FIXTURES.items()
-    for strategy in ("legacy", "auto")
-}
+PARAMETERS = {f"{name}_{strategy}": {**spec, "strategy": strategy} for name, spec in FIXTURES.items() for strategy in ("legacy", "auto")}
 EXPERT_CASES = ("expert_gemm_c128", "expert_l1_tail_stages2")
 WORKLOAD_CASES = (*PARAMETERS, *EXPERT_CASES)
 BENCHMARK_BASES = ("gemm_batch3", "reduce_batch3", "mixed_reduce")
-BENCHMARK_CASES = tuple(
-    f"{name}_{strategy}" for name in BENCHMARK_BASES for strategy in ("legacy", "auto")
-)
+BENCHMARK_CASES = tuple(f"{name}_{strategy}" for name in BENCHMARK_BASES for strategy in ("legacy", "auto"))
 
 
 def parser(description, *, benchmark=False):
@@ -88,9 +82,7 @@ def validate(args, report):
     if sys.flags.optimize:
         return finish(args, report, "BLOCKED", "Python optimization disables mandatory assertions")
     if args.device < 0 or args.seed < 0 or args.repeat < 1:
-        return finish(
-            args, report, "BLOCKED", "device/seed nonnegative and repeat positive required"
-        )
+        return finish(args, report, "BLOCKED", "device/seed nonnegative and repeat positive required")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         return finish(args, report, "BLOCKED", "--timeout must be finite and positive")
     try:
@@ -113,11 +105,7 @@ def preflight(args, evidence, tilelang):
         "AscendInsertScheduledSync",
         "AscendVerifyAutoSchedule",
     )
-    missing = [
-        name
-        for name in names
-        if tilelang.tvm.get_global_func("tl.transform." + name, allow_missing=True) is None
-    ]
+    missing = [name for name in names if tilelang.tvm.get_global_func("tl.transform." + name, allow_missing=True) is None]
     if missing:
         raise RuntimeError(f"Verified native library lacks the S8 backend: {missing}")
     evidence["s8_backend"] = {"registered_passes": list(names), "model": "abstract_issue_step_v1"}
@@ -144,9 +132,7 @@ def program(spec):
         return make_gemm_kernel(**common, m=spec["m"], n=spec["n"], k=spec["k"], k_l0=spec["k"])
     if spec["kind"] == "reduce":
         return make_reduce_kernel(**common)
-    return make_mixed_kernel(
-        **common, operation=spec["operation"], manual_legacy=spec["strategy"] == "legacy"
-    )
+    return make_mixed_kernel(**common, operation=spec["operation"], manual_legacy=spec["strategy"] == "legacy")
 
 
 def build_kernel(tilelang, spec):
@@ -272,10 +258,7 @@ class CaseData:
                 self.output_shape = (cores, trips + 1, 128)
             inputs["Workspace"] = ((cores, 144, 128), "float32")
         self.input_layout = inputs
-        self.tensors = {
-            key: torch.empty(shape, dtype=getattr(torch, dtype), device="npu")
-            for key, (shape, dtype) in inputs.items()
-        }
+        self.tensors = {key: torch.empty(shape, dtype=getattr(torch, dtype), device="npu") for key, (shape, dtype) in inputs.items()}
         self.tensors["O"] = torch.empty(self.output_shape, dtype=torch.float32, device="npu")
         self.arguments = tuple(self.tensors.values())
         self.buffer_pointers = {key: tensor.data_ptr() for key, tensor in self.tensors.items()}
@@ -291,9 +274,7 @@ class CaseData:
             if name == "Workspace":
                 continue
             values = torch.randint(-2, 3, shape, generator=self.generator).to(torch.float32)
-            labels = (
-                torch.arange(shape[0]).reshape(shape[0], *([1] * (len(shape) - 1))) + index % 5
-            ) % 3
+            labels = (torch.arange(shape[0]).reshape(shape[0], *([1] * (len(shape) - 1))) + index % 5) % 3
             values = (values - labels if name == "B" else values + labels) / 32
             self.hosts[name] = values.to(getattr(torch, dtype))
         trips = self.spec["trips"]
@@ -311,17 +292,12 @@ class CaseData:
             if self.spec["kind"] == "mixed":
                 shape = self.input_layout["Workspace"][0]
                 initial = torch.full(shape, float("nan"), dtype=torch.float32)
-                initial[:, :128] = (
-                    torch.randint(-8, 9, (shape[0], 128, 128), generator=self.generator).float()
-                    / 16
-                )
+                initial[:, :128] = torch.randint(-8, 9, (shape[0], 128, 128), generator=self.generator).float() / 16
                 self.hosts["Workspace"] = initial
                 self.workspace_expected = initial.clone()
                 if trips:
                     self.workspace_expected[:, :128] = product[:, trips - 1]
-        self.input_hashes = {
-            name: tensor_digest(value, torch) for name, value in self.hosts.items()
-        }
+        self.input_hashes = {name: tensor_digest(value, torch) for name, value in self.hosts.items()}
         self.golden_hash = tensor_digest(self.expected, torch)
         self.restore()
 
@@ -344,9 +320,7 @@ class CaseData:
         }
         if self.spec["kind"] == "mixed":
             workspace = self.tensors["Workspace"].cpu()
-            torch.testing.assert_close(
-                workspace, self.workspace_expected, rtol=1e-4, atol=1e-4, equal_nan=True
-            )
+            torch.testing.assert_close(workspace, self.workspace_expected, rtol=1e-4, atol=1e-4, equal_nan=True)
             result["workspace_output_sha256"] = tensor_digest(workspace, torch)
             result["workspace_golden_sha256"] = tensor_digest(self.workspace_expected, torch)
         return result
@@ -371,9 +345,7 @@ def inspect_function(function):
     if tasks:
         verified = verify_schedule(problem, solution)
         if not verified["valid"]:
-            raise AssertionError(
-                f"Independent integer verifier rejected the auto result: {verified}"
-            )
+            raise AssertionError(f"Independent integer verifier rejected the auto result: {verified}")
     else:
         if (
             any(problem[key] for key in ("latencies", "iis", "resource_flags", "data_deps"))
@@ -429,17 +401,9 @@ def inspect_function(function):
     def visit(node):
         if isinstance(node, tvm.tir.Allocate):
             dtype = tvm.DataType(node.dtype)
-            capacity = (
-                math.prod(integer(extent) for extent in node.extents)
-                * dtype.bits
-                * dtype.lanes
-                // 8
-            )
+            capacity = math.prod(integer(extent) for extent in node.extents) * dtype.bits * dtype.lanes // 8
             allocations.append((node.buffer_var, capacity, str(node.dtype)))
-        elif (
-            isinstance(node, tvm.tir.Call)
-            and str(getattr(node.op, "name", "")) == "tir.tvm_access_ptr"
-        ):
+        elif isinstance(node, tvm.tir.Call) and str(getattr(node.op, "name", "")) == "tir.tvm_access_ptr":
             dtype = tvm.DataType(node.args[0].dtype)
             width = dtype.bits * dtype.lanes // 8
             pointers.append((node.args[1], node.args[2], node.args[3], width))
@@ -449,13 +413,9 @@ def inspect_function(function):
     if sorted(emitted) != list(range(len(tasks))):
         raise AssertionError("Actual finite emission loses or duplicates a source task")
     for members in groups.values():
-        if [task for task in emitted if task in members] != [
-            task for task in order if task in members
-        ]:
+        if [task for task in emitted if task in members] != [task for task in order if task in members]:
             raise AssertionError("Actual actor execution differs from the solved permutation")
-    reordered = any(
-        [task for task in emitted if task in members] != members for members in groups.values()
-    )
+    reordered = any([task for task in emitted if task in members] != members for members in groups.values())
 
     def matching(items, variable):
         return [item for item in items if item[0].same_as(variable)]
@@ -466,9 +426,7 @@ def inspect_function(function):
     records = []
     for row in attrs.get("tl.ascend_s8_buffer_remap", []):
         logical, physical = row["logical_data"], row["physical_data"]
-        versions, pitch, span, total = (
-            int(row[key]) for key in ("versions", "pitch", "span", "total")
-        )
+        versions, pitch, span, total = (int(row[key]) for key in ("versions", "pitch", "span", "total"))
         if versions not in (1, 2) or not 0 < span <= pitch or total != versions * pitch:
             raise AssertionError("Invalid emitted byte-pitch/version geometry")
         choice = matching(selected, logical)
@@ -476,10 +434,7 @@ def inspect_function(function):
             raise AssertionError("Materialized versions differ from the selected candidate")
         allocated = matching(allocations, physical)
         sizes, addresses = matching(size_map, physical), matching(address_map, physical)
-        accessed = [
-            (item[0], integer(item[1]) * item[3], integer(item[2]) * item[3])
-            for item in matching(pointers, physical)
-        ]
+        accessed = [(item[0], integer(item[1]) * item[3], integer(item[2]) * item[3]) for item in matching(pointers, physical)]
         if allocated and any(item[1] < total for item in allocated):
             raise AssertionError("Actual allocation is smaller than the emitted versions")
         if sizes and int(sizes[0][1]) < total:
@@ -512,9 +467,7 @@ def inspect_function(function):
                 "actual_allocation_bytes": [item[1] for item in allocated],
                 "actual_size_map": [int(item[1]) for item in sizes],
                 "actual_address_map": [int(item[1]) for item in addresses],
-                "actual_typed_accesses": [
-                    {"offset_bytes": item[1], "extent_bytes": item[2]} for item in accessed
-                ],
+                "actual_typed_accesses": [{"offset_bytes": item[1], "extent_bytes": item[2]} for item in accessed],
             }
         )
     return {
@@ -543,9 +496,7 @@ def describe_kernel(kernel, args, spec):
         if not isinstance(function, tvm.tir.PrimFunc):
             continue
         attrs = function.attrs or {}
-        captured = {
-            str(key): attrs[key] for key in attrs.keys() if str(key).startswith("tl.ascend_s8_")
-        }
+        captured = {str(key): attrs[key] for key in attrs.keys() if str(key).startswith("tl.ascend_s8_")}
         record = {"function": symbol.name_hint, "attribute_names": sorted(captured)}
         device_ir = args.output.parent / f"{args.output.stem}-{symbol.name_hint}-device-ir.json"
         device_ir.write_text(tvm.ir.save_json(function) + "\n")
@@ -561,17 +512,10 @@ def describe_kernel(kernel, args, spec):
     if not functions:
         raise AssertionError("No actual compiled device PrimFunc was retained")
     if spec["strategy"] == "auto":
-        pools = {
-            row["pool"]
-            for function in functions
-            for row in function["buffer_remap"]
-            if row["versions"] == 2
-        }
+        pools = {row["pool"] for function in functions for row in function["buffer_remap"] if row["versions"] == 2}
         if not set(spec.get("require_n2_pools", ())).issubset(pools):
             raise AssertionError(f"Required actual N2 pool was not materialized: observed {pools}")
-        if spec.get("require_reorder") and not any(
-            fn["within_actor_reordered"] for fn in functions
-        ):
+        if spec.get("require_reorder") and not any(fn["within_actor_reordered"] for fn in functions):
             raise AssertionError("An actor-local non-source execution permutation is required")
     return {
         "actual_functions": functions,

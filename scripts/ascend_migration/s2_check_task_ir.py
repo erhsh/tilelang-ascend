@@ -46,11 +46,7 @@ def main() -> int:
         "New S1 fixtures use requested platform; existing legacy fixtures retain their "
         "audited A2/A3/PTO parameters. Pure capability profiles are not device measurements."
     )
-    nodes = [
-        f"{LANGUAGE}{filename}::{node}"
-        for filename, names in CONTRACT_TESTS.values()
-        for node in names
-    ]
+    nodes = [f"{LANGUAGE}{filename}::{node}" for filename, names in CONTRACT_TESTS.values() for node in names]
     nodes += [
         "testing/python/ascend_migration/test_s2_task_ir.py",
         "testing/python/ascend_migration/test_s2_capability_ir.py",
@@ -66,9 +62,7 @@ def main() -> int:
     env["TL_ASCEND_MIGRATION_BUILD_MANIFEST"] = str(args.build_manifest.resolve())
     env["TL_ASCEND_MIGRATION_PLATFORM"] = args.platform.upper()
     args.output.resolve().parent.mkdir(parents=True, exist_ok=True)
-    artifacts = Path(
-        tempfile.mkdtemp(prefix=f"{args.output.stem}-artifacts-", dir=args.output.resolve().parent)
-    )
+    artifacts = Path(tempfile.mkdtemp(prefix=f"{args.output.stem}-artifacts-", dir=args.output.resolve().parent))
     report["artifacts"] = str(artifacts)
     try:
         result = run_pytest(nodes, artifacts, env=env, timeout=args.timeout)

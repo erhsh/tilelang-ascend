@@ -37,9 +37,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--seed", type=int, default=0)
     result.add_argument("--repeat", type=int, default=100)
     result.add_argument("--timeout", type=float, default=120, help="Seconds per isolated case")
-    result.add_argument(
-        "--output", required=True, help="JSON result; artifacts are saved beside it"
-    )
+    result.add_argument("--output", required=True, help="JSON result; artifacts are saved beside it")
     result.add_argument("--_case", choices=("preflight", *CASES), help=argparse.SUPPRESS)
     return result
 
@@ -98,9 +96,7 @@ def run_case(name: str, args, torch) -> None:
         )
 
         kernel = _optional_loop_kernel(args.platform.upper())
-        test_optional_loop_preserves_the_previous_alias_value(
-            kernel, int(name[-1]), repeat=args.repeat
-        )
+        test_optional_loop_preserves_the_previous_alias_value(kernel, int(name[-1]), repeat=args.repeat)
     elif name == "copy_elem_offset":
         import tilelang
         from ascend_repeat import repeat_launch
@@ -125,9 +121,7 @@ def run_case(name: str, args, torch) -> None:
             kernel,
             (source, output),
             (output,),
-            lambda: torch.testing.assert_close(
-                output.cpu(), expected, rtol=0, atol=0, equal_nan=True
-            ),
+            lambda: torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0, equal_nan=True),
             args.repeat,
         )
     elif name == "atomic_elem_offset":
@@ -201,13 +195,7 @@ def main() -> int:
     report = base_report("s1_run_baseline_npu", args)
     if sys.flags.optimize:
         return finish(args, report, "BLOCKED", "Python optimization disables mandatory assertions")
-    if (
-        args.device < 0
-        or args.seed < 0
-        or args.repeat < 1
-        or not math.isfinite(args.timeout)
-        or args.timeout <= 0
-    ):
+    if args.device < 0 or args.seed < 0 or args.repeat < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
         return finish(
             args,
             report,

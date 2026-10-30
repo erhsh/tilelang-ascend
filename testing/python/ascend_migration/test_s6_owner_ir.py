@@ -27,13 +27,9 @@ def owners(function):
 def canonical(function, strategy="constraint"):
     before = tvm.ir.save_json(function)
     with tvm.transform.PassContext(config={"tl.ascend_pipeline_planner": strategy}):
-        first = tilelang.transform.AscendCanonicalizeStorageAliases()(
-            tvm.IRModule({"main": function})
-        )["main"]
+        first = tilelang.transform.AscendCanonicalizeStorageAliases()(tvm.IRModule({"main": function}))["main"]
         first_json = tvm.ir.save_json(first)
-        second = tilelang.transform.AscendCanonicalizeStorageAliases()(
-            tvm.IRModule({"main": first})
-        )["main"]
+        second = tilelang.transform.AscendCanonicalizeStorageAliases()(tvm.IRModule({"main": first}))["main"]
     assert tvm.ir.save_json(function) == before
     assert tvm.ir.save_json(second) == first_json
     assert second.same_as(first)
@@ -47,9 +43,7 @@ def pointers(function):
         if isinstance(node, tir.Call) and getattr(node.op, "name", None) == "tir.tvm_access_ptr":
             found.append(node)
 
-    tir.stmt_functor.post_order_visit(
-        function.body if isinstance(function, tir.PrimFunc) else function, visit
-    )
+    tir.stmt_functor.post_order_visit(function.body if isinstance(function, tir.PrimFunc) else function, visit)
     return found
 
 
@@ -96,12 +90,8 @@ assert result.same_as(function) and tvm.ir.save_json(function)==before
 assert tvm.get_global_func('tl.ascend.solve_schedule',allow_missing=True) is None
 """
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(Path(__file__).resolve().parent), env.get("PYTHONPATH", "")]
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", source], env=env, text=True, capture_output=True, timeout=60
-    )
+    env["PYTHONPATH"] = os.pathsep.join([str(Path(__file__).resolve().parent), env.get("PYTHONPATH", "")])
+    result = subprocess.run([sys.executable, "-c", source], env=env, text=True, capture_output=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -183,9 +173,7 @@ def test_nested_pointer_alias_chain_uses_one_canonical_root():
     first, second = [tir.Var(name, root.data.type_annotation) for name in ("first", "second")]
     first_view = _buffer("first_view", shape=(64,), data=first)
     second_view = _buffer("second_view", shape=(64,), data=second)
-    statement = tir.LetStmt(
-        second, first_view.access_ptr("rw", offset=8), _fill(second_view, 8, 32)
-    )
+    statement = tir.LetStmt(second, first_view.access_ptr("rw", offset=8), _fill(second_view, 8, 32))
     function = _function([root], tir.LetStmt(first, root.access_ptr("rw", offset=8), statement))
     result = canonical(function)
     pointer = pointers(result)[0]
@@ -198,9 +186,7 @@ def test_raw_pointer_bytes_are_converted_to_the_consumer_dtype(dtype, elements, 
     root = _buffer("root", shape=(64,))
     alias = tir.Var("alias", root.data.type_annotation)
     view = _buffer("typed_view", dtype=dtype, shape=(elements,), data=alias)
-    function = _function(
-        [root], tir.LetStmt(alias, root.access_ptr("rw", offset=16), _fill(view, 0, 32))
-    )
+    function = _function([root], tir.LetStmt(alias, root.access_ptr("rw", offset=16), _fill(view, 0, 32)))
     result = canonical(function)
     pointer = pointers(result)[0]
     assert pointer.args[1].same_as(root.data)
@@ -284,9 +270,7 @@ def test_pointer_binding_requires_a_signed_access_mask_from_one_to_three(mask, d
     binding = root.access_ptr("rw")
     args = list(binding.args)
     args[4] = tir.const(mask, dtype)
-    function = _function(
-        [root], tir.LetStmt(alias, tir.Call(binding.dtype, binding.op, args), _fill(view))
-    )
+    function = _function([root], tir.LetStmt(alias, tir.Call(binding.dtype, binding.op, args), _fill(view)))
     with pytest.raises(tvm.TVMError):
         canonical(function)
 
@@ -299,14 +283,8 @@ def test_removing_a_pointer_binding_cannot_drop_extent_side_effects(kind):
     view = _buffer("view", shape=(64,), data=alias)
     binding = root.access_ptr("rw")
     args = list(binding.args)
-    args[3] = (
-        tir.BufferLoad(external, [0])
-        if kind == "buffer_load"
-        else tir.call_extern("int32", "opaque_extent")
-    )
-    function = _function(
-        [external, root], tir.LetStmt(alias, tir.Call(binding.dtype, binding.op, args), _fill(view))
-    )
+    args[3] = tir.BufferLoad(external, [0]) if kind == "buffer_load" else tir.call_extern("int32", "opaque_extent")
+    function = _function([external, root], tir.LetStmt(alias, tir.Call(binding.dtype, binding.op, args), _fill(view)))
     with pytest.raises(tvm.TVMError):
         canonical(function)
 
@@ -316,9 +294,7 @@ def test_address_and_size_metadata_follow_only_a_zero_offset_known_pointer_alias
     root = _buffer("root", shape=(64,))
     alias = tir.Var("alias", root.data.type_annotation)
     view = _buffer("view", shape=(32,), data=alias)
-    function = _function(
-        [root], tir.LetStmt(alias, root.access_ptr("rw", offset=offset), _fill(view, count=32))
-    )
+    function = _function([root], tir.LetStmt(alias, root.access_ptr("rw", offset=offset), _fill(view, count=32)))
     function = function.with_attr("address_map", {alias: 32}).with_attr("size_map", {alias: 256})
     if offset:
         with pytest.raises(tvm.TVMError):
@@ -414,15 +390,9 @@ def test_dense_match_buffer_keeps_the_one_owner_and_view_byte_range():
     assert pointer.args[1].same_as(root.data) and integer(pointer.args[2]) == 16
     report = owners(function)
     assert len(report["storages"]) == 1
-    matched = [
-        row
-        for row in report["views"]
-        if str(row["dtype"]) == "float32" and [integer(value) for value in row["shape"]] == [32]
-    ]
+    matched = [row for row in report["views"] if str(row["dtype"]) == "float32" and [integer(value) for value in row["shape"]] == [32]]
     assert matched
-    assert any(
-        integer(row["byte_begin"]) == 64 and integer(row["byte_end"]) == 192 for row in matched
-    )
+    assert any(integer(row["byte_begin"]) == 64 and integer(row["byte_end"]) == 192 for row in matched)
 
 
 def test_generic_scope_rewrite_updates_block_view_declarations_without_mutating_source():
@@ -469,17 +439,13 @@ def test_generic_scope_rewrite_updates_block_view_declarations_without_mutating_
         assert integer(buffer.shape[0]) * tvm.DataType(buffer.dtype).bits // 8 == 128
 
 
-@pytest.mark.parametrize(
-    "kind,dtype,tile", [("views", "float32", 64), ("dtype_views", "float32", 32)]
-)
+@pytest.mark.parametrize("kind,dtype,tile", [("views", "float32", 64), ("dtype_views", "float32", 32)])
 def test_public_alias_fixture_has_complete_schema3_lowering(kind, dtype, tile):
     from test_s5_versions_ir import configs
     from test_s6_kernels import make_reuse_kernel
 
     with tvm.transform.PassContext(config=configs()):
-        artifact = tilelang.lower(
-            make_reuse_kernel(kind, dtype=dtype, tile=tile), target="ascendc", platform="A3"
-        )
+        artifact = tilelang.lower(make_reuse_kernel(kind, dtype=dtype, tile=tile), target="ascendc", platform="A3")
     for function in artifact.device_mod.functions.values():
         manifest = function.attrs["tl.ascend_s4_manifest"]
         assert int(manifest["schema_version"]) == 3
@@ -493,26 +459,20 @@ def test_private_mixed_dtype_versions_share_one_actual_128_byte_pitch(developer)
     from test_s6_kernels import make_dtype_version_kernel
 
     with tvm.transform.PassContext(config=configs()):
-        artifact = tilelang.lower(
-            make_dtype_version_kernel(developer=developer), target="ascendc", platform="A3"
-        )
+        artifact = tilelang.lower(make_dtype_version_kernel(developer=developer), target="ascendc", platform="A3")
     analyzer = tvm.arith.Analyzer()
     for function in artifact.device_mod.functions.values():
         lifetime = function.attrs["tl.ascend_s4_manifest"]["lifetime_contract"]
         half_roots = []
         for task in lifetime["source_graph"]["tasks"]:
             for pointer in pointers(task["statement"]):
-                if str(pointer.args[0].dtype) == "float16" and not any(
-                    pointer.args[1].same_as(value) for value in half_roots
-                ):
+                if str(pointer.args[0].dtype) == "float16" and not any(pointer.args[1].same_as(value) for value in half_roots):
                     half_roots.append(pointer.args[1])
         assert len(half_roots) == 1
         owners_ = [
             row
             for row in lifetime["storage_catalog"]["storages"]
-            if bool(row["physical_allocation"])
-            and integer(row["capacity_bytes"]) == 128
-            and row["data"].same_as(half_roots[0])
+            if bool(row["physical_allocation"]) and integer(row["capacity_bytes"]) == 128 and row["data"].same_as(half_roots[0])
         ]
         assert len(owners_) == 1
         owner = owners_[0]
@@ -530,8 +490,7 @@ def test_private_mixed_dtype_versions_share_one_actual_128_byte_pitch(developer)
         remaps = [
             row
             for row in function.attrs["tl.ascend_s5_buffer_remap"]
-            if row["logical_data"].same_as(owner["data"])
-            or original(row["logical_data"]).same_as(owner["source_data"])
+            if row["logical_data"].same_as(owner["data"]) or original(row["logical_data"]).same_as(owner["source_data"])
         ]
         assert len(remaps) == 1
         remap = remaps[0]
@@ -568,9 +527,7 @@ def test_explicit_base_must_fit_the_actual_multi_version_owner_not_just_n1(base,
     program = make_dtype_version_kernel()
     half_roots = []
     for pointer in pointers(program):
-        if str(pointer.args[0].dtype) == "float16" and not any(
-            pointer.args[1].same_as(value) for value in half_roots
-        ):
+        if str(pointer.args[0].dtype) == "float16" and not any(pointer.args[1].same_as(value) for value in half_roots):
             half_roots.append(pointer.args[1])
     assert len(half_roots) == 1
     modified = []
@@ -593,9 +550,7 @@ def test_explicit_base_must_fit_the_actual_multi_version_owner_not_just_n1(base,
             )
         return block
 
-    program = program.with_body(
-        tir.stmt_functor.ir_transform(program.body, None, annotate, ["tir.Block"])
-    )
+    program = program.with_body(tir.stmt_functor.ir_transform(program.body, None, annotate, ["tir.Block"]))
     assert len(modified) == 1
     with tvm.transform.PassContext(config=configs()):
         if valid:

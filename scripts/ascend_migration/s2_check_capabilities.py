@@ -19,9 +19,7 @@ def main() -> int:
     report = base_report("s2_check_capabilities", args, step="S2")
     report["validation_layer"] = "host capability contracts only; no native or device execution"
     if sys.flags.optimize:
-        return finish(
-            args, report, "BLOCKED", "Run capability assertions without Python -O/PYTHONOPTIMIZE"
-        )
+        return finish(args, report, "BLOCKED", "Run capability assertions without Python -O/PYTHONOPTIMIZE")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         return finish(args, report, "BLOCKED", "--timeout must be finite and positive")
     try:

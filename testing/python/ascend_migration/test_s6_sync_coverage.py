@@ -22,9 +22,7 @@ def _strip_markers(function):
             return attribute.body
         return attribute
 
-    return function.with_body(
-        tir.stmt_functor.ir_transform(function.body, None, remove, ["tir.AttrStmt"])
-    )
+    return function.with_body(tir.stmt_functor.ir_transform(function.body, None, remove, ["tir.AttrStmt"]))
 
 
 def _upgrade(function):
@@ -42,9 +40,7 @@ def _upgrade(function):
 def _verify(function):
     before = tvm.ir.save_json(function)
     with tvm.transform.PassContext(config={"tl.ascend_pipeline_planner": "constraint"}):
-        result = tilelang.transform.AscendVerifyConstraintSync(TARGET, "A3")(
-            tvm.IRModule.from_expr(function)
-        )["main"]
+        result = tilelang.transform.AscendVerifyConstraintSync(TARGET, "A3")(tvm.IRModule.from_expr(function))["main"]
     assert result.same_as(function)
     assert tvm.ir.save_json(function) == before
 
@@ -83,9 +79,7 @@ def _union_fixture(*, physical_alias=False, missing_completion=False):
             statements.append(_barrier("PIPE_ALL"))
         statements.append(_unit(source_calls[unit], unit))
     final = _function([value, unrelated, output], statements, noalias=True)
-    final = final.with_attr(
-        "address_map", {value.data: 0, unrelated.data: 0 if physical_alias else 512}
-    )
+    final = final.with_attr("address_map", {value.data: 0, unrelated.data: 0 if physical_alias else 512})
     final = final.with_attr("size_map", {value.data: 512, unrelated.data: 512})
     return final.with_attr(REMAP, []).with_attr(
         MANIFEST,

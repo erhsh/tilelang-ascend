@@ -80,13 +80,10 @@ def test_deselected_mandatory_node_cannot_pass(tmp_path):
     test_file = tmp_path / "test_required.py"
     test_file.write_text("def test_ok(): pass\ndef test_required(): pass\n")
     (tmp_path / "conftest.py").write_text(
-        "def pytest_collection_modifyitems(items):\n"
-        "    items[:] = [item for item in items if item.name != 'test_required']\n"
+        "def pytest_collection_modifyitems(items):\n    items[:] = [item for item in items if item.name != 'test_required']\n"
     )
     nodes = [f"{test_file}::test_ok", f"{test_file}::test_required"]
-    result = common.run_pytest(
-        nodes, tmp_path / "artifacts", env=dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
-    )
+    result = common.run_pytest(nodes, tmp_path / "artifacts", env=dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1"))
     assert result["counts"]["passed"] == 1
     assert result["status"] == "FAIL"
     assert result["missing_required_nodes"] == [nodes[1]]
@@ -104,9 +101,7 @@ def guarded_environment(tmp_path):
     return dict(os.environ, PYTHONPATH=str(tmp_path))
 
 
-@pytest.mark.parametrize(
-    "entry", ["s1_check_baseline", "s1_check_legacy_lowering", "s1_run_baseline_npu"]
-)
+@pytest.mark.parametrize("entry", ["s1_check_baseline", "s1_check_legacy_lowering", "s1_run_baseline_npu"])
 def test_help_does_not_import_a_runtime(tmp_path, entry):
     result = subprocess.run(
         [sys.executable, str(RUNNERS / f"{entry}.py"), "--help"],
@@ -169,9 +164,7 @@ def test_missing_build_evidence_is_blocked_before_runtime_import(tmp_path, entry
 
 @pytest.mark.parametrize("changed", ["project", "tvm_python", "library", "cmake", "build_log"])
 def test_native_identity_rejects_stale_inputs(tmp_path, monkeypatch, changed):
-    build_spec = importlib.util.spec_from_file_location(
-        "migration_build", RUNNERS / "_native_build.py"
-    )
+    build_spec = importlib.util.spec_from_file_location("migration_build", RUNNERS / "_native_build.py")
     build = importlib.util.module_from_spec(build_spec)
     build_spec.loader.exec_module(build)
     monkeypatch.setattr(build, "ROOT", tmp_path)
@@ -186,9 +179,7 @@ def test_native_identity_rejects_stale_inputs(tmp_path, monkeypatch, changed):
     for path in (project, tvm_python, cmake, log, *libraries):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("original input\n")
-    cmake.write_text(
-        f"TVM_SOURCE_DIR:PATH={tvm_source}\nCMAKE_HOME_DIRECTORY:INTERNAL={tmp_path}\n"
-    )
+    cmake.write_text(f"TVM_SOURCE_DIR:PATH={tvm_source}\nCMAKE_HOME_DIRECTORY:INTERNAL={tmp_path}\n")
     manifest = tmp_path / "manifest.json"
     build.write_manifest(
         manifest,

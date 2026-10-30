@@ -36,9 +36,7 @@ def run_blocked(tmp_path, entry, extra=(), *, optimized=False):
     env = isolated_environment(tmp_path, block_z3=True)
     env["TL_ASCEND_MIGRATION_BUILD_MANIFEST"] = str(tmp_path / "absent-manifest.json")
     env["TL_ASCEND_PIPELINE_COST_PROFILE"] = str(tmp_path / "absent-profile.json")
-    result = subprocess.run(
-        [*args, *extra], env=env, text=True, capture_output=True, timeout=30
-    )
+    result = subprocess.run([*args, *extra], env=env, text=True, capture_output=True, timeout=30)
     assert result.returncode == 2, result.stdout + result.stderr
     report = json.loads(output.read_text())
     assert report["step"] == "S5"
@@ -100,9 +98,7 @@ def test_missing_or_invalid_cost_profile_is_blocked(tmp_path, entry, content):
 
 def test_calibration_needs_manifest_but_no_existing_cost_profile(tmp_path):
     output_profile = tmp_path / "new-profile.json"
-    report = run_blocked(
-        tmp_path, "s5_run_pipeline_npu", ["--calibrate-profile", str(output_profile)]
-    )
+    report = run_blocked(tmp_path, "s5_run_pipeline_npu", ["--calibrate-profile", str(output_profile)])
     assert "manifest" in report["error"].lower()
     assert not output_profile.exists()
 

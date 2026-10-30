@@ -77,9 +77,7 @@ def default_value(source: str, key: str) -> bool:
 
 def phase_calls(source: str, function: str) -> list[str]:
     module = ast.parse(source)
-    definition = next(
-        n for n in module.body if isinstance(n, ast.FunctionDef) and n.name == function
-    )
+    definition = next(n for n in module.body if isinstance(n, ast.FunctionDef) and n.name == function)
     calls = []
     for node in ast.walk(definition):
         if (
@@ -127,9 +125,7 @@ def main() -> int:
     args = parser.parse_args()
     report = base_report("s1_check_baseline", args)
     if not __debug__:
-        return finish(
-            args, report, "BLOCKED", "Run source assertions without Python -O/PYTHONOPTIMIZE"
-        )
+        return finish(args, report, "BLOCKED", "Run source assertions without Python -O/PYTHONOPTIMIZE")
     report["validation_layer"] = "source audit only; no native or device execution"
     report["checks"] = []
 
@@ -168,9 +164,7 @@ def main() -> int:
         for baseline in (True, False):
             check(
                 f"Pass order ({'baseline' if baseline else 'current'})",
-                lambda baseline=baseline: audit_phase(
-                    read_source("tilelang/engine/phase.py", baseline)
-                ),
+                lambda baseline=baseline: audit_phase(read_source("tilelang/engine/phase.py", baseline)),
             )
 
         def ffi():
@@ -193,9 +187,7 @@ def main() -> int:
             target_defaults = next(
                 n.value
                 for n in tree.body
-                if isinstance(n, ast.AnnAssign)
-                and isinstance(n.target, ast.Name)
-                and n.target.id == "_TARGET_PASS_DEFAULTS"
+                if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.target.id == "_TARGET_PASS_DEFAULTS"
             )
             pto = next(
                 value
@@ -211,10 +203,9 @@ def main() -> int:
             )
             for target, values in zip(target_defaults.keys, target_defaults.values):
                 if isinstance(target, ast.Constant) and target.value in {"ascendc", "auto"}:
-                    assert not any(
-                        isinstance(key, ast.Attribute) and key.attr == "TL_ASCEND_AUTO_SYNC_VS"
-                        for key in values.keys
-                    ), "AscendC/auto must retain the existing C++ VS default"
+                    assert not any(isinstance(key, ast.Attribute) and key.attr == "TL_ASCEND_AUTO_SYNC_VS" for key in values.keys), (
+                        "AscendC/auto must retain the existing C++ VS default"
+                    )
             return {
                 "pto_vs_default": True,
                 "ascendc_vs_cpp_default": False,

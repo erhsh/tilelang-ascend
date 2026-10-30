@@ -66,9 +66,7 @@ def _lower_source(program: tvm.tir.PrimFunc, platform: str) -> str:
 @pytest.mark.parametrize("src_offset,dst_offset", [(0, 0), (32, 0), (0, 16), (32, 16)])
 @pytest.mark.parametrize("src_start,dst_start", [(0, 0), (3, 5)])
 def test_copy_elem_offset(platform, src_offset, dst_offset, src_start, dst_start):
-    source = _lower_source(
-        make_copy_offset_kernel(src_offset, dst_offset, src_start, dst_start), platform
-    )
+    source = _lower_source(make_copy_offset_kernel(src_offset, dst_offset, src_start, dst_start), platform)
     load = re.search(r"copy_gm_to_ub<[^>]+>\(u\[0\], a\[(\d+)\]", source)
     store = re.search(r"copy_ub_to_gm<[^>]+>\(o\[(\d+)\], u\[0\]", source)
     assert load and store, source
@@ -80,9 +78,7 @@ def test_copy_elem_offset(platform, src_offset, dst_offset, src_start, dst_start
 @pytest.mark.parametrize("src_offset,dst_offset", [(0, 0), (16, 0), (0, 16), (16, 16)])
 @pytest.mark.parametrize("src_start,dst_start", [(0, 0), (3, 5)])
 def test_atomic_elem_offset(platform, src_offset, dst_offset, src_start, dst_start):
-    source = _lower_source(
-        make_atomic_offset_kernel(dst_offset, src_offset, src_start, dst_start), platform
-    )
+    source = _lower_source(make_atomic_offset_kernel(dst_offset, src_offset, src_start, dst_start), platform)
     call = re.search(r"atomic_add_ub_to_gm<[^>]+>\(o\[(\d+)\], v\[(\d+)\]", source)
     assert call, source
     assert int(call[1]) == dst_offset + dst_start
@@ -114,9 +110,7 @@ def main(A: T.handle, O: T.Tensor((64,), "float32")):
 
 @pytest.mark.parametrize("elem_offset", [0, 16])
 @pytest.mark.parametrize("strided", [False, True])
-@pytest.mark.parametrize(
-    "helper", ["_get_buffer_info", "_handle_buffer_region", "_handle_buffer_region_2d"]
-)
+@pytest.mark.parametrize("helper", ["_get_buffer_info", "_handle_buffer_region", "_handle_buffer_region_2d"])
 def test_tile_region_elem_offset(elem_offset, strided, helper):
     buffer = tvm.tir.decl_buffer(
         (8, 16) if strided else (128,),
@@ -126,13 +120,9 @@ def test_tile_region_elem_offset(elem_offset, strided, helper):
         strides=[32, 1] if strided else None,
     )
     ranges = [(1, 2), (3, 8)] if strided else [(3, 64)]
-    region = tvm.tir.BufferRegion(
-        buffer, [tvm.ir.Range.from_min_extent(start, extent) for start, extent in ranges]
-    )
+    region = tvm.tir.BufferRegion(buffer, [tvm.ir.Range.from_min_extent(start, extent) for start, extent in ranges])
     pointer, _ = getattr(ascend_tile, helper)(region, "r")
-    assert int(tvm.arith.Analyzer().simplify(pointer.args[2])) == elem_offset + (
-        35 if strided else 3
-    )
+    assert int(tvm.arith.Analyzer().simplify(pointer.args[2])) == elem_offset + (35 if strided else 3)
 
 
 def make_tile_fill_offset_kernel(region_start: int = 3) -> tvm.tir.PrimFunc:
@@ -184,9 +174,7 @@ def main(A: T.Tensor((256, {2 * k_l1}), "float16"),
                 C[bx * 128 + i, by * 128 + j] = c_l0[i, j]
 """
     program = tvm.script.from_source(source, extra_vars={"T": T})
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": True, "tl.ascend_memory_planning": True}
-    ):
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": True, "tl.ascend_memory_planning": True}):
         artifact = tilelang.lower(program, target="ascendc", platform=platform)
     physical_version = 128 * ((k_l1 + 15) // 16 * 16)
     allocations = {}
@@ -207,15 +195,8 @@ def main(A: T.Tensor((256, {2 * k_l1}), "float16"),
 @pytest.mark.parametrize("preallocated", [False, True])
 def test_legacy_memory_maps(auto, preallocated):
     """Inspect the legacy planner directly, including deliberate byte aliases."""
-    buffers = [
-        tvm.tir.decl_buffer((64,), "float32", name=name, scope="shared.ub") for name in ("a", "b")
-    ]
-    body = tvm.tir.SeqStmt(
-        [
-            tvm.tir.Evaluate(tvm.tir.call_extern("handle", "AscendC::Duplicate", b.access_ptr("w")))
-            for b in buffers
-        ]
-    )
+    buffers = [tvm.tir.decl_buffer((64,), "float32", name=name, scope="shared.ub") for name in ("a", "b")]
+    body = tvm.tir.SeqStmt([tvm.tir.Evaluate(tvm.tir.call_extern("handle", "AscendC::Duplicate", b.access_ptr("w"))) for b in buffers])
     for buffer in buffers:
         body = tvm.tir.Allocate(buffer.data, buffer.dtype, [64], tvm.tir.const(True, "bool"), body)
     function = tvm.tir.PrimFunc([], body).with_attr("global_symbol", "main")

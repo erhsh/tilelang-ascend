@@ -46,9 +46,7 @@ def main():
         "This establishes queued submissions, not hardware execution overlap. "
         "No mode0 global barrier, performance measurement or S8 mixed scheduling."
     )
-    return run_cases(
-        args, report, tuple(PARAMETERS), Path(__file__).resolve(), final_check=compare_pairs
-    )
+    return run_cases(args, report, tuple(PARAMETERS), Path(__file__).resolve(), final_check=compare_pairs)
 
 
 if __name__ == "__main__":

@@ -135,12 +135,8 @@ for function in artifact.device_mod.functions.values():
     assert not any(str(key).startswith('tl.ascend_s7_') for key in function.attrs.keys())
 """
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(Path(__file__).resolve().parent), env.get("PYTHONPATH", "")]
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", source], env=env, text=True, capture_output=True, timeout=60
-    )
+    env["PYTHONPATH"] = os.pathsep.join([str(Path(__file__).resolve().parent), env.get("PYTHONPATH", "")])
+    result = subprocess.run([sys.executable, "-c", source], env=env, text=True, capture_output=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -150,9 +146,7 @@ def test_unknown_sync_strategy_is_not_treated_as_legacy(strategy):
         tvm.transform.PassContext(config=configs("constraint", strategy)),
         pytest.raises(ValueError),
     ):
-        tilelang.lower(
-            make_vector_sync_kernel(trips=3, versions=1, cores=1), target="ascendc", platform="A3"
-        )
+        tilelang.lower(make_vector_sync_kernel(trips=3, versions=1, cores=1), target="ascendc", platform="A3")
 
 
 @pytest.mark.parametrize("direction", ["v2c", "c2v"])
@@ -164,10 +158,7 @@ def test_legacy_manual_reference_keeps_balanced_mode2_protocol(direction):
             platform="A3",
         )
     assert "KERNEL_TYPE_MIX_AIC_1_2" in artifact.kernel_source
-    assert (
-        "CrossCoreSetFlag" in artifact.kernel_source
-        and "CrossCoreWaitFlag" in artifact.kernel_source
-    )
+    assert "CrossCoreSetFlag" in artifact.kernel_source and "CrossCoreWaitFlag" in artifact.kernel_source
     sets, waits = [], []
 
     def visit(node):
@@ -179,9 +170,7 @@ def test_legacy_manual_reference_keeps_balanced_mode2_protocol(direction):
                 waits.append(node)
 
     for function in artifact.device_mod.functions.values():
-        assert not any(
-            str(key).startswith("tl.ascend_s7_handoff_") for key in function.attrs.keys()
-        )
+        assert not any(str(key).startswith("tl.ascend_s7_handoff_") for key in function.attrs.keys())
         tvm.tir.stmt_functor.post_order_visit(function.body, visit)
     assert len(sets) == len(waits) == 2
     assert {int(call.args[1]) for call in sets} == {0, 1}

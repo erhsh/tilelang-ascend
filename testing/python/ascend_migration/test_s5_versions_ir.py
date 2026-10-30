@@ -68,18 +68,14 @@ def _execute(statement, environment, callback):
         if _value(statement.predicate, environment):
             _execute(statement.block.body, environment, callback)
     elif isinstance(statement, tir.IfThenElse):
-        selected = (
-            statement.then_case if _value(statement.condition, environment) else statement.else_case
-        )
+        selected = statement.then_case if _value(statement.condition, environment) else statement.else_case
         if selected is not None:
             _execute(selected, environment, callback)
     elif isinstance(statement, tir.AttrStmt):
         _execute(statement.body, environment, callback)
     elif isinstance(statement, tir.LetStmt):
         nested = dict(environment)
-        nested[statement.var] = tir.IntImm(
-            statement.var.dtype, _value(statement.value, environment)
-        )
+        nested[statement.var] = tir.IntImm(statement.var.dtype, _value(statement.value, environment))
         _execute(statement.body, nested, callback)
     elif isinstance(statement, (tir.Evaluate, tir.BufferStore)):
         if isinstance(statement, tir.Evaluate) and isinstance(statement.value, tir.IntImm):
@@ -92,9 +88,7 @@ def _execute(statement, environment, callback):
 
 def _legacy_probe(trip, minimum=0):
     index = tir.Var("logical_iteration", "int32")
-    body = tir.SeqStmt(
-        [tir.Evaluate(tir.call_extern("handle", "observe_unit", unit, index)) for unit in range(3)]
-    )
+    body = tir.SeqStmt([tir.Evaluate(tir.call_extern("handle", "observe_unit", unit, index)) for unit in range(3)])
     loop = tir.For(
         index,
         minimum,
@@ -118,20 +112,14 @@ def test_legacy_actual_short_trip_predicates_execute_each_unit_once(trip, minimu
         trace.append((_value(call.args[1], environment), _value(call.args[2], environment)))
 
     _execute(module["main"].body, {}, observe)
-    assert Counter(trace) == Counter(
-        (unit, index) for index in range(minimum, minimum + trip) for unit in range(3)
-    )
+    assert Counter(trace) == Counter((unit, index) for index in range(minimum, minimum + trip) for unit in range(3))
 
 
 def test_nonzero_minimum_pointer_and_buffer_select_the_same_physical_version():
     buffer = tir.decl_buffer((64,), "float32", name="local", scope="shared.ub")
     index = tir.Var("logical_iteration", "int32")
     write = tir.BufferStore(buffer, tir.const(1.0, "float32"), [0])
-    read = tir.Evaluate(
-        tir.call_extern(
-            "handle", "observe_slot", buffer.access_ptr("r"), tir.BufferLoad(buffer, [0])
-        )
-    )
+    read = tir.Evaluate(tir.call_extern("handle", "observe_slot", buffer.access_ptr("r"), tir.BufferLoad(buffer, [0])))
     block = tir.Block([], [], [], "units", tir.SeqStmt([write, read]), alloc_buffers=[buffer])
     loop = tir.For(
         index,
@@ -150,9 +138,7 @@ def test_nonzero_minimum_pointer_and_buffer_select_the_same_physical_version():
             return
         call = statement.value
         pointer, load = call.args[1:]
-        slots.append(
-            (_value(pointer.args[2], environment) // 64, _value(load.indices[0], environment))
-        )
+        slots.append((_value(pointer.args[2], environment) // 64, _value(load.indices[0], environment)))
 
     _execute(module["main"].body, {}, observe)
     assert slots == [(0, 0), (1, 1), (0, 0), (1, 1)]
@@ -187,9 +173,7 @@ def test_modulo_native_publishes_actual_versions_and_physical_geometry(bound, tr
 @pytest.mark.parametrize("bound", [2, 3])
 def test_explicit_false_offset_keeps_all_stages_zero(bound):
     planned = _plan(_fills(stages=bound, annotations={"enable_offset": False}), configs())
-    assert [
-        int(value) for value in _loops(planned["main"])[0].annotations["software_pipeline_stage"]
-    ] == [0, 0, 0]
+    assert [int(value) for value in _loops(planned["main"])[0].annotations["software_pipeline_stage"]] == [0, 0, 0]
 
 
 @pytest.mark.parametrize(
@@ -261,9 +245,7 @@ def test_actual_version_override_is_consumed_by_injector():
 
 
 def _manual(stages, *, dependent=False, minimum=0):
-    module = _fills(
-        stages=3, dependent=dependent, minimum=minimum, annotations={"enable_offset": True}
-    )
+    module = _fills(stages=3, dependent=dependent, minimum=minimum, annotations={"enable_offset": True})
     ordinal = 0
 
     def mark(statement):
@@ -302,9 +284,7 @@ def _manual(stages, *, dependent=False, minimum=0):
 
 def test_manual_stage_preserves_raw_values_for_independent_units():
     planned = _plan(_manual([2, 0, 1]), configs())
-    assert [
-        int(value) for value in _loops(planned["main"])[0].annotations["software_pipeline_stage"]
-    ] == [2, 0, 1]
+    assert [int(value) for value in _loops(planned["main"])[0].annotations["software_pipeline_stage"]] == [2, 0, 1]
 
 
 def test_manual_stage_cannot_reinterpret_imperative_waw_order():
@@ -327,9 +307,7 @@ def test_prepare_keeps_zero_and_one_trip_request_facts():
     for trip in (0, 1):
         module = _fills(stages=2, extent=trip)
         with tvm.transform.PassContext(config=configs()):
-            prepared = tilelang.transform.AscendPrepareConstraintPipeline(
-                tvm.target.Target({"kind": "llvm", "model": "ascendc"})
-            )(module)
+            prepared = tilelang.transform.AscendPrepareConstraintPipeline(tvm.target.Target({"kind": "llvm", "model": "ascendc"}))(module)
             facts = prepared["main"].attrs["tl.ascend_s5_degenerate_candidates"]
             assert len(facts) == 1 and int(facts[0]["extent"]) == trip
             planned = tilelang.transform.PipelinePlanning()(prepared)
@@ -378,9 +356,7 @@ def test_static_expansion_product_is_rejected_before_solver_and_injection():
     function = module["main"]
 
     def trip(loop):
-        return tir.For(
-            loop.loop_var, 0, 4096, loop.kind, loop.body, loop.thread_binding, loop.annotations
-        )
+        return tir.For(loop.loop_var, 0, 4096, loop.kind, loop.body, loop.thread_binding, loop.annotations)
 
     body = tir.stmt_functor.ir_transform(function.body, None, trip, ["tir.For"])
     with pytest.raises(
@@ -396,9 +372,7 @@ def test_shared_kernel_complete_lowering_includes_final_sync_and_mask_proofs(tri
     from test_s5_kernels import make_pipeline_kernel
 
     with tvm.transform.PassContext(config=configs()):
-        result = tilelang.lower(
-            make_pipeline_kernel(trips=trips, num_stages=bound), target="ascendc", platform="A3"
-        )
+        result = tilelang.lower(make_pipeline_kernel(trips=trips, num_stages=bound), target="ascendc", platform="A3")
     assert "auto main" in result.kernel_source or "void main" in result.kernel_source
 
 
@@ -413,9 +387,7 @@ def test_partial_initialization_cannot_define_a_complete_read():
     module = _fills(stages=2, allocation_shape=(128,))
     function = module["main"]
     block = _loops(function)[0].body.block
-    statements = list(block.body.seq) + [
-        _add(block.alloc_buffers[1], block.alloc_buffers[0], block.alloc_buffers[0], count=128)
-    ]
+    statements = list(block.body.seq) + [_add(block.alloc_buffers[1], block.alloc_buffers[0], block.alloc_buffers[0], count=128)]
     replacement = tir.Block(
         block.iter_vars,
         block.reads,
@@ -503,22 +475,14 @@ def test_invalid_actual_version_budget_is_rejected_before_allocator():
 
 @pytest.mark.parametrize("bound", [2, 3])
 @pytest.mark.parametrize("domain,cores,group", [((3, 10), 8, 4), ((1, 3), 8, 2), ((1, 1), 1, 8)])
-def test_guarded_persistent_waves_lower_with_per_logical_iteration_guards(
-    bound, domain, cores, group
-):
+def test_guarded_persistent_waves_lower_with_per_logical_iteration_guards(bound, domain, cores, group):
     from test_s5_kernels import make_persistent_pipeline_kernel
 
-    function = make_persistent_pipeline_kernel(
-        domain=domain, cores=cores, group_size=group, num_stages=bound
-    )
+    function = make_persistent_pipeline_kernel(domain=domain, cores=cores, group_size=group, num_stages=bound)
     breaks = []
     tir.stmt_functor.post_order_visit(
         function.body,
-        lambda node: (
-            breaks.append(node)
-            if isinstance(node, tir.Call) and getattr(node.op, "name", "") == "tl.loop_break"
-            else None
-        ),
+        lambda node: breaks.append(node) if isinstance(node, tir.Call) and getattr(node.op, "name", "") == "tl.loop_break" else None,
     )
     assert not breaks
     with tvm.transform.PassContext(config=configs()):
@@ -573,12 +537,8 @@ def _public_serial_stage(stage):
     baseline = tvm.IRModule.from_expr(first.with_body(tir.SeqStmt([first.body, second.body])))
 
     def mark(statement):
-        task = tir.AttrStmt(
-            tvm.runtime.convert({}), "tl.ascend_task", tir.const(1, "int32"), statement
-        )
-        return tir.AttrStmt(
-            tir.IntImm("int64", stage), "tl.ascend_stage", tir.const(1, "int32"), task
-        )
+        task = tir.AttrStmt(tvm.runtime.convert({}), "tl.ascend_task", tir.const(1, "int32"), statement)
+        return tir.AttrStmt(tir.IntImm("int64", stage), "tl.ascend_stage", tir.const(1, "int32"), task)
 
     body = tir.stmt_functor.ir_transform(first.body, None, mark, ["tir.Evaluate"])
     public = tvm.IRModule.from_expr(first.with_body(tir.SeqStmt([body, second.body])))
@@ -607,9 +567,7 @@ def test_public_stage_zero_outside_candidate_retains_serial_equivalence():
     with tvm.transform.PassContext(config=vector_pass_configs()):
         marked = tilelang.transform.PipelinePlanning()(_consume_public_hints(public))["main"]
         plain = tilelang.transform.PipelinePlanning()(baseline)["main"]
-    assert tvm.ir.structural_equal(
-        marked.without_attr("tl.ascend_s4_manifest"), plain.without_attr("tl.ascend_s4_manifest")
-    )
+    assert tvm.ir.structural_equal(marked.without_attr("tl.ascend_s4_manifest"), plain.without_attr("tl.ascend_s4_manifest"))
     source = marked.attrs["tl.ascend_s4_manifest"]["source_graph"]
     assert [int(task["manual_stage"]) for task in source["tasks"][:3]] == [0, 0, 0]
 
@@ -658,16 +616,12 @@ def test_guarded_persistent_affine_bounds_still_reject_real_out_of_bounds(corrup
         module = _before_planning(make_persistent_pipeline_kernel((9, 1), 4, 1))
     function = module["main"]
     if corruption == "drop_guard":
-        body = tir.stmt_functor.ir_transform(
-            function.body, None, lambda node: node.then_case, ["tir.IfThenElse"]
-        )
+        body = tir.stmt_functor.ir_transform(function.body, None, lambda node: node.then_case, ["tir.IfThenElse"])
     else:
         source = next(buffer.data for buffer in function.buffer_map.values() if buffer.name == "A")
 
         def shift(call):
-            if getattr(call.op, "name", "") != "tir.tvm_access_ptr" or not call.args[1].same_as(
-                source
-            ):
+            if getattr(call.op, "name", "") != "tir.tvm_access_ptr" or not call.args[1].same_as(source):
                 return call
             args = list(call.args)
             args[2] = args[2] + 192

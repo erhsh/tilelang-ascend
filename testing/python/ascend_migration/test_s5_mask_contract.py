@@ -18,18 +18,12 @@ def _selected(operations):
         buffers.extend([a, b])
         statements.append(_fill(a, count=count) if kind == "fill" else _add(a, b, b, count))
     function = _function(buffers, statements)
-    return tilelang.transform.AscendVectorInstructionSelection(TARGET, "A3")(
-        tvm.IRModule({"main": function})
-    )["main"]
+    return tilelang.transform.AscendVectorInstructionSelection(TARGET, "A3")(tvm.IRModule({"main": function}))["main"]
 
 
 def _legalize(function, reuse=True):
-    with tvm.transform.PassContext(
-        config={"tl.ascend_pipeline_planner": "constraint", "tl.ascend_vector_mask_reuse": reuse}
-    ):
-        result = tilelang.transform.AscendVectorMaskLegalize(TARGET, "A3")(
-            tvm.IRModule({"main": function})
-        )["main"]
+    with tvm.transform.PassContext(config={"tl.ascend_pipeline_planner": "constraint", "tl.ascend_vector_mask_reuse": reuse}):
+        result = tilelang.transform.AscendVectorMaskLegalize(TARGET, "A3")(tvm.IRModule({"main": function}))["main"]
     return result
 
 
@@ -57,9 +51,7 @@ def _change(function, setter, replacement, occurrence=0):
         observed += 1
         return replacement(node) if index == occurrence else None
 
-    return function.with_body(
-        tir.stmt_functor.ir_transform(function.body, None, rewrite, ["tir.Evaluate"])
-    )
+    return function.with_body(tir.stmt_functor.ir_transform(function.body, None, rewrite, ["tir.Evaluate"]))
 
 
 @pytest.mark.parametrize("reuse", [False, True])
@@ -109,9 +101,7 @@ def test_next_payload_overwrite_cannot_move_before_its_previous_consumer():
             return None
         statements = list(node.seq)
         terminals = [i for i, stmt in enumerate(statements) if _name(stmt) == "tl.ascend_add_raw"]
-        payloads = [
-            i for i, stmt in enumerate(statements) if _name(stmt) == "tl.ascend_set_mask_payload"
-        ]
+        payloads = [i for i, stmt in enumerate(statements) if _name(stmt) == "tl.ascend_set_mask_payload"]
         if len(terminals) == len(payloads) == 2:
             next_setter = statements.pop(payloads[1])
             statements.insert(terminals[0], next_setter)
@@ -131,16 +121,10 @@ def test_zero_short_loop_and_exit_mask_requirements_are_checked(trips, reuse):
     statements = []
     tir.stmt_functor.post_order_visit(
         selected.body,
-        lambda node: (
-            statements.append(node)
-            if _name(node) in {"tl.ascend_add_raw", "tl.ascend_fill_raw_counter"}
-            else None
-        ),
+        lambda node: statements.append(node) if _name(node) in {"tl.ascend_add_raw", "tl.ascend_fill_raw_counter"} else None,
     )
     loop = tir.For(tir.Var("i", "int32"), 0, trips, tir.ForKind.SERIAL, tir.SeqStmt(statements))
-    body = tir.AttrStmt(
-        tir.const(0, "int32"), "resource_scope", 1, tir.SeqStmt([loop, statements[0]])
-    )
+    body = tir.AttrStmt(tir.const(0, "int32"), "resource_scope", 1, tir.SeqStmt([loop, statements[0]]))
     _verify(_legalize(selected.with_body(body), reuse))
 
 

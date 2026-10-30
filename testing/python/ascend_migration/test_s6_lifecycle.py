@@ -42,9 +42,7 @@ def test_allocating_storage_does_not_initialize_its_contents():
 def test_internal_global_allocation_is_not_a_caller_entry_definition():
     value, _ = _buffers()
     scratch = _buffer("internal_workspace", "global", shape=(64,))
-    allocation = tir.Allocate(
-        scratch.data, "float32", [64], tir.const(True, "bool"), _dma(scratch, value)
-    )
+    allocation = tir.Allocate(scratch.data, "float32", [64], tir.const(True, "bool"), _dma(scratch, value))
     with pytest.raises(tvm.TVMError, match="no complete reaching definition"):
         _analyze(_function([value], allocation))
 
@@ -81,9 +79,7 @@ def test_partial_write_union_requires_complete_read_coverage(hole):
 def test_boolean_predicates_are_checked_for_every_path(kind):
     value, output = _buffers()
     predicate = tir.Var("predicate", "bool")
-    producer = tir.IfThenElse(
-        predicate, _fill(value), _fill(value) if kind == "exhaustive" else None
-    )
+    producer = tir.IfThenElse(predicate, _fill(value), _fill(value) if kind == "exhaustive" else None)
     consumer = _dma(value, output)
     if kind == "matching":
         consumer = tir.IfThenElse(predicate, consumer, None)
@@ -94,9 +90,7 @@ def test_boolean_predicates_are_checked_for_every_path(kind):
     else:
         result = _analyze(function)
         assert len(result["cases"]) == 2
-        assert sorted(len(case["reads"]) for case in result["cases"]) == (
-            [0, 1] if kind == "matching" else [1, 1]
-        )
+        assert sorted(len(case["reads"]) for case in result["cases"]) == ([0, 1] if kind == "matching" else [1, 1])
 
 
 def test_boolean_parameters_cannot_become_unbounded_data_or_addresses():
@@ -105,9 +99,7 @@ def test_boolean_parameters_cannot_become_unbounded_data_or_addresses():
     call = _fill(value).value
     arguments = list(call.args)
     arguments[2] = tir.Cast("float32", predicate)
-    function = _function(
-        [value], tir.Evaluate(tir.Call(call.dtype, call.op, arguments)), scalars=[predicate]
-    )
+    function = _function([value], tir.Evaluate(tir.Call(call.dtype, call.op, arguments)), scalars=[predicate])
     with pytest.raises(tvm.TVMError, match="only in predicates"):
         _analyze(function)
 
@@ -148,9 +140,7 @@ def test_loop_body_allocation_gets_a_fresh_activation(every_iteration):
     producer = _fill(value)
     if not every_iteration:
         producer = tir.IfThenElse(iteration == 0, producer, None)
-    block = tir.Block(
-        [], [], [], "fresh", tir.SeqStmt([producer, _dma(value, output)]), alloc_buffers=[value]
-    )
+    block = tir.Block([], [], [], "fresh", tir.SeqStmt([producer, _dma(value, output)]), alloc_buffers=[value])
     loop = tir.For(iteration, 0, 2, tir.ForKind.SERIAL, tir.BlockRealize([], True, block))
     function = _function([output], loop)
     if every_iteration:
@@ -167,9 +157,7 @@ def test_outer_activation_survives_nested_and_consecutive_loops():
     value, output = _buffers()
     outer, inner, following = [tir.Var("iteration", "int32") for _ in range(3)]
     empty = tir.For(inner, 0, 0, tir.ForKind.SERIAL, _fill(value))
-    nested = tir.For(
-        outer, 0, 2, tir.ForKind.SERIAL, tir.SeqStmt([empty, _add(value, value, value)])
-    )
+    nested = tir.For(outer, 0, 2, tir.ForKind.SERIAL, tir.SeqStmt([empty, _add(value, value, value)]))
     later = tir.For(following, 0, 2, tir.ForKind.SERIAL, _dma(value, output))
     case = _analyze(_function([value, output], [_fill(value), nested, later]))["cases"][0]
     assert len(case["activations"]) == 1
@@ -195,9 +183,7 @@ def test_real_shared_kernel_lowers_through_source_and_final_lifetime_proofs(kind
     from test_s6_kernels import make_reuse_kernel
 
     with tvm.transform.PassContext(config=configs()):
-        artifact = tilelang.lower(
-            make_reuse_kernel(kind=kind, trips=2, tiles=2), target="ascendc", platform="A3"
-        )
+        artifact = tilelang.lower(make_reuse_kernel(kind=kind, trips=2, tiles=2), target="ascendc", platform="A3")
     assert "void main" in artifact.kernel_source or "auto main" in artifact.kernel_source
 
 
@@ -225,9 +211,7 @@ def test_original_singleton_integer_overflow_cannot_fold_into_an_inbounds_zero(e
         else:
             from test_s4_kernels import vector_pass_configs
 
-            function = function.with_attr("npu_platform", "A3").with_attr(
-                "target", tvm.target.Target("c -keys=ascend -model=ascendc")
-            )
+            function = function.with_attr("npu_platform", "A3").with_attr("target", tvm.target.Target("c -keys=ascend -model=ascendc"))
             with tvm.transform.PassContext(config=vector_pass_configs()):
                 transform.PipelinePlanning()(tvm.IRModule.from_expr(function))
 
@@ -255,9 +239,5 @@ def test_multirepeat_disjoint_views_keep_the_union_definition():
     arguments = list(call.args)
     arguments[0] = value.access_ptr("w", offset=128)
     disjoint = tir.Evaluate(tir.Call(call.dtype, call.op, arguments))
-    case = _analyze(
-        _function(
-            [value, output], [_fill(value, count=128), disjoint, _dma(value, output, count=256)]
-        )
-    )["cases"][0]
+    case = _analyze(_function([value, output], [_fill(value, count=128), disjoint, _dma(value, output, count=256)]))["cases"][0]
     assert len(case["reads"][-1]["segments"]) == 2

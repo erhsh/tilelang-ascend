@@ -29,9 +29,7 @@ def handoff_configs(strategy="a3"):
 
 def _pass(name, function):
     with tvm.transform.PassContext(config=handoff_configs()):
-        return getattr(tilelang.transform, name)(TARGET, "A3")(tvm.IRModule.from_expr(function))[
-            "main"
-        ]
+        return getattr(tilelang.transform, name)(TARGET, "A3")(tvm.IRModule.from_expr(function))["main"]
 
 
 def _synthetic(direction="v2c", trips=3, cores=1, *, guard=False):
@@ -117,9 +115,7 @@ def _synthetic(direction="v2c", trips=3, cores=1, *, guard=False):
     block = tir.Block([], [], [], "tilelang_root", body, alloc_buffers=[ub, local])
     body = tir.BlockRealize([], tir.const(True, "bool"), block)
     for variable, extent, tag in reversed([(cid, cores, "blockIdx.x"), (vid, 2, "threadIdx.x")]):
-        axis = tir.IterVar(
-            tvm.ir.Range.from_min_extent(0, extent), variable, tir.IterVar.ThreadIndex, tag
-        )
+        axis = tir.IterVar(tvm.ir.Range.from_min_extent(0, extent), variable, tir.IterVar.ThreadIndex, tag)
         body = tir.AttrStmt(axis, "thread_extent", extent, body)
     handle = tir.Var("workspace_handle", "handle")
     return (
@@ -156,9 +152,7 @@ def _mutate_cross(function, transform):
             return tir.Evaluate(0) if value is None else tir.Evaluate(value)
         return node
 
-    return function.with_body(
-        tir.stmt_functor.ir_transform(function.body, None, rewrite, ["tir.Evaluate"])
-    )
+    return function.with_body(tir.stmt_functor.ir_transform(function.body, None, rewrite, ["tir.Evaluate"]))
 
 
 @pytest.mark.parametrize("direction", ["v2c", "c2v"])
@@ -192,9 +186,7 @@ def test_damaged_cross_protocol_is_rejected_independently(kind):
                 arguments[1] = tir.StringImm("MTE3")
             elif kind == "release" and flag == 1:
                 return None
-        elif (kind == "ready" and int(arguments[0]) == 0) or (
-            kind == "drain" and int(arguments[0]) == 1
-        ):
+        elif (kind == "ready" and int(arguments[0]) == 0) or (kind == "drain" and int(arguments[0]) == 1):
             return None
         return tir.Call(call.dtype, call.op, arguments)
 
@@ -212,9 +204,7 @@ def test_stale_pass_metadata_cannot_replace_actual_protocol_validation():
 
 def test_explicit_cross_protocol_is_rejected_rather_than_silently_colliding():
     function = _synthetic()
-    cross = tir.Evaluate(
-        tir.Call("handle", tvm.ir.Op.get("tl.ascend_set_cross_flag"), [tir.StringImm("MTE3"), 0, 2])
-    )
+    cross = tir.Evaluate(tir.Call("handle", tvm.ir.Op.get("tl.ascend_set_cross_flag"), [tir.StringImm("MTE3"), 0, 2]))
     function = function.with_body(tir.SeqStmt([function.body, cross]))
     with pytest.raises(tvm.TVMError, match="Explicit cross-core IDs/protocols"):
         _pass("AscendPrepareSyncHandoff", function)
@@ -247,9 +237,7 @@ def _with_extra_vector_fill(function, value):
             block.annotations,
         )
 
-    return function.with_body(
-        tir.stmt_functor.ir_transform(function.body, None, append_read, ["tir.Block"])
-    )
+    return function.with_body(tir.stmt_functor.ir_transform(function.body, None, append_read, ["tir.Block"]))
 
 
 def test_hidden_gm_scalar_read_cannot_escape_the_release_lifetime():
@@ -261,9 +249,7 @@ def test_hidden_gm_scalar_read_cannot_escape_the_release_lifetime():
 
 
 def test_nested_opaque_scalar_call_cannot_hide_a_gm_or_state_effect():
-    function = _with_extra_vector_fill(
-        _synthetic("c2v"), tir.call_extern("float32", "unknown_opaque_scalar")
-    )
+    function = _with_extra_vector_fill(_synthetic("c2v"), tir.call_extern("float32", "unknown_opaque_scalar"))
     with pytest.raises(tvm.TVMError, match="nested opaque call"):
         _pass("AscendPrepareSyncHandoff", function)
 
@@ -282,16 +268,12 @@ def test_internal_workspace_parameter_is_not_a_caller_entry_definition():
             return node
         arguments = list(node.value.args)
         arguments[1] = scratch.access_ptr("r", offset=arguments[1].args[2])
-        return tir.SeqStmt(
-            [node, tir.Evaluate(tir.Call(node.value.dtype, node.value.op, arguments))]
-        )
+        return tir.SeqStmt([node, tir.Evaluate(tir.Call(node.value.dtype, node.value.op, arguments))])
 
     body = tir.stmt_functor.ir_transform(function.body, None, append_read, ["tir.Evaluate"])
     buffers = dict(function.buffer_map.items())
     buffers[handle] = scratch
-    function = tir.PrimFunc(
-        [*function.params, handle], body, function.ret_type, buffers, function.attrs
-    )
+    function = tir.PrimFunc([*function.params, handle], body, function.ret_type, buffers, function.attrs)
     # A real external input is permitted by the fixed protocol envelope.
     _pass("AscendPrepareSyncHandoff", function)
     function = function.with_attr("auto_gm_indices", [tir.IntImm("uint32", 1)])
@@ -322,9 +304,7 @@ def test_induction_endpoint_must_fit_the_original_integer_dtype():
             loop.annotations,
         )
 
-    function = function.with_body(
-        tir.stmt_functor.ir_transform(function.body, None, large_minimum, ["tir.For"])
-    )
+    function = function.with_body(tir.stmt_functor.ir_transform(function.body, None, large_minimum, ["tir.For"]))
     with pytest.raises(tvm.TVMError, match="endpoint/update.*actual integer dtype"):
         _pass("AscendPrepareSyncHandoff", function)
 
@@ -385,9 +365,7 @@ def _with_nonchannel_gm_effect(function, kind):
     body = tir.stmt_functor.ir_transform(function.body, None, inject, ["tir.Evaluate"])
     mapping = dict(function.buffer_map.items())
     mapping[handle] = extra
-    return tir.PrimFunc(
-        [*function.params, handle], body, function.ret_type, mapping, function.attrs
-    )
+    return tir.PrimFunc([*function.params, handle], body, function.ret_type, mapping, function.attrs)
 
 
 @pytest.mark.parametrize("kind", ["output_without_cid", "cross_group_raw", "output_without_vid"])
@@ -422,9 +400,7 @@ def _with_round_predicates(function, kind):
             loop.annotations,
         )
 
-    return function.with_body(
-        tir.stmt_functor.ir_transform(function.body, None, guard, ["tir.For"])
-    )
+    return function.with_body(tir.stmt_functor.ir_transform(function.body, None, guard, ["tir.For"]))
 
 
 @pytest.mark.parametrize("kind", ["opposite_parity", "shifted_window"])
@@ -448,9 +424,7 @@ def test_legacy_strategy_keeps_all_three_passes_identity():
             "AscendInsertSyncHandoff",
             "AscendVerifySyncHandoff",
         ):
-            result = getattr(tilelang.transform, name)(TARGET, "A3")(
-                tvm.IRModule.from_expr(function)
-            )["main"]
+            result = getattr(tilelang.transform, name)(TARGET, "A3")(tvm.IRModule.from_expr(function))["main"]
             assert result.same_as(function)
 
 
@@ -497,18 +471,11 @@ def test_datacopypad_row_limit_fits_real_ub_allocation_at_the_boundary():
     module = tvm.IRModule.from_expr(function.with_attr("npu_platform", "A3"))
     with tvm.transform.PassContext(config=handoff_configs()):
         lowered = OptimizeForTarget(LowerAndLegalize(module, TARGET), TARGET, "A3")["main"]
-    ub_sizes = [
-        int(size)
-        for variable, size in lowered.attrs["size_map"].items()
-        if variable.type_annotation.storage_scope == "shared.ub"
-    ]
+    ub_sizes = [int(size) for variable, size in lowered.attrs["size_map"].items() if variable.type_annotation.storage_scope == "shared.ub"]
     allocated = []
 
     def allocation(node):
-        if (
-            isinstance(node, tir.Allocate)
-            and node.buffer_var.type_annotation.storage_scope == "shared.ub"
-        ):
+        if isinstance(node, tir.Allocate) and node.buffer_var.type_annotation.storage_scope == "shared.ub":
             byte_count = tvm.DataType(node.dtype).bits * tvm.DataType(node.dtype).lanes // 8
             for extent in node.extents:
                 byte_count *= int(tvm.arith.Analyzer().simplify(extent))

@@ -23,8 +23,7 @@ def make_vector_sync_kernel(trips=257, versions=2, cores=8, dtype="float32", til
     body = ""
     for stage, statement in zip((0, 0, versions, versions), statements):
         body += (
-            f"                with T.Stage({stage}):\n"
-            f"                    with T.Task():\n                        {statement}\n"
+            f"                with T.Stage({stage}):\n                    with T.Task():\n                        {statement}\n"
             if versions > 1
             else f"                {statement}\n"
         )
@@ -57,9 +56,7 @@ def main(A: T.Tensor((cores, trips + 2, tile), dtype),
     )
 
 
-def make_cv_handoff_kernel(
-    direction="v2c", trips=17, cores=4, *, manual_legacy=False, lowercase_workspace=False
-):
+def make_cv_handoff_kernel(direction="v2c", trips=17, cores=4, *, manual_legacy=False, lowercase_workspace=False):
     """Use explicit GM workspace and the copy_cv tests' existing Cube GEMM structure.
 
     Every core owns one complete128x128 physical GM slot. Both Vector halves

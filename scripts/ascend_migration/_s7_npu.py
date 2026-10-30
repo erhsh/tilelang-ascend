@@ -41,9 +41,7 @@ FIXTURES = {
     },
 }
 PARAMETERS = {
-    f"{name}_{sync}": {"streams": 1, "batches": 1, **spec, "sync": sync}
-    for name, spec in FIXTURES.items()
-    for sync in ("legacy", "a3")
+    f"{name}_{sync}": {"streams": 1, "batches": 1, **spec, "sync": sync} for name, spec in FIXTURES.items() for sync in ("legacy", "a3")
 }
 
 
@@ -103,9 +101,7 @@ def program(spec):
     from test_s7_kernels import make_cv_handoff_kernel, make_vector_sync_kernel
 
     if spec["kind"] == "vector":
-        return make_vector_sync_kernel(
-            trips=spec["trips"], versions=spec["versions"], cores=spec["cores"]
-        )
+        return make_vector_sync_kernel(trips=spec["trips"], versions=spec["versions"], cores=spec["cores"])
     return make_cv_handoff_kernel(
         direction=spec["kind"],
         trips=spec["trips"],
@@ -250,12 +246,8 @@ def submit_round(
             )
             window["pending"].append(not complete)
         window["both_pending"] = len(window["pending"]) == 2 and all(window["pending"])
-        if gates is not None and (
-            not window["both_pending"] or any(item["complete"] for item in window["done_queries"])
-        ):
-            raise AssertionError(
-                "Both queued target batches and completion markers must be pending"
-            )
+        if gates is not None and (not window["both_pending"] or any(item["complete"] for item in window["done_queries"])):
+            raise AssertionError("Both queued target batches and completion markers must be pending")
     finally:
         if gates is not None:
             for stream_index in armed:
@@ -268,9 +260,7 @@ def submit_round(
                 window["released_streams"].append(stream_index)
             observe(release_stream.synchronize, window["synchronizations"], role="release")
         for stream_index, stream in enumerate(streams):
-            observe(
-                stream.synchronize, window["synchronizations"], role="target", stream=stream_index
-            )
+            observe(stream.synchronize, window["synchronizations"], role="target", stream=stream_index)
 
 
 def sync_evidence(kernel, args, spec):
@@ -282,17 +272,13 @@ def sync_evidence(kernel, args, spec):
         raise AssertionError("The preserved source must be the actual Bisheng input")
     preserved_cpp = args.output.parent / f"{args.output.stem}-compiled.cpp"
     preserved_cpp.write_text(source)
-    cpp_fences = [
-        line.strip() for line in source.splitlines() if "PipeBarrier" in line and "PIPE_ALL" in line
-    ]
+    cpp_fences = [line.strip() for line in source.splitlines() if "PipeBarrier" in line and "PIPE_ALL" in line]
     records = []
     for symbol, function in kernel.artifact.device_mod.functions.items():
         if not isinstance(function, tvm.tir.PrimFunc):
             continue
         attrs = function.attrs or {}
-        captured = {
-            str(key): attrs[key] for key in attrs.keys() if str(key).startswith("tl.ascend_s7_")
-        }
+        captured = {str(key): attrs[key] for key in attrs.keys() if str(key).startswith("tl.ascend_s7_")}
         record = {"function": symbol.name_hint, "attribute_names": sorted(captured)}
         if spec["sync"] == "a3":
             expected = "tl.ascend_s7_local_sync" if spec["kind"] == "vector" else None
@@ -300,19 +286,13 @@ def sync_evidence(kernel, args, spec):
                 if expected not in captured or str(captured[expected]["generator"]) != "a3":
                     raise AssertionError("New local generator must produce its actual IR contract")
                 if str(captured[expected]["source_phase"]) != "post_memory_planning":
-                    raise AssertionError(
-                        "New local evidence requires the final physical memory plan"
-                    )
+                    raise AssertionError("New local evidence requires the final physical memory plan")
                 model = str(captured[expected]["lifetime_model"])
                 if model != "wait_all_fence_before_reuse":
-                    raise AssertionError(
-                        "New binary event leases need a fence-based lifetime model"
-                    )
+                    raise AssertionError("New binary event leases need a fence-based lifetime model")
                 record["lifetime_model"] = model
             elif not any(key.startswith("tl.ascend_s7_handoff_") for key in captured):
-                raise AssertionError(
-                    "New GM handoff requires actual preserved joint protocol facts"
-                )
+                raise AssertionError("New GM handoff requires actual preserved joint protocol facts")
             else:
                 plan = captured["tl.ascend_s7_handoff_plan"]
                 if (
@@ -375,8 +355,7 @@ def sync_evidence(kernel, args, spec):
     if not records:
         raise AssertionError("Missing actual compiled device synchronization evidence")
     if spec["kind"] != "vector" and not all(
-        token in source
-        for token in ("KERNEL_TYPE_MIX_AIC_1_2", "CrossCoreSetFlag", "CrossCoreWaitFlag")
+        token in source for token in ("KERNEL_TYPE_MIX_AIC_1_2", "CrossCoreSetFlag", "CrossCoreWaitFlag")
     ):
         raise AssertionError("A3 workspace execution needs the real 1C:2V cross protocol")
     return records
@@ -399,19 +378,11 @@ def run_case(name, args, torch, *, metadata=None):
     actual = [int(row["versions"]) for fn in physical for row in fn["buffer_remap"]]
     if vector and spec["trips"] >= 3 and (not actual or max(actual) != spec["versions"]):
         raise AssertionError(f"Actual private versions {actual} differ from the tested bound")
-    streams = (
-        [torch.npu.Stream(device=args.device) for _ in range(2)]
-        if spec["streams"] == 2
-        else [torch.npu.current_stream()]
-    )
+    streams = [torch.npu.Stream(device=args.device) for _ in range(2)] if spec["streams"] == 2 else [torch.npu.current_stream()]
     gates = done = release_stream = None
     if spec["streams"] == 2:
-        if any(
-            os.environ.get(name) != "0" for name in ("PER_STREAM_QUEUE", "ASCEND_LAUNCH_BLOCKING")
-        ):
-            raise RuntimeError(
-                "Wait-before-record submission requires both host queue options set to 0"
-            )
+        if any(os.environ.get(name) != "0" for name in ("PER_STREAM_QUEUE", "ASCEND_LAUNCH_BLOCKING")):
+            raise RuntimeError("Wait-before-record submission requires both host queue options set to 0")
         gates, done, release_stream = create_submission_control(torch, args.device)
     if metadata is None:
         metadata = {}
@@ -429,12 +400,8 @@ def run_case(name, args, torch, *, metadata=None):
                 if not vector
                 else "Same constraint planner, directives and logical data; sync differs"
             ),
-            "workspace_source": "none"
-            if vector
-            else "caller supplied explicit disjoint GM parameter",
-            "host_observation_policy": (
-                "perf_counter_ns host enqueue/query observations; not device performance timings"
-            ),
+            "workspace_source": "none" if vector else "caller supplied explicit disjoint GM parameter",
+            "host_observation_policy": ("perf_counter_ns host enqueue/query observations; not device performance timings"),
             "submission_environment": getattr(args, "submission_environment", None),
         }
     )
@@ -471,12 +438,7 @@ def run_case(name, args, torch, *, metadata=None):
     cores, trips = spec["cores"], spec["trips"]
     if vector:
         input_shape = output_shape = (cores, trips + 2, 64)
-        valid = [
-            ((core * (trips + 2) + row) * 64 + lane)
-            for core in range(cores)
-            for row in range(trips + 1)
-            for lane in range(64)
-        ]
+        valid = [((core * (trips + 2) + row) * 64 + lane) for core in range(cores) for row in range(trips + 1) for lane in range(64)]
         metadata["final_output_trace"] = exact_output_trace(kernel, valid)
     else:
         input_shape, output_shape = (cores, trips, 128, 128), (cores, trips + 1, 128, 128)
@@ -510,9 +472,7 @@ def run_case(name, args, torch, *, metadata=None):
             )
     for field in ("A", "B", "O", *(() if vector else ("Workspace",))):
         if len({item[field] for item in pointer_sets}) != spec["streams"] * spec["batches"]:
-            raise AssertionError(
-                "Queued calls require independently allocated inputs/output/workspace"
-            )
+            raise AssertionError("Queued calls require independently allocated inputs/output/workspace")
     metadata["independent_buffer_pointers"] = pointer_sets
     generator = torch.Generator().manual_seed(args.seed)
     for round_index in range(args.repeat):
@@ -520,25 +480,13 @@ def run_case(name, args, torch, *, metadata=None):
         for key, (a, b) in inputs.items():
             stream_index, batch = key
             tag = (round_index % 11) + 3 * stream_index + batch
-            core_labels = torch.arange(cores, dtype=a.dtype).reshape(
-                cores, *([1] * (len(input_shape) - 1))
-            )
-            a_host = (
-                torch.randint(-4, 5, input_shape, generator=generator).to(a.dtype)
-                + tag
-                + core_labels
-            ) / 32
-            b_host = (
-                torch.randint(-4, 5, input_shape, generator=generator).to(b.dtype)
-                - tag
-                - core_labels
-            ) / 32
+            core_labels = torch.arange(cores, dtype=a.dtype).reshape(cores, *([1] * (len(input_shape) - 1)))
+            a_host = (torch.randint(-4, 5, input_shape, generator=generator).to(a.dtype) + tag + core_labels) / 32
+            b_host = (torch.randint(-4, 5, input_shape, generator=generator).to(b.dtype) - tag - core_labels) / 32
             expected = torch.full(output_shape, float("nan"), dtype=torch.float32)
             if vector:
                 expected[:, 0, :] = 7
-                expected[:, 1 : trips + 1, :] = (
-                    a_host[:, 1 : trips + 1, :] + b_host[:, 1 : trips + 1, :]
-                )
+                expected[:, 1 : trips + 1, :] = a_host[:, 1 : trips + 1, :] + b_host[:, 1 : trips + 1, :]
             else:
                 expected[:, :trips, :, :] = a_host.float() @ b_host.float()
             hashes = {"A": tensor_digest(a_host, torch), "B": tensor_digest(b_host, torch)}
@@ -551,9 +499,7 @@ def run_case(name, args, torch, *, metadata=None):
                 if workspace is not None:
                     w_host = torch.full(workspace.shape, float("nan"), dtype=workspace.dtype)
                     w_host[:, :128, :] = (
-                        torch.randint(-8, 9, (cores, 128, 128), generator=generator).to(
-                            workspace.dtype
-                        )
+                        torch.randint(-8, 9, (cores, 128, 128), generator=generator).to(workspace.dtype)
                         + tag
                         + torch.arange(cores, dtype=workspace.dtype).reshape(cores, 1, 1)
                     ) / 16
@@ -562,9 +508,7 @@ def run_case(name, args, torch, *, metadata=None):
                     workspace_expected = torch.full_like(w_host, float("nan"))
                     if trips:
                         workspace_expected[:, :128, :] = (
-                            a_host[:, trips - 1, :, :]
-                            if spec["kind"] == "v2c"
-                            else expected[:, trips - 1, :, :]
+                            a_host[:, trips - 1, :, :] if spec["kind"] == "v2c" else expected[:, trips - 1, :, :]
                         )
             host[key] = (expected, workspace_expected, hashes)
         window = {"round": round_index}
@@ -575,9 +519,7 @@ def run_case(name, args, torch, *, metadata=None):
             for batch in range(spec["batches"]):
                 key = (stream_index, batch)
                 a, b = inputs[key]
-                batch_calls.append(
-                    (a, b, outputs[key]) if vector else (a, b, workspaces[key], outputs[key])
-                )
+                batch_calls.append((a, b, outputs[key]) if vector else (a, b, workspaces[key], outputs[key]))
             calls.append(batch_calls)
         submit_round(
             kernel,
@@ -593,9 +535,7 @@ def run_case(name, args, torch, *, metadata=None):
             for batch in range(spec["batches"]):
                 key = (stream_index, batch)
                 expected, workspace_expected, hashes = host[key]
-                torch.testing.assert_close(
-                    outputs[key].cpu(), expected, rtol=1e-4, atol=1e-4, equal_nan=True
-                )
+                torch.testing.assert_close(outputs[key].cpu(), expected, rtol=1e-4, atol=1e-4, equal_nan=True)
                 record = {
                     "index": len(metadata["rounds"]),
                     "round": round_index,
@@ -617,15 +557,9 @@ def run_case(name, args, torch, *, metadata=None):
                     record["workspace_output_sha256"] = tensor_digest(workspaces[key], torch)
                     record["workspace_golden_sha256"] = tensor_digest(workspace_expected, torch)
                 metadata["rounds"].append(record)
-    if spec["streams"] == 2 and not any(
-        item["both_pending"] for item in metadata["submission_windows"]
-    ):
-        raise AssertionError(
-            "No simultaneous pending submissions were observed on the two real streams"
-        )
-    metadata["output_sentinel"] = (
-        "NaN output/canary each call; GM workspace finite random prefix plus NaN tail"
-    )
+    if spec["streams"] == 2 and not any(item["both_pending"] for item in metadata["submission_windows"]):
+        raise AssertionError("No simultaneous pending submissions were observed on the two real streams")
+    metadata["output_sentinel"] = "NaN output/canary each call; GM workspace finite random prefix plus NaN tail"
     metadata["concurrency_claim"] = concurrency_claim(spec["streams"])
     return metadata
 
@@ -645,10 +579,7 @@ def compare_pairs(report):
             data = evidence["case_parameters"]
             if any(data[key] != value for key, value in PARAMETERS[name].items()):
                 raise AssertionError("Wrong actual S7 fixture parameters")
-            if (
-                evidence["kernels"][0]["resolved_pass_configs"].get("tl.ascend_sync_strategy")
-                != PARAMETERS[name]["sync"]
-            ):
+            if evidence["kernels"][0]["resolved_pass_configs"].get("tl.ascend_sync_strategy") != PARAMETERS[name]["sync"]:
                 raise AssertionError("Wrong actual synchronization strategy")
             if len(set(data["stream_handles"])) != spec["streams"]:
                 raise AssertionError("Stream handles do not establish independent real streams")
@@ -661,9 +592,7 @@ def compare_pairs(report):
                     or window["both_pending"] != (spec["streams"] == 2 and all(window["pending"]))
                 ):
                     raise AssertionError("Invalid simultaneously-pending submission evidence")
-            if spec["streams"] == 2 and not any(
-                x["both_pending"] for x in data["submission_windows"]
-            ):
+            if spec["streams"] == 2 and not any(x["both_pending"] for x in data["submission_windows"]):
                 raise AssertionError("Missing two-stream outstanding submission evidence")
             if spec["streams"] == 2:
                 control = data["submission_control"]
@@ -692,18 +621,11 @@ def compare_pairs(report):
                         or [(item["stream"], item["batch"]) for item in window["enqueues"]]
                         != [(s, b) for s in range(2) for b in range(spec["batches"])]
                     ):
-                        raise AssertionError(
-                            "Missing queued targets or unreleased completion markers"
-                        )
+                        raise AssertionError("Missing queued targets or unreleased completion markers")
             buffers = data["independent_buffer_pointers"]
             if len(buffers) != spec["streams"] * spec["batches"]:
                 raise AssertionError("Missing independent per-call device buffers")
-            pointers = [
-                value
-                for row in buffers
-                for key, value in row.items()
-                if key in ("A", "B", "O", "Workspace") and value is not None
-            ]
+            pointers = [value for row in buffers for key, value in row.items() if key in ("A", "B", "O", "Workspace") and value is not None]
             if len(set(pointers)) != len(pointers) or any(value <= 0 for value in pointers):
                 raise AssertionError("Concurrent logical calls alias their device buffers")
         for index, record in enumerate(left["rounds"]):
@@ -721,9 +643,6 @@ def compare_pairs(report):
         for key in left["rounds"][0]["input_sha256"]:
             if len({row["input_sha256"][key] for row in left["rounds"]}) != count:
                 raise AssertionError("Every call must use fresh labeled input/workspace contents")
-        if (
-            results[names[0]]["kernels"][0]["resolved_flags"]
-            != results[names[1]]["kernels"][0]["resolved_flags"]
-        ):
+        if results[names[0]]["kernels"][0]["resolved_flags"] != results[names[1]]["kernels"][0]["resolved_flags"]:
             raise AssertionError("Paired strategies use different compiler flags")
         comparisons.append({"cases": names, "status": "PASS", "compared_launches": count})

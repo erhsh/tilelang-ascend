@@ -25,9 +25,7 @@ def main():
         "Compile wall/CPU/Bisheng, host call wall and NPU Event span are separate measurements; "
         "abstract issue-step scheduling costs are not measured times or throughput predictions."
     )
-    return run_cases(
-        args, report, BENCHMARK_CASES, Path(__file__).resolve(), final_check=compare_performance
-    )
+    return run_cases(args, report, BENCHMARK_CASES, Path(__file__).resolve(), final_check=compare_performance)
 
 
 if __name__ == "__main__":

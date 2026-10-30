@@ -36,9 +36,7 @@ def _plan(module, configs=None):
 
 def _loops(function):
     found = []
-    tir.stmt_functor.post_order_visit(
-        function.body, lambda node: found.append(node) if isinstance(node, tir.For) else None
-    )
+    tir.stmt_functor.post_order_visit(function.body, lambda node: found.append(node) if isinstance(node, tir.For) else None)
     return found
 
 
@@ -52,9 +50,7 @@ def _fills(
     annotations=None,
     allocation_shape=(64,),
 ):
-    buffers = [
-        tir.decl_buffer(allocation_shape, "float32", name=name, scope="shared.ub") for name in "abc"
-    ]
+    buffers = [tir.decl_buffer(allocation_shape, "float32", name=name, scope="shared.ub") for name in "abc"]
     statements = []
     for index, buffer in enumerate(buffers):
         pointer = buffers[0] if dependent else buffer
@@ -179,9 +175,7 @@ def test_whole_kernel_unknown_effects_are_rejected(operation):
     statement = tir.Evaluate(
         tir.call_extern("handle", "unknown_raw_helper")
         if operation == "opaque"
-        else tir.call_intrin(
-            "handle", tvm.ir.Op.get("tl.ascend_auto_set_flag"), tir.StringImm("MTE2_V"), 0
-        )
+        else tir.call_intrin("handle", tvm.ir.Op.get("tl.ascend_auto_set_flag"), tir.StringImm("MTE2_V"), 0)
     )
     function = function.with_body(tir.SeqStmt([function.body, statement]))
     with pytest.raises(tvm.TVMError, match="Unsupported schedule|explicit V owner"):
@@ -195,22 +189,13 @@ def test_real_lowered_static_loops_bridge_once_with_one_version(dtype, total):
     planned = _plan(module)
     candidates = planned["main"].attrs[MANIFEST]["candidates"]
     assert candidates
-    requested = [
-        loop for loop in _loops(planned["main"]) if "software_pipeline_stage" in loop.annotations
-    ]
+    requested = [loop for loop in _loops(planned["main"]) if "software_pipeline_stage" in loop.annotations]
     assert len(requested) == len(candidates)
-    assert all(
-        all(int(stage) == 0 for stage in loop.annotations["software_pipeline_stage"])
-        for loop in requested
-    )
+    assert all(all(int(stage) == 0 for stage in loop.annotations["software_pipeline_stage"]) for loop in requested)
     injected = tilelang.transform.InjectSoftwarePipeline()(planned)
-    assert not any(
-        "software_pipeline_stage" in loop.annotations for loop in _loops(injected["main"])
-    )
+    assert not any("software_pipeline_stage" in loop.annotations for loop in _loops(injected["main"]))
     if "buffer_versions" in injected["main"].attrs:
-        assert all(
-            int(version) == 1 for version in injected["main"].attrs["buffer_versions"].values()
-        )
+        assert all(int(version) == 1 for version in injected["main"].attrs["buffer_versions"].values())
     with pytest.raises(tvm.TVMError, match="already planned"):
         _plan(planned)
 
@@ -222,11 +207,7 @@ def test_markers_keep_original_order_and_follow_substitute_and_unroll():
     source_ids = []
     tir.stmt_functor.post_order_visit(
         source.body,
-        lambda node: (
-            source_ids.append(int(node.node))
-            if isinstance(node, tir.AttrStmt) and node.attr_key == TASK
-            else None
-        ),
+        lambda node: source_ids.append(int(node.node)) if isinstance(node, tir.AttrStmt) and node.attr_key == TASK else None,
     )
     assert source_ids == [0, 1, 2]
     injected = tilelang.transform.InjectSoftwarePipeline()(planned)
@@ -285,9 +266,7 @@ def test_conflicting_configs_fail_explicitly(key, value):
         _plan(_fills(), config)
 
 
-@pytest.mark.parametrize(
-    "shape", [(16384,), (49152,), (700, 17), (2**32 + 1, 2**32 - 1, 2**62 - 64, 64)]
-)
+@pytest.mark.parametrize("shape", [(16384,), (49152,), (700, 17), (2**32 + 1, 2**32 - 1, 2**62 - 64, 64)])
 def test_ub_budget_is_rejected_before_invoking_the_old_allocator(shape):
     # (700,17) has a smaller raw span but Flatten2D's 32B row padding would
     # push the three independent allocations over budget as well.
@@ -323,16 +302,10 @@ def test_explicit_placement_hint_is_preserved_by_constraint_planning():
         _plan(tvm.IRModule.from_expr(invalid))
 
 
-@pytest.mark.parametrize(
-    "platform,model,error", [("A5", "ascendc", "A3 only"), ("A3", "pto", "AscendC")]
-)
+@pytest.mark.parametrize("platform,model,error", [("A5", "ascendc", "A3 only"), ("A3", "pto", "AscendC")])
 def test_unsupported_backend_is_rejected(platform, model, error):
     module = _fills()
-    function = (
-        module["main"]
-        .with_attr("npu_platform", platform)
-        .with_attr("target", tvm.target.Target({"kind": "llvm", "model": model}))
-    )
+    function = module["main"].with_attr("npu_platform", platform).with_attr("target", tvm.target.Target({"kind": "llvm", "model": model}))
     with pytest.raises(tvm.TVMError, match=error):
         _plan(tvm.IRModule.from_expr(function))
 
@@ -341,9 +314,7 @@ def test_default_and_explicit_legacy_plans_are_identical():
     module = _before_planning(make_vector_kernel())
     default = vector_pass_configs("legacy")
     del default["tl.ascend_pipeline_planner"]
-    assert tvm.ir.structural_equal(
-        _plan(module, default), _plan(module, vector_pass_configs("legacy"))
-    )
+    assert tvm.ir.structural_equal(_plan(module, default), _plan(module, vector_pass_configs("legacy")))
 
 
 def test_real_lowering_invokes_each_planner_and_injector_once():
@@ -381,7 +352,5 @@ assert tvm.get_global_func('tl.ascend.solve_schedule', allow_missing=True) is No
     env = dict(os.environ)
     directory = str(Path(__file__).resolve().parent)
     env["PYTHONPATH"] = os.pathsep.join([directory, env.get("PYTHONPATH", "")])
-    completed = subprocess.run(
-        [sys.executable, "-c", source], env=env, capture_output=True, text=True, timeout=60
-    )
+    completed = subprocess.run([sys.executable, "-c", source], env=env, capture_output=True, text=True, timeout=60)
     assert completed.returncode == 0, completed.stdout + completed.stderr

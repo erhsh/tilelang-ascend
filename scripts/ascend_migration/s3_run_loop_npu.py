@@ -175,16 +175,8 @@ def main() -> int:
     report = base_report("s3_run_loop_npu", args, step="S3")
     if sys.flags.optimize:
         return finish(args, report, "BLOCKED", "Python optimization disables mandatory assertions")
-    if (
-        args.device < 0
-        or args.seed < 0
-        or args.repeat < 1
-        or not math.isfinite(args.timeout)
-        or args.timeout <= 0
-    ):
-        return finish(
-            args, report, "BLOCKED", "device/seed must be nonnegative; repeat/timeout positive"
-        )
+    if args.device < 0 or args.seed < 0 or args.repeat < 1 or not math.isfinite(args.timeout) or args.timeout <= 0:
+        return finish(args, report, "BLOCKED", "device/seed must be nonnegative; repeat/timeout positive")
     if args._case:
         return run_worker(
             args,

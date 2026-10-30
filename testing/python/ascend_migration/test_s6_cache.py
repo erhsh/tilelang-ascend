@@ -90,9 +90,7 @@ def test_user_pass_configuration_cannot_override_the_internal_compiler_abi(tmp_p
 
 @pytest.mark.parametrize("layer", ["memory", "disk"])
 @pytest.mark.parametrize("reject", [False, True])
-def test_old_artifact_cannot_bypass_new_compilation_or_readiness(
-    tmp_path, monkeypatch, layer, reject
-):
+def test_old_artifact_cannot_bypass_new_compilation_or_readiness(tmp_path, monkeypatch, layer, reject):
     instance = cache(tmp_path)
     arguments = _arguments(make_pipeline_kernel(), fixture_profile())
     new, old, _ = keys_and_payload(instance, arguments, monkeypatch)
@@ -115,9 +113,7 @@ def test_old_artifact_cannot_bypass_new_compilation_or_readiness(
     monkeypatch.setattr(cache_module, "is_cache_enabled", lambda: True)
     monkeypatch.setattr(cache_module, "JITKernel", construct)
     monkeypatch.setattr(instance, "_load_kernel_from_disk", load)
-    monkeypatch.setattr(
-        instance, "_save_kernel_to_disk", lambda key, value, *args: disk.update({key: value})
-    )
+    monkeypatch.setattr(instance, "_save_kernel_to_disk", lambda key, value, *args: disk.update({key: value}))
     arguments.pop("args")
     if reject:
         with pytest.raises(ValueError, match="S6 readiness"):
@@ -131,9 +127,7 @@ def test_old_artifact_cannot_bypass_new_compilation_or_readiness(
 
 
 @pytest.mark.parametrize("explicit", [None, "legacy", "constraint"])
-def test_jit_inner_context_matches_the_strategy_used_by_the_cache_key(
-    tmp_path, monkeypatch, explicit
-):
+def test_jit_inner_context_matches_the_strategy_used_by_the_cache_key(tmp_path, monkeypatch, explicit):
     """Exercise the real JIT context boundary, stopping before any lowering/codegen."""
     instance = cache(tmp_path)
     cache_package = importlib.import_module("tilelang.cache")
@@ -154,13 +148,7 @@ def test_jit_inner_context_matches_the_strategy_used_by_the_cache_key(
         pass
 
     def lower(*args, **kwargs):
-        observed.append(
-            str(
-                tvm.transform.PassContext.current().config.get(
-                    "tl.ascend_pipeline_planner", "legacy"
-                )
-            )
-        )
+        observed.append(str(tvm.transform.PassContext.current().config.get("tl.ascend_pipeline_planner", "legacy")))
         raise StopBeforeLower
 
     monkeypatch.setattr(tilelang, "lower", lower)
@@ -197,10 +185,6 @@ key=c._generate_key(make_pipeline_kernel(),[],[],[],args=(),target='ascendc',pla
 assert len(key)==64
 """
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(Path(__file__).resolve().parent), env.get("PYTHONPATH", "")]
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", source], env=env, text=True, capture_output=True, timeout=60
-    )
+    env["PYTHONPATH"] = os.pathsep.join([str(Path(__file__).resolve().parent), env.get("PYTHONPATH", "")])
+    result = subprocess.run([sys.executable, "-c", source], env=env, text=True, capture_output=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr

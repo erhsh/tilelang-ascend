@@ -12,9 +12,7 @@ RUNNERS = Path(__file__).resolve().parents[3] / "scripts/ascend_migration"
 @pytest.fixture
 def calibration(monkeypatch):
     monkeypatch.syspath_prepend(str(RUNNERS))
-    spec = importlib.util.spec_from_file_location(
-        "s5_calibration_test", RUNNERS / "_s5_calibration.py"
-    )
+    spec = importlib.util.spec_from_file_location("s5_calibration_test", RUNNERS / "_s5_calibration.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -71,16 +69,12 @@ def _reports(tmp_path, module):
         for phase, repeat in (("warmup", 1), ("measured", 2)):
             for _ in range(repeat):
                 index = len(worker["launches"])
-                worker["launches"].append(
-                    {"index": index, "round": 0, "count": count, "phase": phase}
-                )
+                worker["launches"].append({"index": index, "round": 0, "count": count, "phase": phase})
                 directory = tmp_path / "OPPROF_synthetic/main_kernel" / str(index)
                 directory.mkdir(parents=True)
                 with (directory / "OpBasicInfo_fixture.csv").open("w", newline="") as stream:
                     writer = csv.writer(stream)
-                    writer.writerow(
-                        ["Op Name", "Task Duration(us)", "Device Id", "Current Freq", "Rated Freq"]
-                    )
+                    writer.writerow(["Op Name", "Task Duration(us)", "Device Id", "Current Freq", "Rated Freq"])
                     writer.writerow(["main_kernel", "6.000001", 0, 1650, 1650])
     return worker
 

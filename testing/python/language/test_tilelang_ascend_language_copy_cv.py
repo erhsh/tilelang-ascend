@@ -438,8 +438,11 @@ def _ub_to_l1_case(
 
     ref_c = (a @ b).to(torch_dtype)
     repeat_launch(
-        kernel, arguments, (c,),
-        lambda: torch.testing.assert_close(c, ref_c, rtol=1e-3, atol=1e-3), repeat,
+        kernel,
+        arguments,
+        (c,),
+        lambda: torch.testing.assert_close(c, ref_c, rtol=1e-3, atol=1e-3),
+        repeat,
     )
 
 

@@ -114,9 +114,7 @@ def test_directed_event_domains_and_reserved_ids_are_independent():
     assert len(profile.local_event_domains) == 6
     for domain in profile.local_event_domains:
         assert domain.declared_ids == tuple(range(8))
-        assert profile.available_event_ids(domain.owner, domain.src_pipe, domain.dst_pipe) == tuple(
-            range(8)
-        )
+        assert profile.available_event_ids(domain.owner, domain.src_pipe, domain.dst_pipe) == tuple(range(8))
     assert profile.available_event_ids("V", "MTE2", "V", [0, 7, 0]) == tuple(range(1, 7))
     assert profile.available_event_ids("V", "V", "MTE2") == tuple(range(8))
     assert profile.available_event_ids("V", "MTE2", "V", range(8)) == ()

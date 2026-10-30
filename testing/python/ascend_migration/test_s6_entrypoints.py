@@ -136,9 +136,7 @@ def paired_report(module):
                     "kernels": [
                         {
                             "resolved_flags": ["-O2"],
-                            "resolved_pass_configs": {
-                                "tl.ascend_pipeline_planner": spec["strategy"]
-                            },
+                            "resolved_pass_configs": {"tl.ascend_pipeline_planner": spec["strategy"]},
                         }
                     ],
                 },
@@ -184,9 +182,7 @@ def test_paired_evidence_rejects_changed_or_incomplete_records(reuse, corruption
     elif corruption in ("same_scratch", "same_a"):
         for side in (left, right):
             for value in side["case_parameters"]["rounds"]:
-                value["input_sha256"]["Scratch" if corruption == "same_scratch" else "A"] = (
-                    "unchanged"
-                )
+                value["input_sha256"]["Scratch" if corruption == "same_scratch" else "A"] = "unchanged"
     elif corruption == "index":
         for side in (left, right):
             side["case_parameters"]["rounds"][1]["index"] = 0

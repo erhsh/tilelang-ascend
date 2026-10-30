@@ -98,8 +98,11 @@ def run_test_abs(M, N, block_M, block_N, dtype, target, repeat=1):
     b = torch.empty_like(a)
     ref_b = torch.abs(a)
     repeat_launch(
-        func, (a, b), (b,),
-        lambda: torch.testing.assert_close(b, ref_b, rtol=1e-2, atol=1e-2), repeat,
+        func,
+        (a, b),
+        (b,),
+        lambda: torch.testing.assert_close(b, ref_b, rtol=1e-2, atol=1e-2),
+        repeat,
     )
 
 

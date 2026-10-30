@@ -11,9 +11,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.fixture
 def build_fixture(tmp_path, monkeypatch):
-    spec = importlib.util.spec_from_file_location(
-        "s5_snapshot_build", ROOT / "scripts/ascend_migration/_native_build.py"
-    )
+    spec = importlib.util.spec_from_file_location("s5_snapshot_build", ROOT / "scripts/ascend_migration/_native_build.py")
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)
     original = tmp_path / "original"
@@ -28,9 +26,7 @@ def build_fixture(tmp_path, monkeypatch):
     for path in paths:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("synthetic original bytes\n")
-    cache.write_text(
-        f"TVM_SOURCE_DIR:PATH={tvm_source}\nCMAKE_HOME_DIRECTORY:INTERNAL={original}\n"
-    )
+    cache.write_text(f"TVM_SOURCE_DIR:PATH={tvm_source}\nCMAKE_HOME_DIRECTORY:INTERNAL={original}\n")
     original_manifest = original / "native.json"
     build.write_manifest(
         original_manifest,
@@ -44,16 +40,12 @@ def build_fixture(tmp_path, monkeypatch):
     return build, original, snapshot, original_manifest, relocated
 
 
-def test_snapshot_preserves_real_original_cache_and_survives_original_changes(
-    build_fixture, monkeypatch
-):
+def test_snapshot_preserves_real_original_cache_and_survives_original_changes(build_fixture, monkeypatch):
     build, original, snapshot, manifest, relocated = build_fixture
     report = build.write_relocated_manifest(manifest, snapshot, relocated)
     assert report["artifact_kind"] == "relocated_verified_build"
     assert report["build"]["command"] == ["synthetic-build-fixture"]
-    assert (snapshot / "build/CMakeCache.txt").read_bytes() == (
-        original / "build/CMakeCache.txt"
-    ).read_bytes()
+    assert (snapshot / "build/CMakeCache.txt").read_bytes() == (original / "build/CMakeCache.txt").read_bytes()
     for relative in ("src/example.cc", "build/CMakeCache.txt", *build.LIBRARY_PATHS):
         (original / relative).write_text("new original workspace bytes\n")
     monkeypatch.setattr(build, "ROOT", snapshot)
@@ -77,9 +69,7 @@ def test_only_a_source_identical_to_the_verified_build_can_be_relocated(build_fi
         "build/ascend_migration_original_manifest.json",
     ],
 )
-def test_snapshot_mutation_cannot_be_hidden_by_changes_in_the_original(
-    build_fixture, monkeypatch, changed
-):
+def test_snapshot_mutation_cannot_be_hidden_by_changes_in_the_original(build_fixture, monkeypatch, changed):
     build, _, snapshot, manifest, relocated = build_fixture
     build.write_relocated_manifest(manifest, snapshot, relocated)
     monkeypatch.setattr(build, "ROOT", snapshot)

@@ -81,18 +81,13 @@ def read_execution_samples(directory, worker):
     journal = [
         {"index": index, "round": round_index, "phase": phase}
         for index, (round_index, phase) in enumerate(
-            (round_index, phase)
-            for round_index in range(3)
-            for phase, repeat in (("warmup", 5), ("measured", 20))
-            for _ in range(repeat)
+            (round_index, phase) for round_index in range(3) for phase, repeat in (("warmup", 5), ("measured", 20)) for _ in range(repeat)
         )
     ]
     if worker["launches"] != journal or worker["golden_checks"] != 3:
         raise ValueError("Performance journal/golden count differs from the common policy")
     root = roots[0]
-    observed = sorted(
-        int(path.name) for path in root.iterdir() if path.is_dir() and path.name.isdecimal()
-    )
+    observed = sorted(int(path.name) for path in root.iterdir() if path.is_dir() and path.name.isdecimal())
     if observed != list(range(75)):
         raise ValueError("Profiler invocation IDs do not cover exactly 75 application launches")
     samples = []
@@ -106,10 +101,7 @@ def read_execution_samples(directory, worker):
         if len(rows) != 1:
             raise ValueError("Ambiguous per-invocation BasicInfo rows")
         row = rows[0]
-        if (
-            row["Op Name"] != "main_kernel"
-            or int(row["Device Id"]) != worker["actual_device"]["logical_device"]
-        ):
+        if row["Op Name"] != "main_kernel" or int(row["Device Id"]) != worker["actual_device"]["logical_device"]:
             raise ValueError("Performance kernel/device mismatch")
         numeric = Decimal(row["Task Duration(us)"])
         current, rated = int(row["Current Freq"]), int(row["Rated Freq"])
@@ -145,14 +137,10 @@ def _summary(samples):
     distribution.sort()
     return {
         "measured_samples": sum(map(len, rounds.values())),
-        "median_ns": format(
-            statistics.median(value for group in rounds.values() for value in group), ".12g"
-        ),
+        "median_ns": format(statistics.median(value for group in rounds.values() for value in group), ".12g"),
         "median_ci95_low_ns": format(distribution[24], ".12g"),
         "median_ci95_high_ns": format(distribution[974], ".12g"),
-        "round_median_ns": [
-            format(statistics.median(values), ".12g") for values in rounds.values()
-        ],
+        "round_median_ns": [format(statistics.median(values), ".12g") for values in rounds.values()],
     }
 
 
@@ -225,9 +213,7 @@ def _collect_performance(report, args, entry, bases):
             actual = worker["case_parameters"]
             for key in ("input_sha256", "output_sha256", "golden_sha256"):
                 if actual[key] != correctness[name][key]:
-                    raise ValueError(
-                        f"Performance/correctness inputs or outputs differ: {name}/{key}"
-                    )
+                    raise ValueError(f"Performance/correctness inputs or outputs differ: {name}/{key}")
             record = {
                 "name": name,
                 "status": "PASS",
