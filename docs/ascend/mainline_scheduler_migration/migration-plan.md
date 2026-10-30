@@ -65,8 +65,14 @@ Vector 指令选择、mask 合法化、Persistent 参数/partial-wave 保护及 
 | 整体验收 | S1–S8 最终构建跨阶段验证 | 已完成，生产源码不变 | 新增主机18/105/42；A3数值97worker/11000golden及8性能worker通过，同源S8证据已复核 | 待用户审核 |
 | 正式代码整理 | 内部协议、标识符与诊断按功能命名 | 已完成，保留调度、同步及 schema 行为 | 静态与主机检查通过；native/NPU 待重建验证 | 待用户审核 |
 | 关键源码修复 | Fill 操作数及 Block 别名访问元数据 | 两处修复已实现，临时 native 回归已准备 | 格式、静态及缓存检查通过；native/NPU 待环境验证 | 待用户审核 |
+| 正式 Python 格式 | 5 个正式 Python 文件与 CI 格式对齐 | 已完成，无逻辑修改 | Ruff 0.17.3 格式及 lint、AST 一致性、diff 检查通过 | 待用户审核 |
 
-当前工作为关键源码审核修复。Auto 调用审计按公开 ABI 区分 Fill 与 Add 的目标
+当前工作仅格式化 `phase.py`、`persistent.py`、`schedule_hint.py`、
+`ascend_pipeline_cost.py` 和 `ascend_z3_scheduler.py`，使用与 CI 一致的
+Ruff 0.17.3。五个文件格式化前后的 AST（含 type comments）一致；本步不包含
+功能修改或 native/NPU 验证。提交范围为这五个正式文件及本计划，推送后等待审核。
+
+关键源码修复已实现：Auto 调用审计按公开 ABI 区分 Fill 与 Add 的目标
 操作数，并验证 Fill helper、目标类型及无访存副作用的算术标量。存储别名规范化
 同步改写 Block 的 reads/writes，覆盖外层指针 Let 绑定且没有 match_buffer 或
 根名称变化的情况；未改变的 BufferRegion 保留身份。受影响的 constraint/auto

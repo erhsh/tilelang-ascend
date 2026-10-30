@@ -46,9 +46,7 @@ def allow_vectorize(pass_ctx: PassContext | None = None) -> bool:
     return not disable_vectorize
 
 
-def _ascend_sync_strategy(
-    pass_ctx: PassContext, target: Target, platform: str | None = None
-) -> str:
+def _ascend_sync_strategy(pass_ctx: PassContext, target: Target, platform: str | None = None) -> str:
     strategy = str(pass_ctx.config.get("tl.ascend_sync_strategy", "legacy"))
     if strategy not in {"legacy", "a3"}:
         raise ValueError(f"Unknown Ascend synchronization strategy: {strategy!r}")
@@ -60,16 +58,12 @@ def _ascend_sync_strategy(
     return strategy
 
 
-def _ascend_pipeline_planner(
-    pass_ctx: PassContext, target: Target, platform: str | None = None
-) -> str:
+def _ascend_pipeline_planner(pass_ctx: PassContext, target: Target, platform: str | None = None) -> str:
     planner = str(pass_ctx.config.get("tl.ascend_pipeline_planner", "legacy"))
     if planner not in {"legacy", "constraint", "auto"}:
         raise ValueError(f"Unknown Ascend pipeline planner strategy: {planner!r}")
     if planner == "auto":
-        if target.model not in {"ascendc", "auto"} or (
-            platform is not None and platform != "A3"
-        ):
+        if target.model not in {"ascendc", "auto"} or (platform is not None and platform != "A3"):
             raise ValueError("The auto scheduler requires the A3 AscendC backend")
         required = {
             "tl.ascend_auto_sync": True,
@@ -85,10 +79,7 @@ def _ascend_pipeline_planner(
         if str(pass_ctx.config.get("tl.ascend_sync_strategy", "legacy")) != "a3":
             raise ValueError("The auto scheduler requires tl.ascend_sync_strategy='a3'")
         if pass_ctx.config.get("tl.ascend_pipeline_cost_model") is not None:
-            raise ValueError(
-                "The auto scheduler uses abstract_issue_step_v1; "
-                "a constraint latency cost model cannot be supplied"
-            )
+            raise ValueError("The auto scheduler uses abstract_issue_step_v1; a constraint latency cost model cannot be supplied")
     return planner
 
 

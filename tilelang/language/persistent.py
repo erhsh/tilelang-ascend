@@ -48,6 +48,4 @@ def Persistent(
     satisfy the positive-domain and worker-index contracts at runtime, and
     the padded domain and wave index range must fit int64.
     """
-    return _ffi_api.Persistent(
-        domain, wave_size, index, group_size, num_stages, loop_annotations(annotations)
-    )
+    return _ffi_api.Persistent(domain, wave_size, index, group_size, num_stages, loop_annotations(annotations))

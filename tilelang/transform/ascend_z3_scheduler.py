@@ -138,9 +138,7 @@ def validate_problem(problem: Mapping) -> dict:
     for u, v, wrap, gap in result["register_phase_deps"]:
         if wrap not in (0, 1) or gap < 0:
             raise InvalidProblem(f"Invalid register phase dependency: {(u, v, wrap, gap)}")
-    if result["register_phase_deps"] and (
-        not result["manual_stages"] or not result["enable_offset"]
-    ):
+    if result["register_phase_deps"] and (not result["manual_stages"] or not result["enable_offset"]):
         raise InvalidProblem("Register phase dependencies require manual stages and enable_offset")
     if mode == "straight":
         if (
@@ -259,10 +257,7 @@ def verify_schedule(problem: Mapping, candidate: Mapping) -> dict:
     if modulo and not p["enable_offset"]:
         for u in range(n):
             for v in range(u + 1, n):
-                if (
-                    p["resource_flags"][u] & p["resource_flags"][v]
-                    and abs(starts[u] - starts[v]) >= ii
-                ):
+                if p["resource_flags"][u] & p["resource_flags"][v] and abs(starts[u] - starts[v]) >= ii:
                     errors.append(f"Resource {u},{v} leaves its single II window")
     for u, v, wrap, gap in p["register_phase_deps"]:
         if phases[v] + wrap * ii < phases[u] + gap:
@@ -281,9 +276,7 @@ def verify_schedule(problem: Mapping, candidate: Mapping) -> dict:
 def _resource_pairs(p):
     pairs = {tuple(sorted(pair)) for pair in p["resource_deps"]}
     flags = p["resource_flags"]
-    pairs.update(
-        (u, v) for u in range(len(flags)) for v in range(u + 1, len(flags)) if flags[u] & flags[v]
-    )
+    pairs.update((u, v) for u in range(len(flags)) for v in range(u + 1, len(flags)) if flags[u] & flags[v])
     return sorted(pairs)
 
 
@@ -346,10 +339,7 @@ def _solve(p, z3, deadline):
         for version in versions:
             solver.add(version >= 1, version <= p["num_stages"])
         for group in p["memory_groups"]:
-            solver.add(
-                z3.Sum([versions[index] * p["buffer_sizes"][index] for index in group[1:]])
-                <= group[0]
-            )
+            solver.add(z3.Sum([versions[index] * p["buffer_sizes"][index] for index in group[1:]]) <= group[0])
         for u, v, distance, gap in p["data_deps"]:
             distance_value = versions[-distance - 1] if distance < 0 else distance
             # At an equal issue time, source order breaks ties within a stage.
@@ -409,10 +399,7 @@ def _solve(p, z3, deadline):
             model = solver.model()
             values = [model.eval(start).as_long() for start in starts]
             buffer_versions = [model.eval(version).as_long() for version in versions]
-            keys = [
-                (values[i] % ii, -(values[i] // ii), i) if modulo else (values[i], 0, i)
-                for i in range(n)
-            ]
+            keys = [(values[i] % ii, -(values[i] // ii), i) if modulo else (values[i], 0, i) for i in range(n)]
             best = _result(
                 "SAT",
                 starts=values,
@@ -426,17 +413,13 @@ def _solve(p, z3, deadline):
     if best is None:
         return _result(
             "UNSAT",
-            f"No feasible schedule in inclusive II domain {p['ii_bounds']}"
-            if modulo
-            else "Constraints are unsatisfiable",
+            f"No feasible schedule in inclusive II domain {p['ii_bounds']}" if modulo else "Constraints are unsatisfiable",
         )
     checked = verify_schedule(p, best)
     if not _remaining_ms(deadline):
         return _result("TIMEOUT", "Scheduling deadline expired during result verification")
     if not checked["valid"]:
-        return _result(
-            "ERROR", "Independent verifier rejected solver output: " + "; ".join(checked["errors"])
-        )
+        return _result("ERROR", "Independent verifier rejected solver output: " + "; ".join(checked["errors"]))
     return best
 
 

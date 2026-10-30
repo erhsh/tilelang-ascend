@@ -38,11 +38,7 @@ def _string(value: Any, field: str) -> str:
 
 
 def _digest(value: Any, field: str) -> str:
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(character not in "0123456789abcdef" for character in value)
-    ):
+    if not isinstance(value, str) or len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise CostModelError(f"{field} must be a lowercase SHA256 digest")
     return value
 
@@ -76,9 +72,7 @@ def cost_model_digest(profile: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-def validate_cost_model(
-    profile: Mapping[str, Any], *, expected_identity: Mapping[str, Any] | None = None
-) -> dict[str, Any]:
+def validate_cost_model(profile: Mapping[str, Any], *, expected_identity: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Validate and copy a full profile; never load a filename hidden in config."""
     if not isinstance(profile, Mapping):
         raise CostModelError("cost model must be a mapping, not a profile filename")
@@ -110,12 +104,7 @@ def validate_cost_model(
         if not isinstance(record, dict):
             raise CostModelError(f"records[{index}] must be a mapping")
         kind, dtype = record.get("kind"), record.get("dtype")
-        if (
-            not isinstance(kind, str)
-            or not isinstance(dtype, str)
-            or kind not in _KINDS
-            or dtype not in _DTYPE_BYTES
-        ):
+        if not isinstance(kind, str) or not isinstance(dtype, str) or kind not in _KINDS or dtype not in _DTYPE_BYTES:
             raise CostModelError(f"records[{index}] has an unsupported operation/dtype")
         elements = _integer(record.get("elements"), f"records[{index}].elements")
         size = _integer(record.get("bytes"), f"records[{index}].bytes")
@@ -134,9 +123,7 @@ def validate_cost_model(
             nanoseconds = _integer(record.get(ns_key), f"records[{index}].{ns_key}")
             ticks = _integer(record.get(ticks_key), f"records[{index}].{ticks_key}")
             if ticks != (nanoseconds // quantum + bool(nanoseconds % quantum)):
-                raise CostModelError(
-                    f"records[{index}].{ticks_key} is not conservative ns rounding"
-                )
+                raise CostModelError(f"records[{index}].{ticks_key} is not conservative ns rounding")
     evidence = result.get("evidence")
     if not isinstance(evidence, dict) or evidence.get("status") != "PASS":
         raise CostModelError("calibration evidence must have passed its measurement checks")
@@ -150,9 +137,7 @@ def validate_cost_model(
     return result
 
 
-def load_cost_model(
-    path: str | Path, *, expected_identity: Mapping[str, Any] | None = None
-) -> dict[str, Any]:
+def load_cost_model(path: str | Path, *, expected_identity: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Load artifact contents for use as the actual pass_configs value."""
     with Path(path).open(encoding="utf-8") as stream:
         profile = json.load(stream)

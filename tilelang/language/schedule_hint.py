@@ -16,9 +16,7 @@ def Task(latency: int | None = None, ii: int | None = None):
     are diagnosed. Pipeline costs come from an explicit calibrated model.
     """
     if latency is not None or ii is not None:
-        raise ValueError(
-            "Task latency/ii overrides are unsupported; use a calibrated pipeline cost model"
-        )
+        raise ValueError("Task latency/ii overrides are unsupported; use a calibrated pipeline cost model")
     return attr({}, "tl.ascend_task", tir.IntImm("int32", 1))
 
 
