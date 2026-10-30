@@ -11,7 +11,7 @@ from test_s5_cost_model import seal, synthetic_profile
 
 
 tir = tvm.tir
-REMAP = "tl.ascend_s5_buffer_remap"
+REMAP = "tl.ascend_pipeline_buffer_remap"
 
 
 def fixture_profile():
@@ -149,7 +149,7 @@ def test_nonzero_minimum_pointer_and_buffer_select_the_same_physical_version():
 @pytest.mark.parametrize("trip", [0, 1, 4])
 def test_modulo_native_publishes_actual_versions_and_physical_geometry(bound, trip):
     planned = _plan(_fills(stages=bound, extent=trip), configs())
-    candidate = planned["main"].attrs["tl.ascend_s4_manifest"]["candidates"][0]
+    candidate = planned["main"].attrs["tl.ascend_constraint_plan"]["candidates"][0]
     assert int(candidate["ii"]) > 0
     assert all(1 <= int(value) <= bound for value in candidate["buffer_versions"])
     if trip:
@@ -256,7 +256,7 @@ def _manual(stages, *, dependent=False, minimum=0):
         ordinal += 1
         return tir.AttrStmt(
             tvm.runtime.convert({"stage": tir.IntImm("int64", stage)}),
-            "tl.ascend_s5_task",
+            "tl.ascend_pipeline_task_hint",
             tir.const(1, "int32"),
             statement,
         )
@@ -308,10 +308,10 @@ def test_prepare_keeps_zero_and_one_trip_request_facts():
         module = _fills(stages=2, extent=trip)
         with tvm.transform.PassContext(config=configs()):
             prepared = tilelang.transform.AscendPrepareConstraintPipeline(tvm.target.Target({"kind": "llvm", "model": "ascendc"}))(module)
-            facts = prepared["main"].attrs["tl.ascend_s5_degenerate_candidates"]
+            facts = prepared["main"].attrs["tl.ascend_pipeline_degenerate_candidates"]
             assert len(facts) == 1 and int(facts[0]["extent"]) == trip
             planned = tilelang.transform.PipelinePlanning()(prepared)
-        assert int(planned["main"].attrs["tl.ascend_s4_manifest"]["schema_version"]) == 3
+        assert int(planned["main"].attrs["tl.ascend_constraint_plan"]["schema_version"]) == 3
 
 
 @pytest.mark.parametrize("bound", [1, 2, 3])
@@ -339,7 +339,7 @@ def test_real_lowered_vector_pipeline_uses_the_selected_version_bound(bound, dty
 
     body = tir.stmt_functor.ir_transform(function.body, None, requested, ["tir.For"])
     planned = _plan(tvm.IRModule.from_expr(function.with_body(body)), configs())
-    candidate = planned["main"].attrs["tl.ascend_s4_manifest"]["candidates"][0]
+    candidate = planned["main"].attrs["tl.ascend_constraint_plan"]["candidates"][0]
     assert max(int(value) for value in candidate["buffer_versions"]) == bound
     injected = tilelang.transform.InjectSoftwarePipeline()(planned)
     assert max(int(record["versions"]) for record in injected["main"].attrs[REMAP]) == bound
@@ -378,7 +378,7 @@ def test_shared_kernel_complete_lowering_includes_final_sync_and_mask_proofs(tri
 
 def test_partial_write_without_undefined_reads_is_safe_to_plan():
     planned = _plan(_fills(stages=2, allocation_shape=(128,)), configs())
-    assert int(planned["main"].attrs["tl.ascend_s4_manifest"]["schema_version"]) == 3
+    assert int(planned["main"].attrs["tl.ascend_constraint_plan"]["schema_version"]) == 3
 
 
 def test_partial_initialization_cannot_define_a_complete_read():
@@ -567,8 +567,8 @@ def test_public_stage_zero_outside_candidate_retains_serial_equivalence():
     with tvm.transform.PassContext(config=vector_pass_configs()):
         marked = tilelang.transform.PipelinePlanning()(_consume_public_hints(public))["main"]
         plain = tilelang.transform.PipelinePlanning()(baseline)["main"]
-    assert tvm.ir.structural_equal(marked.without_attr("tl.ascend_s4_manifest"), plain.without_attr("tl.ascend_s4_manifest"))
-    source = marked.attrs["tl.ascend_s4_manifest"]["source_graph"]
+    assert tvm.ir.structural_equal(marked.without_attr("tl.ascend_constraint_plan"), plain.without_attr("tl.ascend_constraint_plan"))
+    source = marked.attrs["tl.ascend_constraint_plan"]["source_graph"]
     assert [int(task["manual_stage"]) for task in source["tasks"][:3]] == [0, 0, 0]
 
 

@@ -170,7 +170,7 @@ def physical_evidence(kernel):
         record = {
             "function": symbol.name_hint,
             "buffer_versions": plain(attributes.get("buffer_versions", {})),
-            "buffer_remap": plain(attributes.get("tl.ascend_s5_buffer_remap", [])),
+            "buffer_remap": plain(attributes.get("tl.ascend_pipeline_buffer_remap", [])),
             "address_map": plain(attributes.get("address_map", {})),
             "size_map": plain(attributes.get("size_map", {})),
             "allocations": [],

@@ -447,7 +447,7 @@ def test_public_alias_fixture_has_complete_schema3_lowering(kind, dtype, tile):
     with tvm.transform.PassContext(config=configs()):
         artifact = tilelang.lower(make_reuse_kernel(kind, dtype=dtype, tile=tile), target="ascendc", platform="A3")
     for function in artifact.device_mod.functions.values():
-        manifest = function.attrs["tl.ascend_s4_manifest"]
+        manifest = function.attrs["tl.ascend_constraint_plan"]
         assert int(manifest["schema_version"]) == 3
         assert manifest["lifetime_contract"]
     assert "copy_gm_to_ub" in artifact.kernel_source and "copy_ub_to_gm" in artifact.kernel_source
@@ -462,7 +462,7 @@ def test_private_mixed_dtype_versions_share_one_actual_128_byte_pitch(developer)
         artifact = tilelang.lower(make_dtype_version_kernel(developer=developer), target="ascendc", platform="A3")
     analyzer = tvm.arith.Analyzer()
     for function in artifact.device_mod.functions.values():
-        lifetime = function.attrs["tl.ascend_s4_manifest"]["lifetime_contract"]
+        lifetime = function.attrs["tl.ascend_constraint_plan"]["lifetime_contract"]
         half_roots = []
         for task in lifetime["source_graph"]["tasks"]:
             for pointer in pointers(task["statement"]):
@@ -478,7 +478,7 @@ def test_private_mixed_dtype_versions_share_one_actual_128_byte_pitch(developer)
         owner = owners_[0]
         assert str(owner["scope"]) == "shared.ub"
         assert str(owner["allocation"].dtype) == "float32"
-        source_map = function.attrs.get("tl.ascend_s6_source_data", {})
+        source_map = function.attrs.get("tl.ascend_storage_source_data", {})
 
         def original(variable, source_map=source_map):
             for _ in range(len(source_map) + 1):
@@ -489,7 +489,7 @@ def test_private_mixed_dtype_versions_share_one_actual_128_byte_pitch(developer)
 
         remaps = [
             row
-            for row in function.attrs["tl.ascend_s5_buffer_remap"]
+            for row in function.attrs["tl.ascend_pipeline_buffer_remap"]
             if row["logical_data"].same_as(owner["data"]) or original(row["logical_data"]).same_as(owner["source_data"])
         ]
         assert len(remaps) == 1

@@ -65,7 +65,7 @@ def keys_and_payload(instance, arguments, monkeypatch):
 def test_constraint_abi_separates_the_same_head_program_profile_and_flags(tmp_path, monkeypatch):
     arguments = _arguments(make_pipeline_kernel(), fixture_profile())
     new, old, payload = keys_and_payload(cache(tmp_path), arguments, monkeypatch)
-    assert new != old and payload[ABI_FIELD] == 3
+    assert new != old and payload[ABI_FIELD] == 5
     assert payload["version"] == cache_module.__version__
 
 
@@ -85,7 +85,7 @@ def test_user_pass_configuration_cannot_override_the_internal_compiler_abi(tmp_p
     arguments["pass_configs"][ABI_FIELD] = 2
     _, _, payload = keys_and_payload(cache(tmp_path), arguments, monkeypatch)
     assert payload["pass_configs"][ABI_FIELD] == 2
-    assert payload[ABI_FIELD] == 3
+    assert payload[ABI_FIELD] == 5
 
 
 @pytest.mark.parametrize("layer", ["memory", "disk"])

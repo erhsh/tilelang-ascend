@@ -66,7 +66,7 @@ def emitted_instances(function):
     instances = []
 
     def visit(node):
-        if isinstance(node, tir.AttrStmt) and node.attr_key == "tl.ascend_s8_task":
+        if isinstance(node, tir.AttrStmt) and node.attr_key == "tl.ascend_auto_schedule_task_id":
             assert int(node.value) == 1
             instances.append(int(node.node))
 
@@ -142,7 +142,7 @@ def test_static_guard_keeps_tail_output_unwritten_in_source_and_actual_instances
     record = inspect_function(function)
     assert record["task_count"] == 16
     assert sorted(emitted_instances(function)) == list(range(16))
-    plan = function.attrs["tl.ascend_s8_schedule"]
+    plan = function.attrs["tl.ascend_auto_schedule"]
     original = plan["source_function"]
     output = original.buffer_map[original.params[-1]].data
     written = {
@@ -214,7 +214,7 @@ def test_materializer_does_not_silently_apply_versions_twice():
 def test_four_core_mixed_resource_masks_preserve_all_physical_domains_above_bit31():
     function = final_verifier_input(make_mixed_kernel(3, 4, operation="reduce"))
     record = inspect_function(function)
-    tasks = list(function.attrs["tl.ascend_s8_schedule"]["source_analysis"]["tasks"])
+    tasks = list(function.attrs["tl.ascend_auto_schedule"]["source_analysis"]["tasks"])
     masks = record["problem"]["resource_flags"]
     domains = [{(int(task["group"]), int(task["actor"]), str(pipe)) for pipe in task["resources"]} for task in tasks]
     assert len(tasks) == len(masks) == 120
@@ -264,4 +264,4 @@ def test_native_auto_entry_rejects_other_platforms(platform):
 def test_legacy_remains_outside_the_complete_auto_contract(kind):
     artifact = lowered(small_program(kind), strategy="legacy")
     for function in artifact.device_mod.functions.values():
-        assert not any(str(key).startswith("tl.ascend_s8_") for key in function.attrs.keys())
+        assert not any(str(key).startswith("tl.ascend_auto_schedule") for key in function.attrs.keys())

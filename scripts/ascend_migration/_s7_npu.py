@@ -278,10 +278,10 @@ def sync_evidence(kernel, args, spec):
         if not isinstance(function, tvm.tir.PrimFunc):
             continue
         attrs = function.attrs or {}
-        captured = {str(key): attrs[key] for key in attrs.keys() if str(key).startswith("tl.ascend_s7_")}
+        captured = {str(key): attrs[key] for key in attrs.keys() if str(key).startswith(("tl.ascend_local_sync_", "tl.ascend_handoff_"))}
         record = {"function": symbol.name_hint, "attribute_names": sorted(captured)}
         if spec["sync"] == "a3":
-            expected = "tl.ascend_s7_local_sync" if spec["kind"] == "vector" else None
+            expected = "tl.ascend_local_sync_plan" if spec["kind"] == "vector" else None
             if expected is not None:
                 if expected not in captured or str(captured[expected]["generator"]) != "a3":
                     raise AssertionError("New local generator must produce its actual IR contract")
@@ -291,10 +291,10 @@ def sync_evidence(kernel, args, spec):
                 if model != "wait_all_fence_before_reuse":
                     raise AssertionError("New binary event leases need a fence-based lifetime model")
                 record["lifetime_model"] = model
-            elif not any(key.startswith("tl.ascend_s7_handoff_") for key in captured):
+            elif not any(key.startswith("tl.ascend_handoff_") for key in captured):
                 raise AssertionError("New GM handoff requires actual preserved joint protocol facts")
             else:
-                plan = captured["tl.ascend_s7_handoff_plan"]
+                plan = captured["tl.ascend_handoff_plan"]
                 if (
                     int(plan["schema_version"]) != 1
                     or int(plan["mode"]) != 2

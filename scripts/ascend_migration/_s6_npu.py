@@ -135,7 +135,7 @@ def contract_evidence(kernel, args, strategy):
     for symbol, function in kernel.artifact.device_mod.functions.items():
         if not isinstance(function, tvm.tir.PrimFunc):
             continue
-        manifest = (function.attrs or {}).get("tl.ascend_s4_manifest")
+        manifest = (function.attrs or {}).get("tl.ascend_constraint_plan")
         if strategy == "legacy":
             result.append({"function": symbol.name_hint, "constraint_contract": False})
             continue
@@ -186,7 +186,7 @@ def mixed_owner_evidence(kernel):
     for symbol, function in kernel.artifact.device_mod.functions.items():
         if not isinstance(function, tir.PrimFunc):
             continue
-        lifetime = function.attrs["tl.ascend_s4_manifest"]["lifetime_contract"]
+        lifetime = function.attrs["tl.ascend_constraint_plan"]["lifetime_contract"]
         half_roots = []
         for task in lifetime["source_graph"]["tasks"]:
             for pointer in pointers(task["statement"]):
@@ -202,7 +202,7 @@ def mixed_owner_evidence(kernel):
         if len(owners) != 1 or str(owners[0]["allocation"].dtype) != "float32":
             raise AssertionError("The half view must share the actual 128-byte float32 allocation")
         owner = owners[0]
-        provenance = function.attrs.get("tl.ascend_s6_source_data", {})
+        provenance = function.attrs.get("tl.ascend_storage_source_data", {})
 
         def original(variable, provenance=provenance):
             for _ in range(len(provenance) + 1):
@@ -213,7 +213,7 @@ def mixed_owner_evidence(kernel):
 
         remaps = [
             row
-            for row in function.attrs["tl.ascend_s5_buffer_remap"]
+            for row in function.attrs["tl.ascend_pipeline_buffer_remap"]
             if row["logical_data"].same_as(owner["data"]) or original(row["logical_data"]).same_as(owner["source_data"])
         ]
         if len(remaps) != 1:

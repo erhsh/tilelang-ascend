@@ -67,14 +67,30 @@ Vector 指令选择、mask 合法化、Persistent 参数/partial-wave 保护及 
 | 关键源码修复 | Fill 操作数及 Block 别名访问元数据 | 两处修复已实现，临时 native 回归已准备 | 格式、静态及缓存检查通过；native/NPU 待环境验证 | 待用户审核 |
 | 正式 Python 格式 | 5 个正式 Python 文件与 CI 格式对齐 | 已完成，无逻辑修改 | Ruff 0.17.3 格式及 lint、AST 一致性、diff 检查通过 | 待用户审核 |
 | 完整 PR 格式门禁 | CI 覆盖的全部 Python 文件 | 剩余 25 个脚本及 53 个测试文件已机械格式化 | 全部 111 个 Python 文件通过 Ruff 格式及 lint；语义 AST 和 diff 检查通过 | 待用户审核 |
+| CI 调度依赖与验证适配 | 容器内 Z3 依赖、正式 IR key 和 cache ABI 断言 | CI 安装及求解预检、4 个脚本和 15 个测试文件已更新 | Z3 实际求解、solver/oracle 105 项及入口 11 项通过；native/NPU 待 CI 复跑 | 待用户审核 |
 
-当前工作对齐完整 PR 的格式门禁。正式 Python 文件与 C++ 已通过对应格式检查；
-CI 剩余差异来自仍保留在 PR 中的 25 个验收脚本和 53 个测试文件，已使用
-Ruff 0.17.3 机械格式化。按 CI 的完整清单，全部 111 个 Python 文件通过格式和
-lint 检查。格式化前后语义 AST（含 type comments）一致；type-ignore 的标签及
-所属语句保持一致，位置行号仅随排版移动。没有逻辑或 docstring 改动。
-本步提交范围为这 78 个文件及本计划，不包含功能修改或 native/NPU 验证，也不
-改变中间验证材料的最终合入范围；推送后等待审核。
+当前工作补齐 CI 的调度依赖与验证适配。测试容器加载环境后，使用同一 Python
+安装 `z3-solver>=4.13.0,<4.15.5`，先检查导入、版本与最小 SAT 求解，再运行测试。
+Z3 仍为调度器可选依赖，不加入通用运行时依赖。迁移测试与脚本使用正式的
+constraint、pipeline、storage、handoff、local sync 和 auto 元数据名称；cache
+ABI 明确断言 constraint 5、sync 2、auto 3。同步更新负例诊断及 legacy 元数据
+隔离检查，保留原有用例、物理存储与同步协议 oracle，不增加 skip 或放宽断言。
+完整 PR 的格式 CI 已通过；本轮全部 111 个 Python 文件再次通过 Ruff 0.17.3
+格式及 lint 检查，工作区 diff 检查通过。
+
+本地主机使用 Z3 4.15.4，solver/oracle 105 项、独立 `s2_check_solver.py` 入口及
+S2 入口回归 11 项通过。CI YAML、内外两层 Bash 语法与 Python 语法检查通过。
+当前 Windows 环境缺少匹配的 TVM/native 构建和 NPU，IR、缓存及设备 oracle 的
+执行结果须由更新后的 Linux/A3 CI 确认；不将修复前的通过结果作为本轮验收。
+本步只修复 CI 依赖与现存验证材料，不改变其最终合入范围；推送后等待审核。
+
+本步独立验证入口：
+
+| 入口 | 环境 | 验证内容与通过条件 |
+| --- | --- | --- |
+| `s2_check_solver.py --output <报告路径>` | Python、pytest、受支持的 Z3，无需 TVM/NPU | 真实 solver 探测及全部 105 项数值协议/oracle 通过 |
+| `s4_check_sync_coverage.py`、`s8_check_integration_ir.py` | Linux、匹配的 native 构建与 build manifest；传入 `--platform a3 --output <报告路径>` | 新元数据贯通最终 IR，损坏协议被拒绝；auto 的物理存储、缓存及 source oracle 通过 |
+| `s7_run_sync_stress_npu.py`、`s8_run_workloads_npu.py` | A3 NPU 及匹配构建；按入口参数运行 | 正式 local sync/handoff/auto 元数据被设备验证脚本识别，原有数值及协议检查通过 |
 
 关键源码修复已实现：Auto 调用审计按公开 ABI 区分 Fill 与 Add 的目标
 操作数，并验证 Fill helper、目标类型及无访存副作用的算术标量。存储别名规范化
@@ -83,7 +99,8 @@ lint 检查。格式化前后语义 AST（含 type comments）一致；type-igno
 缓存 ABI 递增，legacy 及独立同步策略的缓存行为保持不变。
 临时回归使用真实 TVM TIR/FFI，覆盖合法与非法 Fill、Add、外层 Let 别名、
 match_buffer、源 IR 不变及重复规范化；本环境缺少匹配的 TVM/native 构建，
-尚未运行其 native 断言。测试和迁移验收脚本按用户要求不纳入仓库改动。
+尚未运行其 native 断言，上述临时回归仍未纳入仓库。本步仅同步已在 PR 中的
+迁移测试与验收脚本，不改变其最终合入范围。
 constraint 配合 legacy 同步时，排队 Wait 与事件 ID 复用的验证风险仍待 native
 最小用例及设备压力测试确认；本轮不改变同步策略或插入额外屏障。
 固定源码基线、主仓参考、默认策略及 schema 兼容逻辑保持不变。历史设备结果见

@@ -32,8 +32,8 @@ def _copy(src, dst, *, load, count=64, src_offset=0, dst_offset=0):
 
 def _task(statement, unit, iteration):
     value = tir.Cast("int64", iteration) if isinstance(iteration, tir.PrimExpr) else tir.const(iteration, "int64")
-    body = tir.AttrStmt(tir.const(0, "int64"), "tl.ascend_s4_iter", value, statement)
-    return tir.AttrStmt(tir.const(unit, "int64"), "tl.ascend_s4_task", 1, body)
+    body = tir.AttrStmt(tir.const(0, "int64"), "tl.ascend_constraint_iteration", value, statement)
+    return tir.AttrStmt(tir.const(unit, "int64"), "tl.ascend_constraint_task_id", 1, body)
 
 
 def _fixture(
@@ -120,9 +120,9 @@ def _fixture(
         "logical_shape": [64],
         "physical_shape": list(physical_shape),
     }
-    final = final.with_attr("tl.ascend_s5_buffer_remap", [remap])
+    final = final.with_attr("tl.ascend_pipeline_buffer_remap", [remap])
     return final.with_attr(
-        "tl.ascend_s4_manifest",
+        "tl.ascend_constraint_plan",
         {"schema_version": 2, "source_graph": graph, "source_function": original, "candidates": []},
     )
 
@@ -185,10 +185,10 @@ def test_claimed_unused_versions_must_still_be_physically_allocated(versions):
 @pytest.mark.parametrize("field,value", [("version_stride_bytes", 128), ("versions", 4), ("selector_origin", 9)])
 def test_inconsistent_remap_geometry_is_rejected(field, value):
     function = _fixture(2, 2)
-    remap = dict(function.attrs["tl.ascend_s5_buffer_remap"][0].items())
+    remap = dict(function.attrs["tl.ascend_pipeline_buffer_remap"][0].items())
     remap[field] = value
-    with pytest.raises(tvm.TVMError, match="S5"):
-        _verify(function.with_attr("tl.ascend_s5_buffer_remap", [remap]))
+    with pytest.raises(tvm.TVMError, match="physical version geometry|version selector origin"):
+        _verify(function.with_attr("tl.ascend_pipeline_buffer_remap", [remap]))
 
 
 @pytest.mark.parametrize("duplicate", [False, True])
@@ -325,15 +325,19 @@ def test_real_injected_prologue_guards_exclude_negative_logical_iterations():
     body = tir.stmt_functor.ir_transform(function.body, None, one_trip, ["tir.For"])
     planned = _plan(tvm.IRModule.from_expr(function.with_body(body)), configs())
     function = tilelang.transform.InjectSoftwarePipeline()(planned)["main"]
-    units = [int(unit) for unit in planned["main"].attrs["tl.ascend_s4_manifest"]["candidates"][0]["unit_ids"]]
+    units = [int(unit) for unit in planned["main"].attrs["tl.ascend_constraint_plan"]["candidates"][0]["unit_ids"]]
 
     def observe_task(attribute):
-        if attribute.attr_key != "tl.ascend_s4_task":
+        if attribute.attr_key != "tl.ascend_constraint_task_id":
             return attribute
         iterations = []
         tir.stmt_functor.post_order_visit(
             attribute.body,
-            lambda node: iterations.append(node.value) if isinstance(node, tir.AttrStmt) and node.attr_key == "tl.ascend_s4_iter" else None,
+            lambda node: (
+                iterations.append(node.value)
+                if isinstance(node, tir.AttrStmt) and node.attr_key == "tl.ascend_constraint_iteration"
+                else None
+            ),
         )
         assert len(iterations) == 1
         return tir.Evaluate(tir.call_extern("handle", "observe_unit", attribute.node, iterations[0]))

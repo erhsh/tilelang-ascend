@@ -42,8 +42,8 @@ def test_new_sync_abi_is_internal_and_independent_of_the_planner(tmp_path, monke
     args = _arguments(make_pipeline_kernel(), fixture_profile())
     args["pass_configs"].update({"tl.ascend_pipeline_planner": planner, "tl.ascend_sync_strategy": "a3"})
     current, previous, payload = keys(cache(tmp_path), args, monkeypatch)
-    assert current != previous and payload[SYNC_ABI] == 1
-    assert (payload.get("ascend_constraint_compiler_abi") == 3) == (planner == "constraint")
+    assert current != previous and payload[SYNC_ABI] == 2
+    assert (payload.get("ascend_constraint_compiler_abi") == 5) == (planner == "constraint")
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -53,14 +53,14 @@ def test_default_and_explicit_old_sync_keep_their_existing_key_bytes(tmp_path, m
         args["pass_configs"]["tl.ascend_sync_strategy"] = "legacy"
     current, previous, payload = keys(cache(tmp_path), args, monkeypatch)
     assert SYNC_ABI not in payload and current == previous
-    assert payload["ascend_constraint_compiler_abi"] == 3
+    assert payload["ascend_constraint_compiler_abi"] == 5
 
 
 def test_user_configuration_does_not_override_the_fixed_sync_contract(tmp_path, monkeypatch):
     args = _arguments(make_pipeline_kernel(), fixture_profile())
     args["pass_configs"].update({"tl.ascend_sync_strategy": "a3", SYNC_ABI: 0})
     _, _, payload = keys(cache(tmp_path), args, monkeypatch)
-    assert payload[SYNC_ABI] == 1 and payload["pass_configs"][SYNC_ABI] == 0
+    assert payload[SYNC_ABI] == 2 and payload["pass_configs"][SYNC_ABI] == 0
 
 
 @pytest.mark.parametrize("layer", ["memory", "disk"])

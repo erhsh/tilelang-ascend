@@ -12,13 +12,13 @@ from test_s6_lifecycle import _analyze
 
 tir = tvm.tir
 TARGET = tvm.target.Target("c -keys=ascend -model=ascendc")
-MANIFEST = "tl.ascend_s4_manifest"
-REMAP = "tl.ascend_s5_buffer_remap"
+MANIFEST = "tl.ascend_constraint_plan"
+REMAP = "tl.ascend_pipeline_buffer_remap"
 
 
 def _strip_markers(function):
     def remove(attribute):
-        if attribute.attr_key in ("tl.ascend_s4_task", "tl.ascend_s4_iter"):
+        if attribute.attr_key in ("tl.ascend_constraint_task_id", "tl.ascend_constraint_iteration"):
             return attribute.body
         return attribute
 
@@ -57,7 +57,7 @@ def test_completed_overwrite_cannot_replace_the_expected_source_value():
 
 
 def _unit(statement, unit):
-    return tir.AttrStmt(tir.IntImm("int64", unit), "tl.ascend_s4_task", 1, statement)
+    return tir.AttrStmt(tir.IntImm("int64", unit), "tl.ascend_constraint_task_id", 1, statement)
 
 
 def _union_fixture(*, physical_alias=False, missing_completion=False):

@@ -333,7 +333,7 @@ def inspect_function(function):
     from tilelang.transform.ascend_z3_scheduler import verify_schedule
 
     attrs = function.attrs or {}
-    plan = attrs.get("tl.ascend_s8_schedule")
+    plan = attrs.get("tl.ascend_auto_schedule")
     if plan is None:
         raise AssertionError("Auto code must carry the actual complete S8 schedule")
     if int(plan["schema_version"]) != 1 or str(plan["model"]) != "abstract_issue_step_v1":
@@ -378,7 +378,7 @@ def inspect_function(function):
 
     def emitted_statements(node):
         # Walk statement occurrences, including shared nodes twice when emitted twice.
-        if isinstance(node, tvm.tir.AttrStmt) and node.attr_key == "tl.ascend_s8_task":
+        if isinstance(node, tvm.tir.AttrStmt) and node.attr_key == "tl.ascend_auto_schedule_task_id":
             if int(node.value) != 1:
                 raise AssertionError("Wrong actual finite task-instance marker")
             emitted.append(int(node.node))
@@ -424,7 +424,7 @@ def inspect_function(function):
     address_map = list(attrs.get("address_map", {}).items())
     selected = list(plan["selected_versions"].items())
     records = []
-    for row in attrs.get("tl.ascend_s8_buffer_remap", []):
+    for row in attrs.get("tl.ascend_auto_schedule_buffer_remap", []):
         logical, physical = row["logical_data"], row["physical_data"]
         versions, pitch, span, total = (int(row[key]) for key in ("versions", "pitch", "span", "total"))
         if versions not in (1, 2) or not 0 < span <= pitch or total != versions * pitch:
@@ -496,7 +496,7 @@ def describe_kernel(kernel, args, spec):
         if not isinstance(function, tvm.tir.PrimFunc):
             continue
         attrs = function.attrs or {}
-        captured = {str(key): attrs[key] for key in attrs.keys() if str(key).startswith("tl.ascend_s8_")}
+        captured = {str(key): attrs[key] for key in attrs.keys() if str(key).startswith("tl.ascend_auto_schedule")}
         record = {"function": symbol.name_hint, "attribute_names": sorted(captured)}
         device_ir = args.output.parent / f"{args.output.stem}-{symbol.name_hint}-device-ir.json"
         device_ir.write_text(tvm.ir.save_json(function) + "\n")

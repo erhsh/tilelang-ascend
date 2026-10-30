@@ -14,7 +14,7 @@ from test_s7_kernels import make_vector_sync_kernel
 
 tir = tvm.tir
 TARGET = tvm.target.Target("c -keys=ascend -model=ascendc")
-LOCAL = "tl.ascend_s7_local_sync"
+LOCAL = "tl.ascend_local_sync_plan"
 
 
 def configs():
@@ -186,9 +186,9 @@ def independent_dma_source():
     return (
         final.with_attr("address_map", {left.data: 0, right.data: 256})
         .with_attr("size_map", {left.data: 256, right.data: 256})
-        .with_attr("tl.ascend_s5_buffer_remap", [])
+        .with_attr("tl.ascend_pipeline_buffer_remap", [])
         .with_attr(
-            "tl.ascend_s4_manifest",
+            "tl.ascend_constraint_plan",
             {
                 "schema_version": 3,
                 "source_function": contract["source_function"],
@@ -340,10 +340,10 @@ def test_complete_lowering_preserves_actual_version_and_event_contract(versions,
     assert any("PipeBarrier" in line and "PIPE_ALL" in line for line in artifact.kernel_source.splitlines())
     for function in artifact.device_mod.functions.values():
         assert LOCAL in function.attrs
-        assert int(function.attrs["tl.ascend_s4_manifest"]["schema_version"]) == 3
+        assert int(function.attrs["tl.ascend_constraint_plan"]["schema_version"]) == 3
         assert str(function.attrs[LOCAL]["generator"]) == "a3"
         if trips >= 3:
-            actual = [int(row["versions"]) for row in function.attrs["tl.ascend_s5_buffer_remap"]]
+            actual = [int(row["versions"]) for row in function.attrs["tl.ascend_pipeline_buffer_remap"]]
             assert actual and max(actual) == versions
 
 

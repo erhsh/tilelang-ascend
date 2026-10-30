@@ -84,7 +84,7 @@ def test_actual_phase_calls_assign_each_domain_once(monkeypatch, planner, sync, 
                     waits.append(node)
 
         for device_function in artifact.device_mod.functions.values():
-            assert int(device_function.attrs["tl.ascend_s7_handoff_plan"]["channel_count"]) == 1
+            assert int(device_function.attrs["tl.ascend_handoff_plan"]["channel_count"]) == 1
             tvm.tir.stmt_functor.post_order_visit(device_function.body, visit)
         # One READY and one RELEASE in the static round body. Enabling the old
         # cross flag cannot add a second owner for either notification.
@@ -132,7 +132,7 @@ from test_s5_kernels import make_pipeline_kernel
 with tvm.transform.PassContext(config={'tl.ascend_auto_sync':True,'tl.ascend_memory_planning':True}):
     artifact=tilelang.lower(make_pipeline_kernel(trips=3,num_stages=0),target='ascendc',platform='A3')
 for function in artifact.device_mod.functions.values():
-    assert not any(str(key).startswith('tl.ascend_s7_') for key in function.attrs.keys())
+    assert not any(str(key).startswith(('tl.ascend_handoff_', 'tl.ascend_local_sync_')) for key in function.attrs.keys())
 """
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([str(Path(__file__).resolve().parent), env.get("PYTHONPATH", "")])
@@ -170,7 +170,7 @@ def test_legacy_manual_reference_keeps_balanced_mode2_protocol(direction):
                 waits.append(node)
 
     for function in artifact.device_mod.functions.values():
-        assert not any(str(key).startswith("tl.ascend_s7_handoff_") for key in function.attrs.keys())
+        assert not any(str(key).startswith("tl.ascend_handoff_") for key in function.attrs.keys())
         tvm.tir.stmt_functor.post_order_visit(function.body, visit)
     assert len(sets) == len(waits) == 2
     assert {int(call.args[1]) for call in sets} == {0, 1}

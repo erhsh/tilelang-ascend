@@ -14,9 +14,9 @@ from tilelang.engine.phase import LowerAndLegalize
 from test_s4_kernels import make_vector_kernel, vector_pass_configs
 
 tir = tvm.tir
-TASK = "tl.ascend_s4_task"
-ITER = "tl.ascend_s4_iter"
-MANIFEST = "tl.ascend_s4_manifest"
+TASK = "tl.ascend_constraint_task_id"
+ITER = "tl.ascend_constraint_iteration"
+MANIFEST = "tl.ascend_constraint_plan"
 
 
 def _before_planning(function):

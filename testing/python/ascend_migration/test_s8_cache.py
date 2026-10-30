@@ -51,8 +51,8 @@ def keys(instance, args, monkeypatch):
 
 def test_auto_has_fixed_internal_abi_without_a_nanosecond_cost_model(tmp_path, monkeypatch):
     current, old, payload = keys(cache(tmp_path), arguments(), monkeypatch)
-    assert current != old and payload[ABI] == 1
-    assert payload["ascend_sync_compiler_abi"] == 1
+    assert current != old and payload[ABI] == 3
+    assert payload["ascend_sync_compiler_abi"] == 2
     assert "tl.ascend_pipeline_cost_model" not in payload["pass_configs"]
 
 
@@ -69,7 +69,7 @@ def test_user_field_cannot_override_internal_auto_abi(tmp_path, monkeypatch):
     args = arguments()
     args["pass_configs"][ABI] = 0
     _, _, payload = keys(cache(tmp_path), args, monkeypatch)
-    assert payload[ABI] == 1 and payload["pass_configs"][ABI] == 0
+    assert payload[ABI] == 3 and payload["pass_configs"][ABI] == 0
 
 
 @pytest.mark.parametrize("layer", ["memory", "disk"])

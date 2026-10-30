@@ -12,7 +12,7 @@ from test_s8_kernels import make_gemm_kernel, make_mixed_kernel, make_reduce_ker
 
 TIR = tvm.tir
 TARGET = tvm.target.Target("c -keys=ascend -model=ascendc")
-REMAP = "tl.ascend_s8_buffer_remap"
+REMAP = "tl.ascend_auto_schedule_buffer_remap"
 
 
 def configs():
@@ -228,7 +228,7 @@ def test_reduction_scratch_extent_cannot_replace_the_required_geometry(reduction
 
     original = reduction[0]
     if boundary == "source":
-        original = original.attrs["tl.ascend_s8_schedule"]["source_function"]
+        original = original.attrs["tl.ascend_auto_schedule"]["source_function"]
     function = rewrite_calls(original, shrink)
     assert changed
     with pytest.raises(tvm.TVMError, match="scratch|Scratch|pointer.*interval|pointer.*extent"):
@@ -239,7 +239,7 @@ def test_reduction_scratch_extent_cannot_replace_the_required_geometry(reduction
 
 
 def test_reduction_scratch_must_fit_its_real_source_allocation(reduction):
-    source = reduction[0].attrs["tl.ascend_s8_schedule"]["source_function"]
+    source = reduction[0].attrs["tl.ascend_auto_schedule"]["source_function"]
     roots = []
 
     def find(node):
@@ -294,7 +294,7 @@ def test_reduction_scratch_must_fit_its_real_source_allocation(reduction):
 @pytest.mark.parametrize("boundary", ["source", "planner"])
 @pytest.mark.parametrize("damage", ["global", "half_typed", "source_overlap"])
 def test_private_reduction_scratch_keeps_its_audited_role(reduction, boundary, damage):
-    source = reduction[0].attrs["tl.ascend_s8_schedule"]["source_function"]
+    source = reduction[0].attrs["tl.ascend_auto_schedule"]["source_function"]
     changed = False
 
     def mutate(call):
@@ -351,7 +351,7 @@ def test_mask_reaching_setter_fault_is_rejected_after_legalization(reduction, da
 
 def test_same_pool_alias_cannot_overwrite_an_earlier_source_producer(gemm):
     function = gemm[0]
-    storages = function.attrs["tl.ascend_s8_schedule"]["source_analysis"]["storages"]
+    storages = function.attrs["tl.ascend_auto_schedule"]["source_analysis"]["storages"]
     owners = [
         row
         for row in function.attrs[REMAP]
@@ -429,7 +429,7 @@ def test_nonempty_source_requires_the_same_actual_vector_launch_axis(mixed):
 @pytest.mark.parametrize("damage", ["capacity", "dtype"])
 def test_caller_workspace_buffer_abi_cannot_be_resized_or_retyped(mixed, damage):
     function = mixed[0]
-    channel = function.attrs["tl.ascend_s8_schedule"]["source_contract"]["channel"]["data"]
+    channel = function.attrs["tl.ascend_auto_schedule"]["source_contract"]["channel"]["data"]
     buffers = dict(function.buffer_map.items())
     matches = [param for param, buffer in buffers.items() if buffer.data.same_as(channel)]
     assert len(matches) == 1

@@ -40,7 +40,9 @@ def _pair(domain, slot=0):
 def _fixture(buffers, statements, emitted, *, addresses=None, noalias=True):
     source = _function(buffers, statements, noalias=noalias)
     graph = tilelang.transform.AnalyzeAscendSchedule(source, "A3")
-    marked = [tir.AttrStmt(tir.const(index, "int64"), "tl.ascend_s4_task", 1, statement) for index, statement in enumerate(statements)]
+    marked = [
+        tir.AttrStmt(tir.const(index, "int64"), "tl.ascend_constraint_task_id", 1, statement) for index, statement in enumerate(statements)
+    ]
     source = _function(buffers, marked, noalias=noalias)
     body = [marked[item] if isinstance(item, int) else item for item in emitted]
     final = _function(buffers, body, noalias=noalias)
@@ -56,7 +58,7 @@ def _fixture(buffers, statements, emitted, *, addresses=None, noalias=True):
     final = final.with_attr("address_map", address_map)
     final = final.with_attr("size_map", size_map)
     return final.with_attr(
-        "tl.ascend_s4_manifest",
+        "tl.ascend_constraint_plan",
         {
             "schema_version": 1,
             "source_graph": graph,
@@ -137,7 +139,7 @@ def test_byte_effects_alone_do_not_prove_stable_call_identity(payload):
         original = _add(a, a, a)
         half_view = _buffer("half_view", dtype="float16", shape=(256,), data=a.data)
         changed = _add(half_view, half_view, half_view, count=128)
-    final = tir.AttrStmt(tir.const(0, "int64"), "tl.ascend_s4_task", 1, changed)
+    final = tir.AttrStmt(tir.const(0, "int64"), "tl.ascend_constraint_task_id", 1, changed)
     with pytest.raises(tvm.TVMError, match="payload changed"):
         _verify(_fixture([a], [original], [final]))
 
@@ -201,7 +203,7 @@ def test_stable_task_coverage_is_required(corruption):
         "missing": [0],
         "duplicate": [0, 0],
         "unmarked": [0, ops[1]],
-        "wrong_id": [0, tir.AttrStmt(tir.const(9, "int64"), "tl.ascend_s4_task", 1, ops[1])],
+        "wrong_id": [0, tir.AttrStmt(tir.const(9, "int64"), "tl.ascend_constraint_task_id", 1, ops[1])],
     }[corruption]
     with pytest.raises(tvm.TVMError, match="[Cc]onstraint|Unmarked"):
         _verify(_fixture([a, b], ops, emitted))
@@ -212,9 +214,9 @@ def test_corrupt_iteration_identity_is_not_ignored(boolean):
     function = _copy_add_store()
 
     def insert(node):
-        if isinstance(node, tir.AttrStmt) and node.attr_key == "tl.ascend_s4_task":
+        if isinstance(node, tir.AttrStmt) and node.attr_key == "tl.ascend_constraint_task_id":
             value = tir.const(False, "bool") if boolean else tir.const(0, "int32")
-            body = tir.AttrStmt(tir.const(99, "int64"), "tl.ascend_s4_iter", value, node.body)
+            body = tir.AttrStmt(tir.const(99, "int64"), "tl.ascend_constraint_iteration", value, node.body)
             return tir.AttrStmt(node.node, node.attr_key, node.value, body)
         return None
 

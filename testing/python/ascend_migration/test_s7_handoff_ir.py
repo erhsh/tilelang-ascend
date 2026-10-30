@@ -11,8 +11,8 @@ from test_s7_kernels import make_cv_handoff_kernel
 
 tir = tvm.tir
 TARGET = tvm.target.Target("c -keys=ascend -model=ascendc")
-SOURCE = "tl.ascend_s7_handoff_source"
-PLAN = "tl.ascend_s7_handoff_plan"
+SOURCE = "tl.ascend_handoff_source"
+PLAN = "tl.ascend_handoff_plan"
 
 
 def handoff_configs(strategy="a3"):
