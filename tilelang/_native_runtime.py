@@ -1,6 +1,6 @@
 # Copyright (c) Tile-AI Organization.
 # Licensed under the MIT License.
-"""Copy optional native dependencies without importing the TileLang runtime."""
+"""Configure packaged native dependencies without importing the TileLang runtime."""
 
 from __future__ import annotations
 
@@ -45,9 +45,7 @@ def configure_pypi_runtime(search_dirs: Iterable[str | Path], destination_dirs: 
     )
     if manifest is None:
         raise FileNotFoundError("Native runtime manifest not found in the configured CMake build")
-    # Reuse the manifest validation without copying or modifying any native source.
-    copy_native_runtime_files([manifest.parent], [], required=False)
-    enabled = bool(manifest.read_text(encoding="utf-8").strip())
+    enabled = _validate_native_runtime_manifest(manifest)
     protected = {directory.resolve() for directory in directories}
     protected.add(manifest.parent.resolve())
     destinations = {Path(directory).resolve() for directory in destination_dirs}
@@ -173,40 +171,11 @@ def copy_native_notices(source_root: str | Path, package_dirs: Iterable[str | Pa
     return copied
 
 
-def copy_native_runtime_files(
-    search_dirs: Iterable[str | Path],
-    destination_dirs: Iterable[str | Path],
-    *,
-    required: bool = False,
-) -> list[Path]:
-    """Copy the first build manifest's files to each package library directory.
-
-    An empty manifest means the feature is disabled and stops the search. Entries
-    must be absolute paths to Z3 shared libraries, including any SONAME alias.
-    Missing manifests are allowed for older builds unless ``required`` is true.
-    Explicitly requiring the feature also rejects an empty OFF manifest.
-    An OFF manifest removes stale Z3 files from the destination directories,
-    except directories also used to search for build manifests.
-    All entries are validated before copying; source files are never removed.
-    The returned paths name files actually copied, excluding files already in place.
-    """
-    manifest = None
-    searched = []
-    search_paths = [Path(directory) for directory in search_dirs]
-    for directory in search_paths:
-        candidate = directory / NATIVE_RUNTIME_MANIFEST
-        searched.append(str(candidate))
-        if candidate.exists():
-            manifest = candidate
-            break
-    if manifest is None:
-        if required:
-            raise FileNotFoundError("Native runtime manifest not found; searched: " + ", ".join(searched))
-        return []
+def _validate_native_runtime_manifest(manifest: Path) -> bool:
+    """Validate the selected build manifest and report whether Z3 is enabled."""
     if not manifest.is_file():
         raise ValueError(f"Native runtime manifest is not a file: {manifest}")
 
-    sources = []
     basenames = set()
     for line_number, line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
         entry = line.strip()
@@ -220,35 +189,4 @@ def copy_native_runtime_files(
         if source.name in basenames:
             raise ValueError(f"Duplicate native runtime basename in {manifest}: {source.name}")
         basenames.add(source.name)
-        sources.append(source)
-
-    if required and not sources:
-        raise ValueError(f"Native runtime was required, but the OFF manifest is empty: {manifest}")
-    if not sources:
-        protected_dirs = {directory.resolve() for directory in search_paths}
-        protected_dirs.add(manifest.parent.resolve())
-        for directory in destination_dirs:
-            destination = Path(directory)
-            if destination.resolve() in protected_dirs or not destination.is_dir():
-                continue
-            for candidate in destination.iterdir():
-                if _Z3_LIBRARY_NAME.fullmatch(candidate.name) is not None and (candidate.is_file() or candidate.is_symlink()):
-                    candidate.unlink()
-        return []
-
-    copied = []
-    destinations = set()
-    for directory in destination_dirs:
-        destination = Path(directory)
-        for source in sources:
-            target = destination / source.name
-            resolved_target = target.resolve()
-            if resolved_target in destinations:
-                continue
-            destinations.add(resolved_target)
-            if source.resolve() == resolved_target:
-                continue
-            destination.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-            copied.append(target)
-    return copied
+    return bool(basenames)

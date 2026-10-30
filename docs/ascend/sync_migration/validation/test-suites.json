@@ -8,7 +8,6 @@
     "testing/python/language/test_ascend_upstream_sync_cube_pipeline.py",
     "testing/python/language/test_ascend_upstream_sync_dynamic_pipeline.py",
     "testing/python/language/test_ascend_upstream_sync_guards.py",
-    "testing/python/language/test_ascend_upstream_sync_helper_effects.py",
     "testing/python/language/test_ascend_upstream_sync_insert.py",
     "testing/python/language/test_ascend_upstream_sync_persistent.py",
     "testing/python/language/test_ascend_upstream_sync_persistent_pipeline.py",
@@ -30,7 +29,6 @@
     "testing/python/test_ascend_runtime_contract.py",
     "testing/python/test_ascend_sync_cache_abi.py",
     "testing/python/cache/test_ascend_runtime_contract_cache.py",
-    "testing/python/test_native_runtime_packaging.py",
     "testing/python/test_pypi_z3_runtime.py"
   ],
   "device": [

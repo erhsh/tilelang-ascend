@@ -82,5 +82,37 @@
     "The Z3 matrix used a temporary verification script whose exact core test selection was not retained; test-suites.json describes the host, device and separate legacy VS suites only.",
     "Compiler installation checks do not establish standalone runtime-only loading. A separate v8 check failed with missing IRBuilderFrameNode RTTI and reproduced on v6.",
     "Performance data is the latest retained v8 measurement of four small kernels, includes host launch gaps and does not establish device-only speedup or Persistent+SIP overhead."
-  ]
+  ],
+  "test_suite_organization": {
+    "host_files": 30,
+    "note": "The current manifest reflects merged helper-admission and packaging tests. Historical v8 result counts above retain their original scope and were not rerun as part of this cleanup."
+  },
+  "scoped_cleanup_checks": {
+    "base_commit": "24965b7b17b169f22889b0f36ae6ddc0c85fbaa8",
+    "source_engine_abi": "upstream-1c0f402e-legacy-v10",
+    "scope": "Unused-code removal and test/document consolidation; no supported feature package removed.",
+    "packaging_tests": {
+      "platform": "WSL Linux x86_64, Python 3.14.4",
+      "passed": 37,
+      "skipped": 0,
+      "includes_real_elf_and_cross_soname_checks": true
+    },
+    "cpp_object_compilation": {
+      "compiler": "Zig 0.16.0 / Clang",
+      "target": "x86_64-linux-gnu",
+      "tvm_commit": "c2921fdaf795b1103d21abc962e83a209c7258d7",
+      "passed_translation_units": 18,
+      "includes_z3_on_off_and_ffi": true,
+      "full_library_link_or_runtime_tested": false
+    },
+    "preservation_checks": {
+      "active_cpp_paths_compared": 8,
+      "packaging_differential_cases": 13,
+      "helper_admission_cases_migrated": 17,
+      "merged_tail_copy_cases": 71,
+      "language_test_verification": "AST equivalence and parameter preservation, not native execution"
+    },
+    "format": "Ruff 0.6.5 lint/format and clang-format 18.1.8 passed on changed files.",
+    "full_native_npu_or_install_acceptance_rerun": false
+  }
 }

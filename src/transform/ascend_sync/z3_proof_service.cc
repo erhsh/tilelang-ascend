@@ -37,7 +37,6 @@
 
 #include <algorithm>
 #include <climits>
-#include <map>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -137,12 +136,10 @@ struct Namespace {
 class Z3ProofService::Impl : ExprFunctor<z3::expr(const PrimExpr &)> {
 public:
   using Base = ExprFunctor<z3::expr(const PrimExpr &)>;
-  using Self = Z3ProofService::Impl;
 
   /// @brief Z3 context owning every handle of this prover.
   // Null until the solver materializes; Materialize creates a context
-  // private to this prover, which clones of a materialized prover then
-  // share (shared_ptr) so their copied handles stay valid.
+  // private to this prover so its handles remain local to one service.
   std::shared_ptr<z3::context> ctx;
 
   /// @brief Z3 solver instance
@@ -591,60 +588,6 @@ public:
     }
   }
 
-  void CopyFrom(const Self &other_) {
-    if (!other_.solver) {
-      // The source has not materialized: its entire Z3 state is the journal.
-      // Copy it and stay lazy; a later Materialize on this clone rebuilds
-      // the same solver state the source would have built.
-      solver.reset();
-      memo_.clear();
-      z3_pool_.clear();
-      free_slots_.clear();
-      scope_memo_snapshots_.clear();
-      ns = Namespace();
-      side_effect_exprs_.clear();
-      ctx = other_.ctx;
-      scope_stack_ = other_.scope_stack_;
-      scope_side_effects_.assign(scope_stack_.size(), {});
-      scope_memo_snapshots_.resize(scope_stack_.size());
-      timeout_ms = other_.timeout_ms;
-      rlimit = other_.rlimit;
-      return;
-    }
-    // Z3 handles cannot move between contexts. Destroy every handle owned by
-    // this fresh clone before adopting the source Analyzer's context.
-    solver.reset();
-    memo_.clear();
-    z3_pool_.clear();
-    free_slots_.clear();
-    scope_memo_snapshots_.clear();
-    ctx = other_.ctx;
-    solver.emplace(CreateSolver(*ctx));
-
-    // Copy other objects.
-    ns = other_.ns;
-    // Replay live memo entries in slot order: deterministic, unlike the
-    // pointer-hashed iteration order of memo_ itself.
-    std::vector<std::pair<size_t, const PrimExpr *>> live;
-    live.reserve(other_.memo_.size());
-    for (auto &kv : other_.memo_)
-      live.emplace_back(kv.second, &kv.first);
-    std::sort(live.begin(), live.end(),
-              [](auto &a, auto &b) { return a.first < b.first; });
-    for (auto &[idx, e] : live)
-      MemoPut(*e, *other_.z3_pool_[idx]);
-    for (auto a : other_.solver->assertions()) {
-      solver->add(a);
-    }
-    // Copy timeout options, but not other solver options.
-    SetTimeoutMs(other_.timeout_ms);
-    SetRLimit(other_.rlimit);
-    // Copy the scope stack, which contains comments for SMTLIB2 generation.
-    scope_stack_ = other_.scope_stack_;
-    scope_side_effects_ = other_.scope_side_effects_;
-    scope_memo_snapshots_ = other_.scope_memo_snapshots_;
-  }
-
   /// @brief Set timeout in milliseconds
   void SetTimeoutMs(unsigned timeout_ms) {
     this->timeout_ms = timeout_ms;
@@ -713,126 +656,6 @@ public:
     std::stringstream ss;
     ss << solver->statistics();
     return ss.str();
-  }
-
-  String GetModel(const PrimExpr &expr) {
-    ValidateInput(expr);
-    Materialize();
-    solver->set("model", true);
-    solver->push();
-    solver->add(!ConvertBool(expr));
-    auto result = solver->check();
-    String model_str;
-    if (result == z3::sat) {
-      z3::model m = solver->get_model();
-      std::map<std::string, z3::expr> model_map;
-      for (unsigned i = 0; i < m.size(); i++) {
-        z3::func_decl d = m[i];
-        model_map.emplace(d.name().str(), m.get_const_interp(d));
-      }
-      std::stringstream ss;
-      for (const auto &[k, v] : model_map) {
-        ss << "  " << k << " = " << v << "\n";
-      }
-      model_str = ss.str();
-    }
-    solver->pop();
-    solver->set("model", false);
-    return model_str;
-  }
-
-  /*!
-   * \brief Count the number of distinct integer values satisfying current
-   * constraints.
-   *
-   * Uses Z3's model enumeration (AllSAT pattern) to count solutions:
-   * 1. Find a satisfying assignment
-   * 2. Add a blocking clause to exclude it
-   * 3. Repeat until UNSAT
-   *
-   * \param var The variable to count values for
-   * \param max_count Safety limit on enumeration
-   * \param min_consecutive Minimum consecutive count requirement (0 to disable)
-   * \return Number of satisfying values, -1 on error, -2 if min_consecutive
-   * constraint not met
-   */
-  int64_t CountSatisfyingValues(const Var &var, int64_t max_count,
-                                int64_t min_consecutive = 1) {
-    if (!IsValidDType(var->dtype)) {
-      return -1;
-    }
-
-    Materialize();
-    solver->set("model", true);
-    solver->push();
-
-    // Convert the TVM variable to Z3 expression
-    z3::expr z3_var = VisitInt(var);
-
-    int64_t count = 0;
-    std::vector<int64_t> found_values;
-
-    while (count < max_count) {
-      auto result = solver->check();
-      if (result != z3::sat) {
-        break; // No more solutions
-      }
-
-      z3::model m = solver->get_model();
-      z3::expr val_expr = m.eval(z3_var, true);
-
-      // Extract the integer value from Z3 expression
-      int64_t val;
-      if (val_expr.is_numeral()) {
-        val = val_expr.get_numeral_int64();
-      } else {
-        // If we can't get a concrete value, stop enumeration
-        break;
-      }
-
-      found_values.push_back(val);
-      count++;
-
-      // Add blocking clause: var != val (exclude this solution)
-      solver->add(z3_var != ctx->int_val(val));
-    }
-
-    solver->pop();
-    solver->set("model", false);
-
-    // Clear any side effects from visiting the variable
-    for (const auto &expr : side_effect_exprs_) {
-      MemoErase(expr);
-    }
-    side_effect_exprs_.clear();
-
-    // Check minimum consecutive constraint if enabled
-    if (min_consecutive > 0 && count > 0) {
-      // Sort the values to check consecutive groups
-      std::sort(found_values.begin(), found_values.end());
-
-      // Check that all values form groups of at least min_consecutive
-      // consecutive numbers
-      int64_t consecutive_count = 1;
-      for (size_t i = 1; i < found_values.size(); i++) {
-        if (found_values[i] == found_values[i - 1] + 1) {
-          // Consecutive value
-          consecutive_count++;
-        } else {
-          // Gap found, check if the previous group meets the minimum
-          if (consecutive_count < min_consecutive) {
-            return -2; // Previous group too small
-          }
-          consecutive_count = 1; // Start new group
-        }
-      }
-      // Check the last group
-      if (consecutive_count < min_consecutive) {
-        return -2; // Last group too small
-      }
-    }
-
-    return count;
   }
 
 private:
@@ -1201,20 +1024,7 @@ void Z3ProofService::SetTimeoutMs(unsigned timeout_ms) {
 void Z3ProofService::SetRLimit(unsigned max_step) {
   impl_->SetRLimit(max_step);
 }
-std::unique_ptr<Z3ProofService> Z3ProofService::Clone() const {
-  auto result = std::make_unique<Z3ProofService>();
-  result->impl_->CopyFrom(*impl_);
-  return result;
-}
 String Z3ProofService::GetStats() { return impl_->GetStats(); }
-String Z3ProofService::GetModel(const PrimExpr &expr) {
-  return impl_->GetModel(expr);
-}
-TVM_DLL int64_t Z3ProofService::CountSatisfyingValues(const Var &var,
-                                                      int64_t max_count,
-                                                      int64_t min_consecutive) {
-  return impl_->CountSatisfyingValues(var, max_count, min_consecutive);
-}
 bool Z3ProofService::Available() { return true; }
 
 Z3ProofService::Z3ProofService() : impl_(new Impl{}) {}

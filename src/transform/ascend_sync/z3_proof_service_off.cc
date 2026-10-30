@@ -61,11 +61,5 @@ void Z3ProofService::SetTimeoutMs(unsigned) { Unavailable(); }
 void Z3ProofService::SetRLimit(unsigned) { Unavailable(); }
 String Z3ProofService::GetSMTLIB2(Optional<PrimExpr>) { Unavailable(); }
 String Z3ProofService::GetStats() { Unavailable(); }
-String Z3ProofService::GetModel(const PrimExpr &) { Unavailable(); }
-int64_t Z3ProofService::CountSatisfyingValues(const tir::Var &, int64_t,
-                                              int64_t) {
-  Unavailable();
-}
-std::unique_ptr<Z3ProofService> Z3ProofService::Clone() const { Unavailable(); }
 
 } // namespace tvm::tl::ascend_sync

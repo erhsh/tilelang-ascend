@@ -2,6 +2,28 @@
 
 本文件仅记录实际移植或直接参考的来源。同步引擎完整闭包仍以
 [迁移设计](pass-design.md)为准；当前可选后端的实际覆盖范围见[实现进展](implementation-status.md)。
+历史调研与路线讨论统一指向
+[RFC #1971](https://github.com/tile-ai/tilelang-ascend/issues/1971)，不再另行维护实现前的拟议接口骨架。
+
+## 固定比较与迁移边界
+
+旧后端基线为 `43b0b69720f479894a13c02746599eccee5c5769`，使用 TVM
+`c2921fdaf795b1103d21abc962e83a209c7258d7`；主仓参考为
+`1c0f402e166a7d0a055c991d2f82d2175a7917b7`，使用 TVM
+`4211874e9e4b8770fd20ad0d98ab80afd1df5028`。源码 blob 记录不包含原工作树两份 TVM 修改；
+仅有 commit 不能重建那些受测快照，验收证据边界见[摘要](validation/summary.json)。
+
+迁移决策保留以下源码比较事实：
+
+- 本仓 `tilelang/engine/phase.py` 在旧 injector、flatten/storage rewrite 和最终
+  MemoryPlanning 后插同步；主仓 `tilelang/ascend/pipeline.py` 在
+  `LowerScheduledTIR` 前对任务/core/stage/version 分析，后续还可消费 alias proof。
+  因此本仓必须按最终物理地址分析，不能在同步后重新分配地址。
+- 主仓 `testing/ascend/_ir.py` 有 source-order/stage-0 的独立同步测试输入，说明同步核心
+  可以独立于 AutoSchedule 调度求解器接入；这不允许丢弃一般流水的 owner/epoch。
+- 本次保留旧 TIR、AscendC/PTO codegen 和现有 launch ABI，不迁移主仓 TVM-FFI runtime、
+  task scheduler 或 scheduled-TIR codec。源码闭包按实际调用裁剪，文件行数和直接 include
+  统计不能代替编译、协议或设备验收。
 
 ## Z3 证明服务
 
@@ -70,8 +92,10 @@
 | `src/transform/common/constr_visitor.h` | `3230b9967d380cef4f0207c67822aadcc5530a81` |
 | `src/ascend/transform/normalize_control_flow_for_schedule.cc` | `7ba1a0193e76b4f3760ad9074ca6a88cd26d2534` |
 
-同名模型移至 `src/transform/ascend_sync/upstream/`，并做旧 TIR/API 适配。
-`buffer_alias_context.h` 只提取同步所需 context；后续地址复用 planner 不移入当前链。
+活跃的任务、依赖、约束和版本模型移至 `src/transform/ascend_sync/upstream/`，并做旧 TIR/API 适配。
+表中的 alias-analysis 与 generation-lifetime 来源保留作审计记录；后续地址复用 planner
+不移入当前链，其无消费者的 context、记录和辅助头文件已裁剪。事件复用仍由同步核心的
+依赖闭包、完成关系和复用校验保护，不随这些 alias-only 工具删除。
 `ascend_pipe.h` 仅用于 ResourcePipe 和事件辅助类型的来源，不引入高层 op 检测目录。
 `constraints.{h,cc}` 通过独立 ProofAnalyzer 桥接旧 Analyzer 与 Z3 服务，不改变 TVM ABI。
 `legacy_snapshot.{h,cc}` 参考上游 normalization 的运行时求值位置；旧 TIR 使用真实

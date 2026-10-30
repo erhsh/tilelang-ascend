@@ -28,7 +28,6 @@
 #include <tvm/node/structural_equal.h>
 #include <tvm/runtime/container/array.h>
 #include <tvm/runtime/container/map.h>
-#include <tvm/runtime/container/string.h>
 #include <tvm/runtime/logging.h>
 #include <tvm/tir/buffer.h>
 #include <tvm/tir/expr.h>
@@ -51,26 +50,11 @@ namespace tvm::tl::ascend_sync {
 
 using namespace tir;
 
-constexpr const char *kBufferVersionMode = "tl.buffer_version_mode";
 constexpr const char *kMultiBufferCounterMap = "tl.multi_buffer_counter_map";
 constexpr const char *kStorageEpochGuardMap = "tl.storage_epoch_guard_map";
-constexpr const char *kMultiBufferBroadcastFill =
-    "tl.multi_buffer_broadcast_fill";
 
-enum class BufferVersionMode {
-  kAuto,
-  kIteration,
-  kCounter,
-};
-
-using BufferVersionModeMap = Map<Var, String>;
 using MultiBufferCounterMap = Map<Var, Buffer>;
 using StorageEpochGuardMap = Map<Var, PrimExpr>;
-using MultiBufferBroadcastFill = Array<Var>;
-
-// Mode annotations use the same storage data-Var key as BufferVersionMap.
-using BufferVersionModeTable =
-    std::unordered_map<Var, BufferVersionMode, ObjectPtrHash, ObjectPtrEqual>;
 
 struct MultiBufferOwnerInfo {
   ControlNode *loop{nullptr};
@@ -102,7 +86,6 @@ struct MultiBufferInfo {
   Buffer counter;
 
   bool UsesCounter() const { return counter.defined(); }
-  bool NeedsVersionDimension() const { return num_versions > 1; }
 
   const MultiBufferOwnerInfo *FindOwner(const IRStructure *node) const {
     ICHECK(node != nullptr) << "Cannot find an owner for a null IRStructure";
@@ -141,146 +124,11 @@ public:
     return Find(buffer->data);
   }
 
-  // Pass-local builders append resolved storage records through this method.
-  void AddInfo(MultiBufferInfo info) {
-    ICHECK_GT(info.num_versions, 0);
-    ICHECK(!info.owners.empty());
-    if (info.UsesCounter()) {
-      ICHECK_GT(info.counter_group_id, 0);
-      auto [group_it, inserted] = counter_group_representatives_.emplace(
-          info.counter_group_id, infos_.size());
-      if (!inserted) {
-        const MultiBufferInfo &existing = infos_[group_it->second];
-        ICHECK(existing.UsesCounter() &&
-               existing.counter.same_as(info.counter));
-        ICHECK_EQ(existing.owners.size(), info.owners.size());
-        for (size_t i = 0; i < info.owners.size(); ++i) {
-          ICHECK_EQ(existing.owners[i].loop, info.owners[i].loop);
-        }
-      }
-    } else {
-      ICHECK_EQ(info.counter_group_id, 0);
-      ICHECK(!info.counter.defined());
-      ICHECK_EQ(info.owners.size(), 1U);
-      ICHECK(is_one(info.owners.front().active_guard));
-    }
-    size_t index = infos_.size();
-    auto [_, inserted] = storage_indices_.emplace(info.storage, index);
-    ICHECK(inserted) << "Duplicate multi-buffer storage " << info.storage;
-    infos_.push_back(std::move(info));
-  }
-
 private:
   std::vector<MultiBufferInfo> infos_;
   std::unordered_map<Var, size_t, ObjectPtrHash, ObjectPtrEqual>
       storage_indices_;
-  std::unordered_map<int, size_t> counter_group_representatives_;
 };
-
-inline MultiBufferOwnerMap
-CollectMultiBufferOwners(const std::vector<std::shared_ptr<IRStructure>> &root,
-                         const L0StorageGroups &groups) {
-  MultiBufferOwnerMap owners;
-  std::function<void(IRStructure *)> visit = [&](IRStructure *node) {
-    if (!node || !node->IsControl())
-      return;
-    auto *control = static_cast<ControlNode *>(node);
-    auto annotation = control->control->annotations.Get(kMultiBufferEligible);
-    if (annotation.defined()) {
-      for (const Var &storage : Downcast<Array<Var>>(annotation.value())) {
-        Array<Var> members = groups.Members(storage);
-        if (std::any_of(members.begin(), members.end(), [&](const Var &member) {
-              return control->BodyTouchesStorage(member);
-            }))
-          owners[storage].push_back(control);
-      }
-    }
-    for (const auto &child : control->children)
-      visit(child.get());
-  };
-  for (const auto &node : root)
-    visit(node.get());
-  return owners;
-}
-
-// Recover the prepared plan in a later scheduled-TIR pass. This re-discovers
-// the annotated owners but does not recompute mode or active guards.
-inline MultiBufferPlan
-ReadMultiBufferPlan(const std::vector<std::shared_ptr<IRStructure>> &root,
-                    const BufferVersionMap &selected_versions,
-                    const L0StorageGroups &groups) {
-  MultiBufferPlan plan;
-  MultiBufferOwnerMap owners_by_storage =
-      CollectMultiBufferOwners(root, groups);
-  std::unordered_map<Var, int, ObjectPtrHash, ObjectPtrEqual> counter_groups;
-  int next_counter_group_id = 1;
-  for (const auto &[storage, num_versions] : selected_versions) {
-    // Preserve scheduled order: owner position is part of the shared counter
-    // protocol identity and later grouping compares owners pairwise.
-    auto owners_it = owners_by_storage.find(storage);
-    ICHECK(owners_it != owners_by_storage.end() && !owners_it->second.empty())
-        << "Prepared multi-buffer storage " << storage->name_hint
-        << " has no owner loop";
-    const std::vector<ControlNode *> &owners = owners_it->second;
-
-    MultiBufferInfo info;
-    info.storage = storage;
-    info.num_versions = num_versions;
-    bool uses_counter = false;
-    for (ControlNode *owner_loop : owners) {
-      MultiBufferOwnerInfo owner;
-      owner.loop = owner_loop;
-      auto counters =
-          owner_loop->control->annotations.Get(kMultiBufferCounterMap);
-      if (counters.defined()) {
-        MultiBufferCounterMap counter_map =
-            Downcast<MultiBufferCounterMap>(counters.value());
-        if (auto counter = counter_map.Get(storage)) {
-          if (uses_counter) {
-            ICHECK(info.counter.same_as(counter.value()))
-                << "Disjoint multi-buffer owners must share one counter";
-          } else {
-            info.counter = counter.value();
-            uses_counter = true;
-          }
-          auto guards =
-              owner_loop->control->annotations.Get(kStorageEpochGuardMap);
-          ICHECK(guards.defined())
-              << "Prepared counter storage is missing its active guard";
-          StorageEpochGuardMap guard_map =
-              Downcast<StorageEpochGuardMap>(guards.value());
-          auto guard = guard_map.Get(storage);
-          ICHECK(guard.defined())
-              << "Prepared counter storage is missing its active guard";
-          owner.active_guard = guard.value();
-        }
-      }
-      info.owners.push_back(std::move(owner));
-    }
-    if (uses_counter) {
-      // Counter storage identity reconstructs the shared physical group. One
-      // group may cover several disjoint owners; each owner is independently
-      // bound to its active-epoch domain below.
-      auto [group, inserted] =
-          counter_groups.emplace(info.counter->data, next_counter_group_id);
-      if (inserted)
-        ++next_counter_group_id;
-      info.counter_group_id = group->second;
-      for (const MultiBufferOwnerInfo &owner : info.owners) {
-        auto counters =
-            owner.loop->control->annotations.Get(kMultiBufferCounterMap);
-        ICHECK(counters.defined() &&
-               Downcast<MultiBufferCounterMap>(counters.value()).count(storage))
-            << "Every disjoint owner must carry the shared counter protocol";
-      }
-    } else {
-      ICHECK_EQ(info.owners.size(), 1U)
-          << "Iteration multi-buffering requires exactly one owner";
-    }
-    plan.AddInfo(std::move(info));
-  }
-  return plan;
-}
 
 enum class EpochDomainKind {
   kLexical,

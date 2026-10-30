@@ -28,9 +28,7 @@
 #include <tvm/runtime/container/string.h>
 #include <tvm/tir/expr.h>
 
-#include <cstdint>
 #include <functional>
-#include <memory>
 
 namespace tvm::tl::ascend_sync {
 
@@ -64,11 +62,6 @@ public:
   void SetTimeoutMs(unsigned timeout_ms);
   String GetSMTLIB2(Optional<PrimExpr> predicate = NullOpt);
   String GetStats();
-  String GetModel(const PrimExpr &predicate);
-  int64_t CountSatisfyingValues(const tir::Var &var, int64_t max_count = 2048,
-                                int64_t min_consecutive = 1);
-
-  std::unique_ptr<Z3ProofService> Clone() const;
 
 private:
   class Impl;

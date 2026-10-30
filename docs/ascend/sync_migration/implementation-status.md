@@ -1,7 +1,8 @@
 # 自动同步迁移：实现与验证
 
-本页记录实际实现与验收，设计和来源分别见[迁移设计](pass-design.md)、
-[实现骨架](pass-impl-skeleton.md)、[来源清单](upstream-sources.md)。
+本页记录实际实现与验收，实施契约和组件边界见[迁移设计](pass-design.md)，
+代码出处见[来源清单](upstream-sources.md)，历史路线论证见
+[RFC #1971](https://github.com/tile-ai/tilelang-ascend/issues/1971)。
 
 ## 当前结论
 
@@ -151,8 +152,9 @@ Vector/DMA 同步。一般 Developer 自动同步应同时开启 ordinary 与 VS
   结果，保留环境、引擎 ABI、测试范围、安装检查及已知限制。
 
 摘要中的完整验收对应 v8；清理基线 `aa219a3f` 已为 v10，新增了 unsigned 回绕和
-截断除法修复，尚无与该版本匹配的完整验收记录。本次文档清理没有重新执行原生构建、
-设备测试或安装验收，不能将历史结果视为当前源码通过。
+截断除法修复，尚无与该版本匹配的完整验收记录。摘要另列闲置代码清理的针对性检查：
+打包测试、18 个同步翻译单元的 Linux 目标对象编译，以及测试迁移和活跃路径不变性检查。
+这些检查不包含完整原生库链接、NPU 执行或安装验收，不能将历史结果视为当前源码通过。
 
 历史分项记录和重复审计文件已移除，原内容可从摘要注明的 Git revision 查阅。
 原始日志、验证脚本、完整 source manifest 和产物只记录了本机临时路径，未随仓库保存；
@@ -185,6 +187,8 @@ PY
 `host` 包含原主机范围及 PyPI Z3 运行时测试；codegen 矩阵和真实缓存重建需要
 Bisheng/CANN，但不启动 NPU。`device` 需要 A3 NPU，迁移用例显式关闭 Bisheng 自动补同步。
 `legacy_vs` 不启动 NPU，不使用 marker 过滤，也不包含在主机计数内。
+测试文件合并后，`host` 清单为 30 个文件；helper admission 用例并入 tail-copy 套件，
+有效的旧打包校验并入 PyPI Z3 套件。摘要保留原验收计数，不将文件组织调整当作重新验收。
 
 ON 验证应先确认 `tl.ascend_sync.Z3ProofServiceAvailable` 返回真，避免将大量 skip
 当作迁移覆盖通过。OFF 构建复用同一清单，验证不可用诊断及能力门禁；设备组合中的独立

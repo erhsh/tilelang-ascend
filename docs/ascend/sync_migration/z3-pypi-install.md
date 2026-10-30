@@ -48,8 +48,7 @@ NOTICE 继续分发。缺少 provider、版本越界、状态文件损坏或缺�
 ## 验证方式
 
 ```bash
-python -m pytest -q testing/python/test_pypi_z3_runtime.py \
-  testing/python/test_native_runtime_packaging.py -p no:cacheprovider
+python -m pytest -q testing/python/test_pypi_z3_runtime.py -p no:cacheprovider
 ```
 
 新增测试包含真实 ELF 的拷贝、依赖修补和跨 SONAME 加载；其中的小型 C provider 仅用于

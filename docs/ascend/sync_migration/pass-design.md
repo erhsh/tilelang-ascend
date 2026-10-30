@@ -15,8 +15,9 @@ payload、数组词法作用域和所有实际执行的计算，不把 break 当
 的单 owner 窄范围，不能推广到任意嵌套流水。
 
 技术方向已采纳：移植主仓同步引擎及 Z3 证明核心，通过 TileLang 侧服务适配旧 TIR。
-最初调研的论证、成本及证据汇总见
-[调研报告](research-report.md)，接口和文件划分见[实现骨架](pass-impl-skeleton.md)。
+历史调研、路线比较与成本讨论见
+[RFC #1971](https://github.com/tile-ai/tilelang-ascend/issues/1971)。
+本文保留实施契约和实际组件边界；已采用的来源及适配点见[来源记录](upstream-sources.md)。
 
 分析仅使用当前本地工作树，不参考其他分支或 PR。
 
@@ -63,15 +64,17 @@ InjectSoftwarePipeline（发布流水 provenance）
 新引擎不修改 buffer 分配、访问、版本数或地址映射，不在同步后增加内存复用。
 全部同步调用必须在 `AscendResourceScopeVerify` 前物化；MaskLegalize 后没有 TIR 改写。
 
-过渡接入代码如下，配置和入口均是拟新增接口：
+当前过渡接入如下：
 
 ```python
 mod = tilelang.transform.AscendMemoryPlanning()(mod)
 if pass_ctx.config.get("tl.ascend_sync_backend", "legacy") == "upstream":
     mod = tilelang.transform.AscendInsertSync(target, platform)(mod)
-else:
+elif pass_ctx.config.get("tl.ascend_sync_backend", "legacy") == "legacy":
     mod = tilelang.transform.AscendSyncInsert(target, platform)(mod)
     mod = tilelang.transform.AscendSyncInsertVS(target, platform)(mod)
+else:
+    raise ValueError("Unknown Ascend synchronization backend")
 ```
 
 过渡期只允许整条同步链二选一。`upstream` 模式不静默回退，也不混用旧 VS。
@@ -89,12 +92,12 @@ else:
 | `auto_schedule/dependency_analysis.{cc,h}` | 迁移 RAW/WAR/WAW、循环依赖及冲突判断；适配物理冲突查询与 Z3ProofService |
 | `auto_schedule/ir_structure.{cc,h}` | 移植 Task/Control 树、guards、parent/index、上下文等必要模型；替换新 IR API |
 | `auto_schedule/multi_buffer.h`、`buffer_version.h` | 移植 owner/version/epoch 契约；由本仓流水 provenance 提供事实 |
-| `auto_schedule/buffer_lifetime_analysis.h` | 迁移 issue/completion 区分和带距离的生命周期证明 |
+| `auto_schedule/buffer_lifetime_analysis.h` | 作为来源审计；其 post-sync alias 生命周期工具不纳入当前实现，事件完成与复用证明由同步核心承担 |
 | `transform/common/constr_visitor.h` | 适配 loop/Let/guard 约束、mutable read snapshot；不得省略上下文语义 |
 | `core_mask.h` | 保留必要表示，将 core 数、bank 和支持关系交给 target policy |
 | `auto_schedule/task_analysis.h`、`memory_detector.h`、`ascend_pipe.h` | 用本仓 lowered-call adapter 替换，不引入其高层 op/layout 闭包 |
 | `auto_schedule/scheduled_tir.{cc,h}`、`task_annotations.h`、`kernel_rewriter.h` | 不移植 codec；由本仓直接构建树、保存原语句并回写 |
-| `auto_schedule/buffer_alias_analysis.h`、`buffer_alias.h` | 保留 SyncAnalyzer 的 context/小类型等必要编译依赖；关闭同步后 storage-alias 规划和输出，本轮不改变已规划地址 |
+| `auto_schedule/buffer_alias_analysis.h`、`buffer_alias.h` | 不移植同步后 storage-alias 规划及仅供其消费的 context，本轮不改变已规划地址 |
 | TVM `src/target/z3/z3_prover_on.cc`、`z3_prover_off.cc`、`include/tvm/arith/analyzer.h` 中的 Z3Prover 声明 | 移植 SMT 翻译、solver 管理、约束 journal 与恢复；适配旧 TIR 和旧容器/hash，不挂接全局 Analyzer ABI |
 | `cmake/pypi-z3/FindZ3.cmake`、主仓及 TVM CMake 的 Z3 集成 | 适配头文件/库发现、编译链接和安装后运行库定位；源码清单单独记录构建逻辑来源 |
 
@@ -102,9 +105,9 @@ else:
 当前 `src/transform/*.cc` glob 不递归收集新子目录。
 
 切断高层 op 检测和 alias 输出消费者依赖后，仍保留同步核心算法及其覆盖验证。
-SyncAnalyzer 当前继承 BufferAliasAnalysisContext；不能只关运行时开关就删除所需 header。
-保留编译依赖，或在语义等价的独立提交中抽出 context 接口。关闭 storage-alias 规划不
-关闭同步，也不等同于关闭 flag 安全复用；后者的依赖和生命周期证明仍必须完整保留。
+当前实现不保留没有消费者的 alias-planner 抽象接口和 lifetime 记录。关闭 storage-alias
+规划不关闭同步，也不等同于关闭 flag 安全复用；核心依赖闭包、同步覆盖、事件完成与
+复用校验仍必须完整保留。
 裁剪不得顺手移除 flag 复用安全条件、循环首尾握手或 mutable-read 上下文。
 
 ## 4. 输入契约与适配
@@ -168,6 +171,8 @@ ring/owner；旧流水已生成 skew、分段和 guards，逻辑时钟可能丢�
 flatten、storage rewrite、unroll 等位置增加显式传播和验证，不能仅在 PrimFunc 上留下
 一份过期表。Importer 将其转换成主仓 owner/version/epoch 输入；已经物化的版本不能
 再次扩展。provenance 缺失或失效的流水在 upstream 模式拒绝编译，并给出所属变换。
+stage/order、物理版本数和逻辑时钟是不同事实，不能仅凭两仓同名的 `num_stages` 参数
+认定流水语义等价。当前只消费旧 injector 的实际版本与时钟，不生成自动 owner 计划。
 
 ### 4.4 单次 C→V 发布前的 C 循环（v5 窄范围已实现）
 
@@ -214,6 +219,20 @@ For 会遗漏这条 WAR。summary 不得冒充某个 slot clock，也不能清�
 每 wave 额外 12 次 flag 调用串行化外层，内层 SIP 保留，尚无性能收益结论。
 它不推广到任意嵌套 pipeline、动态 Persistent 或多 owner。
 
+### 4.6 实际组件与分析状态
+
+| 组件 | 输入与职责 |
+| --- | --- |
+| `legacy_adapter.{cc,h}` | 消费 lowered call、OperationConfig、资源 scope、指针 mask 和控制树；保存原语句及插入锚点，导入与导出不另做依赖决策 |
+| `physical_storage.{cc,h}` | 持有最终 maps 与物理 storage views，提供冲突 oracle；分析 view 不逃逸成真实 buffer，也不修改分配 |
+| `legacy_snapshot.{cc,h}`、`upstream/constraints.{cc,h}` | 在原求值位置捕获可变读取，维护 Let、循环范围和 guard 的词法上下文，并送入 ProofAnalyzer/Z3ProofService |
+| `common/pipeline_ring_provenance.h` 及对应适配模块 | 校验实际 owner、B、slot、clock 与三段流水事实，保留已物化版本；复合执行模块补充审计后的 acquire/completion 和隐藏事件预留 |
+| `upstream/insert_sync.{cc,h}`、`target_policy.{cc,h}` | 运行统一依赖、覆盖验证、资源分配及物化；硬件差异集中在 policy，不依赖旧 SyncInsert/VS 补洞 |
+
+Importer 的 scope、约束栈、父控制节点和原节点映射随一次分析拥有；Exporter 使用
+同一次分析保存的 AST 锚点回写。任何事实采集后若对应 IR 改变，须重建分析；失败不返回
+部分物化结果。物理冲突身份、逻辑 owner/epoch 和资源归属始终分别保存。
+
 ## 5. 引擎与硬件策略
 
 ### 5.1 真正执行的算法
@@ -236,7 +255,7 @@ For 会遗漏这条 WAR。summary 不得冒充某个 slot clock，也不能清�
 主仓使用 `Analyzer::z3_prover`，本仓 TVM 没有该接口。采用局部回移方案：在 TileLang
 中建立 `Z3ProofService`，复用主仓 TVM 证明器原有的 SMT 翻译、solver 管理、约束
 journal、作用域恢复和副作用表达式缓存规则；不修改全局 Analyzer 的布局或 CanProve
-调用路径。`LegacyProofAdapter` 作为同步分析的调用门面，现有 Analyzer 仅辅助简化和
+调用路径。`ProofAnalyzer` 作为同步分析的调用门面，现有 Analyzer 仅辅助简化和
 范围分析，不能替代所需 Z3 证明。
 
 服务适配 `tirx` 到旧 `tir`、新 FFI 到旧 ObjectRef/容器/结构 hash。主仓核心实现
@@ -244,7 +263,7 @@ journal、作用域恢复和副作用表达式缓存规则；不修改全局 Ana
 指针，但未发现调用该指针的方法；这是局部回移的源码可行性依据。
 该局部服务现已通过本仓构建与聚焦测试，不能据此认为完整同步迁移已完成。
 
-`LegacyProofAdapter` 显式传入 Let binding、循环变量范围、分支条件和可变内存读取快照。
+`ConstrSet` 经 `ProofAnalyzer` 显式传入 Let binding、循环变量范围、分支条件和可变内存读取快照。
 每个分析实例拥有独立 solver/context；约束进入和退出必须异常安全，不能把历史假设
 遗留给下一个查询。同步所需接口为 Bind、EnterConstraint、CanProve、SetRLimit 和
 SetTimeoutMs；保留必要调试查询用于复现证明差异。
@@ -294,7 +313,7 @@ Exporter 对已证明属于有限合法集合的动态 ID，生成条件分派�
 
 ## 6. API、配置与重复执行
 
-拟新增入口：`AscendInsertSync(target: Target, platform: str)`，注册为
+统一入口：`AscendInsertSync(target: Target, platform: str)`，注册为
 `tl.transform.AscendInsertSync`。它汇总现有 ordinary/VS 配置，只运行一遍统一引擎；
 两者均关闭时返回原函数。
 
@@ -338,7 +357,7 @@ resource_scope V:
 
 | 阶段 | 交付 | 退出条件 |
 | --- | --- | --- |
-| S0 | 设计、骨架、来源清单、基线 | 骨架确认；来源可追溯，明确新旧边界 |
+| S0 | 设计、组件边界、来源清单、基线 | 契约确认；来源可追溯，明确新旧边界 |
 | S1 | 核心移植、旧 TIR importer/exporter、Z3ProofService/物理 alias 适配 | 新引擎独立构建；证明语义和状态恢复、非流水核内语义及负例通过；仍显式 opt-in |
 | S2 | 统一 ordinary/VS、target policy、显式资源预留 | 旧 VS 的语义覆盖完整；无旧 VS 补洞；动态 ID 和容量负例通过 |
 | S3 | 流水 provenance、owner/epoch 适配 | prologue/steady/epilogue、多版本、嵌套/动态循环和 Persistent 组合验证通过 |
@@ -384,7 +403,7 @@ python -m pytest -q \
 - 阶段：Phase 2，MemoryPlanning 后、ResourceScopeVerify 前，已明确。
 - 依赖：任务/访问/约束/物理地址/owner/epoch，来源和缺失策略已明确。
 - 输入/输出：保留计算及地址，只新增同步，提供伪 IR 示例。
-- 实现：移植核心、Z3ProofService 与 adapter 分工明确，详见相邻[实现骨架](pass-impl-skeleton.md)。
+- 实现：移植核心、Z3ProofService 与 adapter 分工见 4.6，具体接口以对应源码头文件为准。
 - 集成：单入口、新旧互斥、默认切换和删除条件明确。
 - 验证：Pass、编译、设备、性能分层和独立证明服务测试明确；未将现有测试结果当作新实现结果。
 - 已采纳并落地可选后端及静态 physical-ring 首片；完整 owner/epoch、多资源与复合

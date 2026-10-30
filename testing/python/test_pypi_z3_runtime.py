@@ -56,6 +56,180 @@ def test_runtime_configuration_requires_the_configured_build_and_protects_source
         runtime.configure_pypi_runtime([tmp_path], [tmp_path])
 
 
+def test_configure_and_stage_multiple_packages_preserves_native_sources(tmp_path, monkeypatch):
+    build, output = tmp_path / "build", tmp_path / "native-output"
+    output.mkdir()
+    providers = [output / name for name in ("libz3.so", "libz3.so.4.15")]
+    for provider in providers:
+        provider.write_bytes(b"native-z3")
+    _manifest(build, providers)
+    for name in runtime.NATIVE_LIBRARIES:
+        (build / name).write_bytes(name.encode())
+    destinations = [tmp_path / "wheel/tilelang/lib", tmp_path / "editable/lib"]
+    patched = []
+    monkeypatch.setattr(runtime, "patch_packaged_library", patched.append)
+
+    assert runtime.configure_pypi_runtime([tmp_path / "no-manifest", build], destinations) is True
+    runtime.stage_packaged_libraries([build], [*destinations, destinations[0]])
+
+    assert set(patched) == {destination / name for destination in destinations for name in runtime.NATIVE_LIBRARIES}
+    assert len(patched) == len(destinations) * len(runtime.NATIVE_LIBRARIES)
+    for provider in providers:
+        assert provider.read_bytes() == b"native-z3"
+    for name in runtime.NATIVE_LIBRARIES:
+        assert (build / name).read_bytes() == name.encode()
+        for destination in destinations:
+            assert (destination / name).read_bytes() == name.encode()
+            assert not list(destination.glob("libz3.so*"))
+
+
+def test_off_first_manifest_stops_search_despite_stale_libraries(tmp_path):
+    current, stale = tmp_path / "current", tmp_path / "stale"
+    _manifest(current, [])
+    stale.mkdir()
+    source = stale / "libz3.so"
+    source.write_bytes(b"stale-z3")
+    _manifest(stale, [source])
+    (current / "libz3.so").write_bytes(b"leftover-from-on-build")
+    destination = tmp_path / "package/lib"
+
+    assert runtime.configure_pypi_runtime([current, stale], [destination]) is False
+    assert runtime._pypi_runtime_enabled(destination) is False
+    assert not list(destination.glob("libz3.so*"))
+    assert source.read_bytes() == b"stale-z3"
+    assert (current / "libz3.so").read_bytes() == b"leftover-from-on-build"
+
+
+def test_first_manifest_selects_its_own_absolute_files(tmp_path):
+    first, second, output = tmp_path / "first", tmp_path / "second", tmp_path / "native-output"
+    output.mkdir()
+    source = output / "libz3.so"
+    source.write_bytes(b"first-provider")
+    _manifest(first, [source])
+    _manifest(second, [second / "missing/libz3.so"])
+    destination = tmp_path / "package/lib"
+
+    assert runtime.configure_pypi_runtime([first, second], [destination]) is True
+    assert source.read_bytes() == b"first-provider"
+    assert not list(destination.glob("libz3.so*"))
+
+
+def test_missing_native_file_fails_before_package_mutation(tmp_path):
+    build, destination = tmp_path / "build", tmp_path / "package/lib"
+    build.mkdir()
+    source = build / "libz3.so"
+    source.write_bytes(b"z3")
+    _manifest(build, [source, build / "libz3.so.4.15"])
+
+    with pytest.raises(FileNotFoundError, match="Native runtime file.*is missing"):
+        runtime.configure_pypi_runtime([build], [destination])
+    assert not destination.exists()
+    assert source.read_bytes() == b"z3"
+
+
+@pytest.mark.parametrize("entry", ["relative", "relative_parent", "wrong_name", "absolute_parent"])
+def test_invalid_native_path_entry_is_rejected(tmp_path, entry):
+    entries = {
+        "relative": "libz3.so",
+        "relative_parent": "../libz3.so",
+        "wrong_name": str(tmp_path / "not-z3.so"),
+        "absolute_parent": str(tmp_path / ".." / "libz3.so"),
+    }
+    _manifest(tmp_path, [entries[entry]])
+
+    with pytest.raises(ValueError, match="Invalid native runtime entry"):
+        runtime.configure_pypi_runtime([tmp_path], [tmp_path / "package"])
+
+
+def test_duplicate_native_basenames_are_rejected_before_package_mutation(tmp_path):
+    sources = [tmp_path / directory / "libz3.so" for directory in ("first", "second")]
+    for source in sources:
+        source.parent.mkdir()
+        source.write_bytes(b"provider")
+    _manifest(tmp_path, sources)
+    destination = tmp_path / "package"
+
+    with pytest.raises(ValueError, match="Duplicate native runtime basename"):
+        runtime.configure_pypi_runtime([tmp_path], [destination])
+    assert not destination.exists()
+
+
+def test_manifest_directory_is_rejected(tmp_path):
+    (tmp_path / runtime.NATIVE_RUNTIME_MANIFEST).mkdir()
+    with pytest.raises(ValueError, match="manifest is not a file"):
+        runtime.configure_pypi_runtime([tmp_path], [tmp_path / "package"])
+
+
+def test_on_then_off_removes_staged_z3_and_preserves_sources(tmp_path):
+    build = tmp_path / "build"
+    build.mkdir()
+    sources = [build / name for name in ("libz3.so", "libz3.so.4.15")]
+    for source in sources:
+        source.write_bytes(b"native-z3")
+    _manifest(build, sources)
+    destinations = [tmp_path / "wheel/tilelang/lib", tmp_path / "editable/lib"]
+    assert runtime.configure_pypi_runtime([build], destinations) is True
+    for destination in destinations:
+        for source in sources:
+            (destination / source.name).write_bytes(b"stale-bundled-provider")
+
+    _manifest(build, [])
+    assert runtime.configure_pypi_runtime([build], destinations) is False
+    for source in sources:
+        assert source.read_bytes() == b"native-z3"
+        for destination in destinations:
+            assert not (destination / source.name).exists()
+            assert runtime._pypi_runtime_enabled(destination) is False
+
+
+def test_off_cleanup_only_removes_matching_direct_files(tmp_path):
+    build, destination = tmp_path / "build", tmp_path / "package/lib"
+    _manifest(build, [])
+    destination.mkdir(parents=True)
+    preserved = ["libtilelang.so", "libz3.so.debug", "libz3.so.4.15.backup", "notes.txt"]
+    for name in preserved:
+        (destination / name).write_bytes(b"keep")
+    nested = destination / "libz3.so.999"
+    nested.mkdir()
+    (nested / "libz3.so").write_bytes(b"nested-keep")
+    (destination / "libz3.so").write_bytes(b"stale")
+    (destination / "libz3.so.4.15").symlink_to("missing-native-file")
+
+    assert runtime.configure_pypi_runtime([build], [destination]) is False
+    for name in preserved:
+        assert (destination / name).read_bytes() == b"keep"
+    assert (nested / "libz3.so").read_bytes() == b"nested-keep"
+    assert not (destination / "libz3.so").exists()
+    assert not (destination / "libz3.so.4.15").is_symlink()
+
+
+@pytest.mark.parametrize("target", ["current", "other_source", "source_alias"])
+def test_configuration_protects_search_directories_and_aliases(tmp_path, target):
+    current, other_source, source_alias = tmp_path / "current", tmp_path / "other-source", tmp_path / "source-alias"
+    _manifest(current, [])
+    other_source.mkdir()
+    for directory in (current, other_source):
+        (directory / "libz3.so").write_bytes(b"source-library")
+    if target == "source_alias":
+        source_alias.symlink_to(current, target_is_directory=True)
+    destinations = {"current": current, "other_source": other_source, "source_alias": source_alias}
+
+    with pytest.raises(ValueError, match="overwrite CMake"):
+        runtime.configure_pypi_runtime([current, other_source], [destinations[target]])
+    for directory in (current, other_source):
+        assert (directory / "libz3.so").read_bytes() == b"source-library"
+
+
+def test_staging_refuses_to_patch_colocated_native_sources(tmp_path, monkeypatch):
+    for name in runtime.NATIVE_LIBRARIES:
+        (tmp_path / name).write_bytes(b"native-library")
+    monkeypatch.setattr(runtime, "patch_packaged_library", lambda path: pytest.fail("patched original CMake output"))
+
+    with pytest.raises(ValueError, match="Refusing to patch original CMake output"):
+        runtime.stage_packaged_libraries([tmp_path], [tmp_path])
+    assert all((tmp_path / name).read_bytes() == b"native-library" for name in runtime.NATIVE_LIBRARIES)
+
+
 @pytest.mark.parametrize("contents", ['{"enabled": 1}', "{}", "null", "not-json"])
 def test_malformed_marker_does_not_silently_become_native_or_off(tmp_path, contents):
     (tmp_path / runtime.PYPI_RUNTIME_CONFIG).write_text(contents)
