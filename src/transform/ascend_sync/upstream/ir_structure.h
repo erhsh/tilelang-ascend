@@ -222,7 +222,7 @@ inline bool RegionsEqual(const Region &a, const Region &b) {
   if (a.size() != b.size())
     return false;
 
-  arith::Analyzer analyzer;
+  ProofAnalyzer analyzer;
   for (size_t i = 0; i < a.size(); ++i) {
     // Check if min values are equal
     if (!analyzer.CanProveEqual(a[i]->min, b[i]->min)) {
@@ -243,10 +243,15 @@ inline bool RegionCovers(const Region &outer, const Region &inner) {
   if (outer.size() != inner.size())
     return false;
 
-  arith::Analyzer analyzer;
+  ProofAnalyzer analyzer;
   for (size_t i = 0; i < outer.size(); ++i) {
     PrimExpr outer_end = outer[i]->min + outer[i]->extent;
     PrimExpr inner_end = inner[i]->min + inner[i]->extent;
+    // Region endpoints describe mathematical extents, not wrapping machine
+    // indices. Do not use a modular endpoint to certify full coverage.
+    if (ContainsUnsignedWrappingArithmetic(outer_end) ||
+        ContainsUnsignedWrappingArithmetic(inner_end))
+      return false;
     if (!analyzer.CanProve(outer[i]->min <= inner[i]->min) ||
         !analyzer.CanProve(inner_end <= outer_end)) {
       return false;
@@ -258,14 +263,16 @@ inline bool RegionCovers(const Region &outer, const Region &inner) {
 constexpr int64_t kDynamicSerialTripCountFallback = 100;
 
 inline int64_t GetSerialTripCount(const For &loop,
-                                  arith::Analyzer *analyzer = nullptr) {
-  arith::Analyzer local_analyzer;
+                                  ProofAnalyzer *analyzer = nullptr) {
+  ProofAnalyzer local_analyzer;
   if (analyzer == nullptr)
     analyzer = &local_analyzer;
 
   auto upper_bound_or = [&](const PrimExpr &expr, int64_t fallback) {
     if (const int64_t *value = as_const_int(expr))
       return *value;
+    if (!analyzer->CanUseLegacyArithmetic(expr))
+      return fallback;
 
     arith::ConstIntBound bound = analyzer->const_int_bound(expr);
     arith::Analyzer unconstrained_analyzer;

@@ -936,7 +936,13 @@ private:
   z3::expr VisitArith(Z3BinOp signed_op, const PrimExprNode *op,
                       const PrimExpr &a, const PrimExpr &b) {
     if (IsValidDType(a->dtype) && IsValidDType(b->dtype)) {
-      return signed_op(VisitInt(a), VisitInt(b));
+      auto result = signed_op(VisitInt(a), VisitInt(b));
+      // Unsigned arithmetic wraps at its original TIR width. Unbounded
+      // integer results can otherwise prove overlapping addresses disjoint.
+      // Comparisons have boolean dtype and must keep their boolean result.
+      if (op->dtype.is_uint() && !op->dtype.is_bool())
+        return z3::bv2int(z3::int2bv(op->dtype.bits(), result), false);
+      return result;
     } else {
       return Create(op);
     }

@@ -143,6 +143,23 @@ def _assert_handoff(
     pytest.fail(f"missing paired {event} completion between producer and consumer")
 
 
+@pytest.mark.parametrize("constant_index", [False, True])
+def test_unsigned_wrapping_index_keeps_scalar_vector_dependency(constant_index: bool) -> None:
+    buffers = _buffers()
+    value = tir.Var("unsigned_index", "uint32")
+    index = tir.IntImm("uint32", 0) if constant_index else value + tir.IntImm("uint32", 1)
+    store = tir.BufferStore(buffers["a"], tir.FloatImm("float32", 1), [index])
+    fill = _fill(buffers["a"])
+    branch = tir.IfThenElse(value == tir.IntImm("uint32", (1 << 32) - 1), tir.SeqStmt([store, fill]), None)
+    result = _run(_function(buffers, [branch], scalars=(value,)))
+    events = [(call.args[0].value, int(call.args[1])) for call in _calls(result) if _op_name(call) == "tl.ascend_auto_set_flag"]
+    assert any(event == "S_V" for event, _ in events)
+    for event, event_id in events:
+        assert any(
+            _op_name(call) == "tl.ascend_auto_wait_flag" and call.args[0].value == event and int(call.args[1]) == event_id
+            for call in _calls(result)
+        )
+
 @pytest.mark.parametrize("hazard", ["RAW", "WAR", "WAW"])
 def test_shared_physical_address_is_ordered_without_merging_logical_vars(hazard: str) -> None:
     buffers = _buffers()

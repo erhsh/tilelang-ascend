@@ -50,6 +50,9 @@
 
 namespace tvm::tl {
 
+// Legacy arithmetic analysis assumes mathematical integers for these nodes.
+bool ContainsUnsignedWrappingArithmetic(const PrimExpr &expr);
+
 // Local proof adapter for the upstream synchronization analyses. Neither its
 // contextual rewrites nor fresh variables may be used to rewrite emitted TIR.
 class ProofAnalyzer : public arith::Analyzer {
@@ -69,8 +72,12 @@ public:
                                         bool is_assume = false);
   bool CanProve(const PrimExpr &predicate);
   bool CanProveEqual(const PrimExpr &lhs, const PrimExpr &rhs);
+  PrimExpr Simplify(const PrimExpr &expr, int steps = 2);
+  bool CanUseLegacyArithmetic(const PrimExpr &expr) const;
 
 private:
+  // Never reuse old legacy bindings after skipping a wrapping override.
+  bool legacy_safe_{true};
   // Populate deliberately leaves scopes open. Keep them alive until explicitly
   // exited (in LIFO order) or this analyzer is destroyed.
   std::vector<std::function<void()>> constraint_exits_;

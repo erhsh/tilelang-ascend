@@ -771,7 +771,7 @@ bool HasUnitFlagCtrl(const Stmt &) { return false; }
 // replacement for the upstream dependency or synchronization algorithms.
 void ValidateConditionalExecutionDomains(const std::vector<TaskNode *> &tasks,
                                          const SyncTargetPolicy &policy) {
-  arith::Analyzer guard_analyzer;
+  ProofAnalyzer guard_analyzer;
   std::vector<PrimExpr> conditions;
   conditions.reserve(tasks.size());
   for (const TaskNode *task : tasks) {
@@ -2035,10 +2035,12 @@ private:
   void RecordId(const PrimExpr &id, const std::string &event, bool cross) {
     ProofAnalyzer analyzer;
     context_.Populate(analyzer);
-    const auto bound = analyzer.const_int_bound(id);
     arith::Analyzer unbound;
     Var free_id("unconstrained_existing_event", id.dtype());
     const auto all = unbound.const_int_bound(free_id);
+    const auto bound = analyzer.CanUseLegacyArithmetic(id)
+                           ? analyzer.const_int_bound(id)
+                           : all;
     bool bounded = bound->min_value != arith::ConstIntBound::kNegInf &&
                    bound->max_value != arith::ConstIntBound::kPosInf &&
                    !(bound->min_value == all->min_value &&

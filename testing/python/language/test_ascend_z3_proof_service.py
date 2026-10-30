@@ -153,6 +153,37 @@ def test_scoped_bindings_do_not_escape_their_constraint_scope(
     assert not _prove(prover, local == 7)
 
 
+@pytest.mark.parametrize("bits", [8, 16, 32, 64])
+@pytest.mark.parametrize("operation", ["add", "subtract", "multiply"])
+def test_unsigned_arithmetic_preserves_wraparound(
+    prover: Service,
+    bits: int,
+    operation: str,
+) -> None:
+    dtype = f"uint{bits}"
+    value = tir.Var("unsigned_value", dtype)
+
+    def constant(number: int) -> tir.IntImm:
+        return tir.IntImm(dtype, number)
+
+    if operation == "add":
+        # Every literal fits int64, including the uint64 case.
+        bound = (1 << (bits - 1)) - 1
+        expression = (value + value) + constant(2)
+    elif operation == "subtract":
+        bound = 0
+        expression = value - constant(1)
+    else:
+        bound = 1 << (bits // 2)
+        expression = value * value
+    prover("bind_expr", value, constant(bound), False)
+    if operation == "subtract":
+        assert _prove(prover, expression > constant(0))
+        assert not _prove(prover, expression == constant(0))
+    else:
+        assert _prove(prover, expression == constant(0))
+        assert not _prove(prover, expression > constant(0))
+
 @pytest.mark.parametrize("numerator", [-17, -7, 7, 17])
 @pytest.mark.parametrize("denominator", [-3, 3])
 def test_signed_floor_division_and_modulo_match_integer_oracle(

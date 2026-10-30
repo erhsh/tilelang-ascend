@@ -31,6 +31,24 @@ namespace tvm::tl {
 
 namespace {
 
+class UnsignedWrappingArithmeticFinder : public tir::ExprVisitor {
+public:
+  bool found{false};
+
+  void VisitExpr_(const tir::AddNode *op) final { VisitArithmetic(op); }
+  void VisitExpr_(const tir::SubNode *op) final { VisitArithmetic(op); }
+  void VisitExpr_(const tir::MulNode *op) final { VisitArithmetic(op); }
+
+private:
+  template <typename Node> void VisitArithmetic(const Node *op) {
+    if (op->dtype.is_uint() && !op->dtype.is_bool()) {
+      found = true;
+      return;
+    }
+    tir::ExprVisitor::VisitExpr_(op);
+  }
+};
+
 struct ProofConstraintScope {
   std::shared_ptr<With<arith::ConstraintContext>> legacy_scope;
   std::function<void()> z3_exit;
@@ -46,6 +64,12 @@ struct ProofConstraintScope {
 
 } // namespace
 
+bool ContainsUnsignedWrappingArithmetic(const PrimExpr &expr) {
+  UnsignedWrappingArithmeticFinder finder;
+  finder(expr);
+  return finder.found;
+}
+
 ProofAnalyzer::~ProofAnalyzer() {
   for (auto it = constraint_exits_.rbegin(); it != constraint_exits_.rend();
        ++it)
@@ -54,21 +78,28 @@ ProofAnalyzer::~ProofAnalyzer() {
 
 void ProofAnalyzer::Bind(const tir::Var &var, const Range &range,
                          bool allow_override) {
-  arith::Analyzer::Bind(var, range, allow_override);
+  legacy_safe_ = CanUseLegacyArithmetic(range->min) &&
+                 CanUseLegacyArithmetic(range->extent);
+  if (legacy_safe_)
+    arith::Analyzer::Bind(var, range, allow_override);
   z3_prover.Bind(var, range, allow_override);
 }
 
 void ProofAnalyzer::Bind(const tir::Var &var, const PrimExpr &value,
                          bool allow_override) {
-  arith::Analyzer::Bind(var, value, allow_override);
+  legacy_safe_ = CanUseLegacyArithmetic(value);
+  if (legacy_safe_)
+    arith::Analyzer::Bind(var, value, allow_override);
   z3_prover.Bind(var, value, allow_override);
 }
 
 std::function<void()> ProofAnalyzer::EnterConstraint(const PrimExpr &constraint,
                                                      bool is_assume) {
   auto scope = std::make_shared<ProofConstraintScope>();
-  scope->legacy_scope =
-      std::make_shared<With<arith::ConstraintContext>>(this, constraint);
+  legacy_safe_ = CanUseLegacyArithmetic(constraint);
+  if (legacy_safe_)
+    scope->legacy_scope =
+        std::make_shared<With<arith::ConstraintContext>>(this, constraint);
   scope->z3_exit = z3_prover.EnterConstraint(constraint, is_assume);
   auto exit = [scope]() { scope->Exit(); };
   constraint_exits_.push_back(exit);
@@ -76,11 +107,22 @@ std::function<void()> ProofAnalyzer::EnterConstraint(const PrimExpr &constraint,
 }
 
 bool ProofAnalyzer::CanProve(const PrimExpr &predicate) {
-  return arith::Analyzer::CanProve(predicate) || z3_prover.CanProve(predicate);
+  return (CanUseLegacyArithmetic(predicate) &&
+          arith::Analyzer::CanProve(predicate)) ||
+         z3_prover.CanProve(predicate);
 }
 
 bool ProofAnalyzer::CanProveEqual(const PrimExpr &lhs, const PrimExpr &rhs) {
   return CanProve(lhs == rhs);
+}
+
+PrimExpr ProofAnalyzer::Simplify(const PrimExpr &expr, int steps) {
+  return CanUseLegacyArithmetic(expr) ? arith::Analyzer::Simplify(expr, steps)
+                                      : expr;
+}
+
+bool ProofAnalyzer::CanUseLegacyArithmetic(const PrimExpr &expr) const {
+  return legacy_safe_ && !ContainsUnsignedWrappingArithmetic(expr);
 }
 
 } // namespace tvm::tl
