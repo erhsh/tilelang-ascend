@@ -1,7 +1,7 @@
 # Z3 默认启用与 PyPI 依赖
 
 本次调整仅涉及 Z3 构建、加载和打包；同步后端仍默认 `legacy`，使用新同步算法仍需
-显式选择 `tl.ascend_sync_backend="upstream"`。历史 v8 验收记录保持原样。
+显式选择 `tl.ascend_sync_backend="upstream"`。历史验收摘要见文末。
 
 ## 安装与编译
 
@@ -61,27 +61,18 @@ python -m pytest -q testing/python/test_pypi_z3_runtime.py \
 - 默认 ON、显式 OFF、已有 OFF cache、有效/无效显式根目录，以及原生安装。
 - 完整主机回归和 A3 设备测试；结果另存新的验收记录，不借用历史 v8 的计数。
 
-## 本次验收结果
+## 历史验收记录
 
-实际验证基于 Linux aarch64、Python 3.11 的独立源码副本，结果保存于
-[z3-pypi-checkpoint.json](validation/z3-pypi-checkpoint.json)，包含命令、日志摘要、
-源码与产物哈希。未重装工作区原有 Python 环境，也未修改原有 TVM 和 elementwise 示例。
+Linux aarch64、Python 3.11 环境下的 Z3 默认启用、wheel/editable 安装和同步回归结果
+汇总在[验收摘要](validation/summary.json)。该记录对应原生引擎 v8；当前代码为 v10，
+摘要中的结果不构成当前 v10 的完整验收。
 
-| 验证项 | 结果 |
-| --- | --- |
-| 默认配置的 pip 隔离 wheel / PEP660 editable | 构建、安装、原生证明查询均通过 |
-| 普通 pip 安装 wheel | 自动安装运行依赖 z3-solver，并加载该环境的原生库 |
-| 构建端 / 运行端 Z3 4.13.0、4.15.4 四组组合 | 每组 133 passed、1 skipped |
-| ON 同步迁移主机回归 | 1056 passed、1 skipped、2 xfailed；30 subtests passed |
-| OFF 同范围主机回归 | 347 passed、712 skipped；30 subtests passed；未加载 Z3 |
-| A3 自动同步设备回归 | 75 passed |
-| 直接 CMake 安装 | 编译器闭包、Z3 旁库、原生证明查询与许可证校验通过 |
-| Python z3 与原生证明服务共用进程 | 4.13.0、4.15.4 均通过 |
+主机、设备及独立 legacy VS 回归的文件集合保存在
+[测试清单](validation/test-suites.json)，便于重新执行各自范围。历史 A3 性能样本见
+[性能原始数据](validation/performance.json)；这些样本对应 v8 的四个小 kernel，
+计时包含 host launch gaps，不能据此推导 v10 的性能或设备执行时间收益。
 
-主机回归范围是 `v8-host-files.json` 加本次新增测试文件，设备范围为
-`test_ascend_upstream_sync_*device.py`；未将其表述为全仓所有示例验收。
-两项 xfail 是已有 A5 AscendC abs lowering 用例。OFF 按证明服务能力跳过依赖 Z3 的用例。
-
-构建期间最初的源码完整性检查将四份生成的许可证副本判为源码变化；最终检查逐一确认
-41510 个原始输入哈希不变，并仅允许这四份与源文件逐字节一致的生成文件。
-隔离构建还通过外部 toolchain 关闭了本机不兼容的可选 GTest AUTO 探测，未修改仓库源码。
+原始验证脚本、日志和完整源码清单未随仓库保存。原记录中的工作区存在未提交的 TVM
+修改，仅保存文件及差异的哈希，没有相应补丁；精确受测输入与干净 checkout 的一致性
+尚不能复核。摘要保留了这些证据边界，后续验收应基于明确的源码版本重新执行并保存
+可获取的脚本、日志和产物。
