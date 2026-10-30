@@ -197,6 +197,52 @@ def test_signed_floor_division_and_modulo_match_integer_oracle(
     assert not _prove(prover, tir.floormod(x, denominator) == remainder + 1)
 
 
+@pytest.mark.parametrize(
+    "numerator,denominator",
+    [
+        (-17, 3),
+        (-17, -3),
+        (17, -3),
+        (17, 3),
+        (-1, 2),
+        (-1, -2),
+        (-6, 3),
+        (-6, -3),
+        (0, 3),
+        (0, -3),
+        (-(1 << 31), 1),
+        (-(1 << 31), 3),
+        (-(1 << 31), -(1 << 31)),
+        ((1 << 31) - 1, -3),
+    ],
+)
+def test_signed_truncating_division_and_modulo_match_integer_oracle(
+    prover: Service,
+    numerator: int,
+    denominator: int,
+) -> None:
+    value = tir.Var("signed_value", "int32")
+    prover("bind_expr", value, tir.IntImm("int32", numerator), False)
+    quotient = abs(numerator) // abs(denominator)
+    if (numerator < 0) != (denominator < 0):
+        quotient = -quotient
+    remainder = numerator - quotient * denominator
+    assert _prove(prover, tir.Div(value, denominator) == quotient)
+    assert _prove(prover, tir.Mod(value, denominator) == remainder)
+    assert not _prove(prover, tir.Div(value, denominator) == quotient + 1)
+    assert not _prove(prover, tir.Mod(value, denominator) == remainder + 1)
+
+@pytest.mark.parametrize("operation", [tir.Div, tir.Mod])
+@pytest.mark.parametrize("numerator,denominator", [(0, 0), (7, 0), (-(1 << 31), -1)])
+def test_undefined_truncating_division_does_not_prove_a_value(
+    prover: Service, operation: Callable, numerator: int, denominator: int
+) -> None:
+    value = tir.Var("signed_value", "int32")
+    prover("bind_expr", value, tir.IntImm("int32", numerator), False)
+    expression = operation(value, denominator)
+    assert not _prove(prover, expression == 0)
+    assert not _prove(prover, expression > 0)
+
 @pytest.mark.parametrize("divisor", [3, 16, 127])
 def test_symbolic_divmod_reconstructs_negative_and_positive_indices(
     prover: Service, divisor: int

@@ -985,6 +985,26 @@ private:
   static z3::expr floormod(const z3::expr &a, const z3::expr &b) {
     return z3::ite(b > 0, a % b, -((-a) % b));
   }
+  z3::expr VisitTruncDivMod(const PrimExprNode *op, const PrimExpr &a,
+                            const PrimExpr &b, bool remainder) {
+    if (!IsValidDType(a.dtype()) || !IsValidDType(b.dtype()))
+      return Create(op);
+    auto lhs = VisitInt(a);
+    auto rhs = VisitInt(b);
+    auto valid = rhs != 0;
+    if (op->dtype.is_int()) {
+      auto minimum = Downcast<IntImm>(min_value(op->dtype))->value;
+      valid = valid && !(lhs == ctx->int_val(minimum) && rhs == -1);
+    }
+    // Z3 integer division is Euclidean, whereas TIR Div/Mod truncate
+    // toward zero. Divide magnitudes and restore the quotient's sign.
+    auto magnitude = z3::ite(lhs < 0, -lhs, lhs) / z3::ite(rhs < 0, -rhs, rhs);
+    auto quotient = z3::ite((lhs < 0) != (rhs < 0), -magnitude, magnitude);
+    auto result = remainder ? lhs - quotient * rhs : quotient;
+    // Division by zero and signed MIN/-1 have no defined machine result.
+    // Keep those branches unknown instead of certifying a concrete value.
+    return z3::ite(valid, result, Create(op));
+  }
   z3::expr VisitExpr_(const AddNode *op) override {
     return VisitArith(z3::operator+, op, op->a, op->b);
   }
@@ -995,10 +1015,10 @@ private:
     return VisitArith(z3::operator*, op, op->a, op->b);
   }
   z3::expr VisitExpr_(const DivNode *op) override {
-    return VisitArith(z3::operator/, op, op->a, op->b);
+    return VisitTruncDivMod(op, op->a, op->b, false);
   }
   z3::expr VisitExpr_(const ModNode *op) override {
-    return VisitArith(z3::operator%, op, op->a, op->b);
+    return VisitTruncDivMod(op, op->a, op->b, true);
   }
   z3::expr VisitExpr_(const FloorDivNode *op) override {
     return VisitArith(floordiv, op, op->a, op->b);
