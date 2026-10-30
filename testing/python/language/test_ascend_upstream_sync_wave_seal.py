@@ -190,9 +190,7 @@ def _explore(queues, waves, *, memory=True):
                 assert len(visited) <= 200_000, "unexpected queue-state explosion"
                 pending.append((successor, (*trace, str(command))))
         if not ready:
-            return _Witness("deadlock: all remaining destination waits are blocked", trace), len(
-                visited
-            )
+            return _Witness("deadlock: all remaining destination waits are blocked", trace), len(visited)
     assert terminals, "no completed schedule was explored"
     return None, len(visited)
 

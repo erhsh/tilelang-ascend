@@ -52,9 +52,7 @@ def _ascend_model(target: str | Target) -> bool:
     return model in ("ascendc", "auto")
 
 
-def prepare_auto_gm_contract(
-    func: PrimFunc, execution_backend: str, target: str | Target
-) -> PrimFunc:
+def prepare_auto_gm_contract(func: PrimFunc, execution_backend: str, target: str | Target) -> PrimFunc:
     """Return an attributed copy for a new compilation, keeping ``func`` intact.
 
     Recompilation first discards a previous private allocation promise. Only
@@ -68,9 +66,7 @@ def prepare_auto_gm_contract(
         raise TypeError("Ascend allocation contracts require a PrimFunc")
     prepared = func.without_attr(AUTO_GM_FRESH_CONTRACT_ATTR)
     if execution_backend == "cython" and _ascend_model(target):
-        prepared = prepared.with_attr(
-            AUTO_GM_FRESH_CONTRACT_ATTR, tvm.tir.StringImm(AUTO_GM_FRESH_CONTRACT_VERSION)
-        )
+        prepared = prepared.with_attr(AUTO_GM_FRESH_CONTRACT_ATTR, tvm.tir.StringImm(AUTO_GM_FRESH_CONTRACT_VERSION))
     return prepared
 
 
@@ -87,14 +83,8 @@ def requires_fresh_auto_gm(func: Any) -> bool:
     from tilelang import tvm
 
     contract = attrs[AUTO_GM_FRESH_CONTRACT_ATTR]
-    if (
-        not isinstance(contract, tvm.tir.StringImm)
-        or contract.value != AUTO_GM_FRESH_CONTRACT_VERSION
-    ):
-        raise ValueError(
-            "Invalid Ascend auto-GM fresh contract; expected "
-            f"StringImm({AUTO_GM_FRESH_CONTRACT_VERSION!r})"
-        )
+    if not isinstance(contract, tvm.tir.StringImm) or contract.value != AUTO_GM_FRESH_CONTRACT_VERSION:
+        raise ValueError(f"Invalid Ascend auto-GM fresh contract; expected StringImm({AUTO_GM_FRESH_CONTRACT_VERSION!r})")
     return True
 
 
@@ -204,9 +194,7 @@ def validate_cached_auto_gm_manifest(
     expected_schema = 2 if abi is not None else 1
     if type(manifest["schema"]) is not int or manifest["schema"] != expected_schema:
         raise ValueError("Ascend auto-GM cache manifest has an unsupported schema")
-    validate_cached_auto_gm_contract(
-        func, execution_backend, manifest["auto_gm_indices"], manifest["param_count"]
-    )
+    validate_cached_auto_gm_contract(func, execution_backend, manifest["auto_gm_indices"], manifest["param_count"])
     if abi is not None:
         _validate_indices(manifest["auto_gm_indices"], manifest["param_count"])
         if not isinstance(manifest["sync_engine_abi"], str) or manifest["sync_engine_abi"] != abi:

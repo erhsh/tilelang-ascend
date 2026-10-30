@@ -104,9 +104,7 @@ def _assert_pre_sync_contract(program: tvm.tir.PrimFunc) -> None:
         elif isinstance(statement, tvm.tir.AttrStmt):
             if statement.attr_key == "resource_scope":
                 owner = int(statement.value)
-            elif (
-                statement.attr_key == "thread_extent" and statement.node.thread_tag == "threadIdx.x"
-            ):
+            elif statement.attr_key == "thread_extent" and statement.node.thread_tag == "threadIdx.x":
                 assert int(statement.value) == 2
                 subgroup.append(statement.node.var)
             visit(statement.body, owner)

@@ -36,17 +36,11 @@ def _pypi_runtime_enabled(directory: Path) -> bool | None:
         raise RuntimeError(f"Invalid native runtime configuration {config}: {error}") from error
 
 
-def configure_pypi_runtime(
-    search_dirs: Iterable[str | Path], destination_dirs: Iterable[str | Path]
-) -> bool:
+def configure_pypi_runtime(search_dirs: Iterable[str | Path], destination_dirs: Iterable[str | Path]) -> bool:
     """Use the current CMake manifest, including OFF, to configure Python packages."""
     directories = [Path(directory) for directory in search_dirs]
     manifest = next(
-        (
-            directory / NATIVE_RUNTIME_MANIFEST
-            for directory in directories
-            if (directory / NATIVE_RUNTIME_MANIFEST).exists()
-        ),
+        (directory / NATIVE_RUNTIME_MANIFEST for directory in directories if (directory / NATIVE_RUNTIME_MANIFEST).exists()),
         None,
     )
     if manifest is None:
@@ -62,13 +56,9 @@ def configure_pypi_runtime(
     for directory in destinations:
         directory.mkdir(parents=True, exist_ok=True)
         for candidate in directory.iterdir():
-            if _Z3_LIBRARY_NAME.fullmatch(candidate.name) and (
-                candidate.is_file() or candidate.is_symlink()
-            ):
+            if _Z3_LIBRARY_NAME.fullmatch(candidate.name) and (candidate.is_file() or candidate.is_symlink()):
                 candidate.unlink()
-        (directory / PYPI_RUNTIME_CONFIG).write_text(
-            json.dumps({"enabled": enabled}) + "\n", encoding="utf-8"
-        )
+        (directory / PYPI_RUNTIME_CONFIG).write_text(json.dumps({"enabled": enabled}) + "\n", encoding="utf-8")
     return enabled
 
 
@@ -91,31 +81,25 @@ def patch_packaged_library(library: str | Path) -> None:
     subprocess.run([*command, str(library)], check=True)
 
 
-def remove_legacy_package_outputs(
-    directory: str | Path, protected_dirs: Iterable[str | Path]
-) -> None:
+def remove_legacy_package_outputs(directory: str | Path, protected_dirs: Iterable[str | Path]) -> None:
     """Remove old top-level wheel payloads, never the current raw CMake outputs."""
     directory = Path(directory).resolve()
     if directory in {Path(value).resolve() for value in protected_dirs}:
         raise ValueError(f"Refusing to clean a source/CMake directory: {directory}")
     if directory.is_dir():
         for candidate in directory.iterdir():
-            if (
-                candidate.name in NATIVE_LIBRARIES or _Z3_LIBRARY_NAME.fullmatch(candidate.name)
-            ) and (candidate.is_file() or candidate.is_symlink()):
+            if (candidate.name in NATIVE_LIBRARIES or _Z3_LIBRARY_NAME.fullmatch(candidate.name)) and (
+                candidate.is_file() or candidate.is_symlink()
+            ):
                 candidate.unlink()
 
 
-def stage_packaged_libraries(
-    search_dirs: Iterable[str | Path], destination_dirs: Iterable[str | Path]
-) -> None:
+def stage_packaged_libraries(search_dirs: Iterable[str | Path], destination_dirs: Iterable[str | Path]) -> None:
     """Copy all required compiler/runtime libraries before patching their package copies."""
     directories = [Path(directory) for directory in search_dirs]
     sources = {}
     for name in NATIVE_LIBRARIES:
-        source = next(
-            (directory / name for directory in directories if (directory / name).is_file()), None
-        )
+        source = next((directory / name for directory in directories if (directory / name).is_file()), None)
         if source is None:
             raise FileNotFoundError(f"Missing current CMake output {name}")
         sources[name] = source
@@ -137,16 +121,12 @@ def preload_pypi_z3_runtime(library: str | Path) -> ctypes.CDLL | None:
     try:
         distribution = metadata.distribution("z3-solver")
     except metadata.PackageNotFoundError as error:
-        raise RuntimeError(
-            "Install z3-solver>=4.13.0,<4.15.5 to load this TileLang package"
-        ) from error
+        raise RuntimeError("Install z3-solver>=4.13.0,<4.15.5 to load this TileLang package") from error
     match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:[.+-]|$)", distribution.version)
     if match is None or not (4, 13, 0) <= tuple(map(int, match.groups())) < (4, 15, 5):
         raise RuntimeError(f"Requires z3-solver>=4.13.0,<4.15.5; found {distribution.version}")
     candidates = [distribution.locate_file(f"z3/{subdir}/libz3.so") for subdir in ("lib", "lib64")]
-    path = next(
-        (Path(candidate).resolve() for candidate in candidates if Path(candidate).is_file()), None
-    )
+    path = next((Path(candidate).resolve() for candidate in candidates if Path(candidate).is_file()), None)
     if path is None:
         raise RuntimeError("The installed z3-solver has no native libz3.so; reinstall z3-solver")
     key = str(path)
@@ -221,9 +201,7 @@ def copy_native_runtime_files(
             break
     if manifest is None:
         if required:
-            raise FileNotFoundError(
-                "Native runtime manifest not found; searched: " + ", ".join(searched)
-            )
+            raise FileNotFoundError("Native runtime manifest not found; searched: " + ", ".join(searched))
         return []
     if not manifest.is_file():
         raise ValueError(f"Native runtime manifest is not a file: {manifest}")
@@ -235,16 +213,10 @@ def copy_native_runtime_files(
         if not entry:
             continue
         source = Path(entry)
-        if (
-            not source.is_absolute()
-            or ".." in source.parts
-            or _Z3_LIBRARY_NAME.fullmatch(source.name) is None
-        ):
+        if not source.is_absolute() or ".." in source.parts or _Z3_LIBRARY_NAME.fullmatch(source.name) is None:
             raise ValueError(f"Invalid native runtime entry at {manifest}:{line_number}: {entry}")
         if not source.is_file():
-            raise FileNotFoundError(
-                f"Native runtime file listed at {manifest}:{line_number} is missing: {source}"
-            )
+            raise FileNotFoundError(f"Native runtime file listed at {manifest}:{line_number} is missing: {source}")
         if source.name in basenames:
             raise ValueError(f"Duplicate native runtime basename in {manifest}: {source.name}")
         basenames.add(source.name)
@@ -260,9 +232,7 @@ def copy_native_runtime_files(
             if destination.resolve() in protected_dirs or not destination.is_dir():
                 continue
             for candidate in destination.iterdir():
-                if _Z3_LIBRARY_NAME.fullmatch(candidate.name) is not None and (
-                    candidate.is_file() or candidate.is_symlink()
-                ):
+                if _Z3_LIBRARY_NAME.fullmatch(candidate.name) is not None and (candidate.is_file() or candidate.is_symlink()):
                     candidate.unlink()
         return []
 

@@ -43,15 +43,11 @@ def _buffers() -> dict[str, tir.Buffer]:
 
 
 def _copy(name: str, source: tir.Buffer, destination: tir.Buffer) -> tir.Evaluate:
-    return tir.Evaluate(
-        tir.call_extern("handle", name, source.access_ptr("r"), destination.access_ptr("w"))
-    )
+    return tir.Evaluate(tir.call_extern("handle", name, source.access_ptr("r"), destination.access_ptr("w")))
 
 
 def _fill(destination: tir.Buffer) -> tir.Evaluate:
-    return tir.Evaluate(
-        tir.call_extern("handle", "AscendC::Duplicate", destination.access_ptr("w"))
-    )
+    return tir.Evaluate(tir.call_extern("handle", "AscendC::Duplicate", destination.access_ptr("w")))
 
 
 def _function(
@@ -75,18 +71,14 @@ def _function(
         body,
         buffer_map={buffer.data: buffer for buffer in parameters},
     )
-    function = function.with_attr(
-        "address_map", {buffers[name].data: value for name, value in addresses.items()}
-    )
+    function = function.with_attr("address_map", {buffers[name].data: value for name, value in addresses.items()})
     function = function.with_attr("size_map", {buffers[name].data: 256 for name in addresses})
     return function.with_attr("tir.noalias", noalias)
 
 
 def _run(function: tir.PrimFunc, *, ordinary: bool = True, vs: bool = True) -> tir.PrimFunc:
     target = tvm.target.Target("c -keys=ascend -model=ascendc")
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": ordinary, "tl.ascend_auto_sync_vs": vs}
-    ):
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": ordinary, "tl.ascend_auto_sync_vs": vs}):
         module = tilelang.transform.AscendInsertSync(target, "A3")(tvm.IRModule({"main": function}))
     return module["main"]
 
@@ -106,9 +98,7 @@ def _op_name(call: tir.Call) -> str:
     return call.op.name if isinstance(call.op, tvm.ir.Op) else str(call.op)
 
 
-def _assert_var_map_unchanged(
-    actual: Mapping[tir.Var, tir.PrimExpr], expected: Mapping[tir.Var, tir.PrimExpr]
-) -> None:
+def _assert_var_map_unchanged(actual: Mapping[tir.Var, tir.PrimExpr], expected: Mapping[tir.Var, tir.PrimExpr]) -> None:
     # Legacy SEqual on a bare Var-keyed Map requires a surrounding binder and
     # can return false even for map compared with itself. Check identities and
     # values directly, without allowing free-variable renaming.
@@ -119,16 +109,10 @@ def _assert_var_map_unchanged(
         assert tvm.ir.structural_equal(actual[matching[0]], value)
 
 
-def _assert_handoff(
-    function: tir.PrimFunc, event: str, producer: tir.Stmt, consumer: tir.Stmt
-) -> None:
+def _assert_handoff(function: tir.PrimFunc, event: str, producer: tir.Stmt, consumer: tir.Stmt) -> None:
     calls = _calls(function)
-    producer_index = next(
-        index for index, call in enumerate(calls) if tvm.ir.structural_equal(call, producer.value)
-    )
-    consumer_index = next(
-        index for index, call in enumerate(calls) if tvm.ir.structural_equal(call, consumer.value)
-    )
+    producer_index = next(index for index, call in enumerate(calls) if tvm.ir.structural_equal(call, producer.value))
+    consumer_index = next(index for index, call in enumerate(calls) if tvm.ir.structural_equal(call, consumer.value))
     for index in range(producer_index + 1, consumer_index):
         call = calls[index]
         if _op_name(call) != "tl.ascend_auto_set_flag" or call.args[0].value != event:
@@ -159,6 +143,7 @@ def test_unsigned_wrapping_index_keeps_scalar_vector_dependency(constant_index: 
             _op_name(call) == "tl.ascend_auto_wait_flag" and call.args[0].value == event and int(call.args[1]) == event_id
             for call in _calls(result)
         )
+
 
 @pytest.mark.parametrize("hazard", ["RAW", "WAR", "WAW"])
 def test_shared_physical_address_is_ordered_without_merging_logical_vars(hazard: str) -> None:
@@ -199,9 +184,7 @@ def test_dma_footprint_uses_padded_allocation_instead_of_pointer_extent() -> Non
     first = _copy("copy_ub_to_gm", buffers["a"], buffers["output"])
     second = _fill(buffers["b"])
     original = _function(buffers, [first, second], b_offset=384)
-    original = original.with_attr(
-        "size_map", {buffers["a"].data: 512, buffers["b"].data: 256, buffers["tmp"].data: 256}
-    )
+    original = original.with_attr("size_map", {buffers["a"].data: 512, buffers["b"].data: 256, buffers["tmp"].data: 256})
     _assert_handoff(_run(original), "MTE3_V", first, second)
 
 
@@ -223,15 +206,10 @@ def test_same_vector_pipe_dependency_is_covered_by_unified_engine() -> None:
     second = _copy("copy_ub_to_ub", buffers["a"], buffers["tmp"])
     result = _run(_function(buffers, [first, second], b_offset=256))
     calls = _calls(result)
-    first_index = next(
-        i for i, call in enumerate(calls) if tvm.ir.structural_equal(call, first.value)
-    )
-    last_index = next(
-        i for i, call in enumerate(calls) if tvm.ir.structural_equal(call, second.value)
-    )
+    first_index = next(i for i, call in enumerate(calls) if tvm.ir.structural_equal(call, first.value))
+    last_index = next(i for i, call in enumerate(calls) if tvm.ir.structural_equal(call, second.value))
     assert any(
-        _op_name(call) == "tl.ascend_auto_barrier" and call.args[0].value == "PIPE_V"
-        for call in calls[first_index + 1 : last_index]
+        _op_name(call) == "tl.ascend_auto_barrier" and call.args[0].value == "PIPE_V" for call in calls[first_index + 1 : last_index]
     )
 
 
@@ -276,11 +254,7 @@ def _executed_events(
             for index in range(minimum, minimum + integer(statement.extent, bindings)):
                 visit(statement.body, {**bindings, statement.loop_var: index})
         elif isinstance(statement, tir.IfThenElse):
-            branch = (
-                statement.then_case
-                if integer(statement.condition, bindings)
-                else statement.else_case
-            )
+            branch = statement.then_case if integer(statement.condition, bindings) else statement.else_case
             if branch is not None:
                 visit(branch, bindings)
         elif isinstance(statement, tir.LetStmt):
@@ -290,9 +264,7 @@ def _executed_events(
         elif isinstance(statement, tir.Evaluate) and isinstance(statement.value, tir.Call):
             call = statement.value
             if _op_name(call) in {"tl.ascend_auto_set_flag", "tl.ascend_auto_wait_flag"}:
-                events.append(
-                    (_op_name(call), str(call.args[0].value), integer(call.args[1], bindings))
-                )
+                events.append((_op_name(call), str(call.args[0].value), integer(call.args[1], bindings)))
             elif _op_name(call) not in _SYNC_OPS and computations is not None:
                 computations.append(call)
 
@@ -358,9 +330,7 @@ def test_unknown_side_effect_is_rejected() -> None:
 
 def test_materialized_versions_without_epoch_provenance_are_rejected() -> None:
     buffers = _buffers()
-    original = _function(buffers, [_fill(buffers["a"])]).with_attr(
-        "buffer_versions", {buffers["a"].data: 2}
-    )
+    original = _function(buffers, [_fill(buffers["a"])]).with_attr("buffer_versions", {buffers["a"].data: 2})
     with pytest.raises(tvm.error.TVMError, match="(?i)(provenance|version|pipeline|epoch)"):
         _run(original)
 
@@ -374,9 +344,7 @@ def test_repeated_pass_is_idempotent_but_changed_address_facts_are_rejected() ->
     first = _run(original)
     second = _run(first)
     assert tvm.ir.structural_equal(first, second)
-    changed = first.with_attr(
-        "address_map", {buffers["a"].data: 0, buffers["b"].data: 256, buffers["tmp"].data: 4096}
-    )
+    changed = first.with_attr("address_map", {buffers["a"].data: 0, buffers["b"].data: 256, buffers["tmp"].data: 4096})
     with pytest.raises(tvm.error.TVMError, match="(?i)(changed|pre-sync|synchronization)"):
         _run(changed)
 
@@ -406,11 +374,7 @@ def test_forward_manual_flag_pair_reserves_its_event_id() -> None:
     original = _function(buffers, [_manual_flag("set"), _manual_flag("wait"), load, fill])
     result = _run(original)
     _assert_handoff(result, "MTE2_V", load, fill)
-    generated = [
-        call
-        for call in _calls(result)
-        if call.op.name == "tl.ascend_auto_set_flag" and call.args[0].value == "MTE2_V"
-    ]
+    generated = [call for call in _calls(result) if call.op.name == "tl.ascend_auto_set_flag" and call.args[0].value == "MTE2_V"]
     assert generated
     assert all(int(call.args[1]) != 0 for call in generated)
 

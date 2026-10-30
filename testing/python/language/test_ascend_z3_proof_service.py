@@ -48,9 +48,7 @@ def _bind_range(service: Service, var: tir.Var, minimum: int, extent: int) -> No
 
 
 @contextmanager
-def _constraint(
-    service: Service, predicate: tir.PrimExpr, *, assume: bool = False
-) -> Iterator[None]:
+def _constraint(service: Service, predicate: tir.PrimExpr, *, assume: bool = False) -> Iterator[None]:
     cleanup = service("enter_constraint", predicate, assume)
     assert callable(cleanup), "valid constraints must return a PackedFunc cleanup"
     try:
@@ -105,9 +103,7 @@ def test_distinct_variables_with_the_same_name_are_not_aliased(prover: Service) 
 
 
 @pytest.mark.parametrize("materialize_first", [False, True], ids=["lazy", "eager"])
-def test_nested_constraints_restore_outer_and_base_state(
-    prover: Service, materialize_first: bool
-) -> None:
+def test_nested_constraints_restore_outer_and_base_state(prover: Service, materialize_first: bool) -> None:
     x = tir.Var("x", "int32")
     _bind_range(prover, x, 0, 32)
     if materialize_first:
@@ -137,9 +133,7 @@ def test_exited_unqueried_scope_is_not_replayed(prover: Service, materialize_fir
 
 @pytest.mark.parametrize("bind_kind", ["bind_range", "bind_expr"])
 @pytest.mark.parametrize("materialization", ["before", "inside", "after"])
-def test_scoped_bindings_do_not_escape_their_constraint_scope(
-    prover: Service, bind_kind: str, materialization: str
-) -> None:
+def test_scoped_bindings_do_not_escape_their_constraint_scope(prover: Service, bind_kind: str, materialization: str) -> None:
     local = tir.Var("local", "int32")
     if materialization == "before":
         prover("smtlib", None)
@@ -184,11 +178,10 @@ def test_unsigned_arithmetic_preserves_wraparound(
         assert _prove(prover, expression == constant(0))
         assert not _prove(prover, expression > constant(0))
 
+
 @pytest.mark.parametrize("numerator", [-17, -7, 7, 17])
 @pytest.mark.parametrize("denominator", [-3, 3])
-def test_signed_floor_division_and_modulo_match_integer_oracle(
-    prover: Service, numerator: int, denominator: int
-) -> None:
+def test_signed_floor_division_and_modulo_match_integer_oracle(prover: Service, numerator: int, denominator: int) -> None:
     x = tir.Var("x", "int32")
     prover("bind_expr", x, tir.IntImm("int32", numerator), False)
     quotient, remainder = divmod(numerator, denominator)
@@ -232,6 +225,7 @@ def test_signed_truncating_division_and_modulo_match_integer_oracle(
     assert not _prove(prover, tir.Div(value, denominator) == quotient + 1)
     assert not _prove(prover, tir.Mod(value, denominator) == remainder + 1)
 
+
 @pytest.mark.parametrize("operation", [tir.Div, tir.Mod])
 @pytest.mark.parametrize("numerator,denominator", [(0, 0), (7, 0), (-(1 << 31), -1)])
 def test_undefined_truncating_division_does_not_prove_a_value(
@@ -243,10 +237,9 @@ def test_undefined_truncating_division_does_not_prove_a_value(
     assert not _prove(prover, expression == 0)
     assert not _prove(prover, expression > 0)
 
+
 @pytest.mark.parametrize("divisor", [3, 16, 127])
-def test_symbolic_divmod_reconstructs_negative_and_positive_indices(
-    prover: Service, divisor: int
-) -> None:
+def test_symbolic_divmod_reconstructs_negative_and_positive_indices(prover: Service, divisor: int) -> None:
     x = tir.Var("index", "int32")
     _bind_range(prover, x, -4096, 8192)
     quotient = tir.floordiv(x, divisor)
@@ -359,9 +352,7 @@ def test_invalid_symbolic_shift_is_rejected_without_poisoning_solver(prover: Ser
 
 
 @pytest.mark.parametrize("materialize_first", [False, True], ids=["lazy", "eager"])
-def test_assumed_mutable_read_expires_with_its_scope(
-    prover: Service, materialize_first: bool
-) -> None:
+def test_assumed_mutable_read_expires_with_its_scope(prover: Service, materialize_first: bool) -> None:
     buffer = tir.decl_buffer((1,), "int32", name="mutable_value")
     value = tir.BufferLoad(buffer, [tir.IntImm("int32", 0)])
     if materialize_first:

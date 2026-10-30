@@ -43,11 +43,7 @@ def _function(
             *metadata,
         )
     )
-    store = tir.Evaluate(
-        tir.call_extern(
-            "handle", "copy_ub_to_gm", local.access_ptr("r"), destination.access_ptr("w")
-        )
-    )
+    store = tir.Evaluate(tir.call_extern("handle", "copy_ub_to_gm", local.access_ptr("r"), destination.access_ptr("w")))
     body = tir.SeqStmt([load, store])
     if binding is not None:
         body = tir.LetStmt(*binding, body)
@@ -69,9 +65,7 @@ def _function(
 
 def _run(function: tir.PrimFunc) -> tir.PrimFunc:
     target = tvm.target.Target({"kind": "llvm", "model": "ascendc"})
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}
-    ):
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}):
         result = tilelang.transform.AscendInsertSync(target, "A3")(tvm.IRModule({"main": function}))
     return result["main"]
 
@@ -115,16 +109,12 @@ def test_full_mask_copy_preserves_the_single_mte2_effect_contract(
 
 @pytest.mark.parametrize("row_mask,column_mask", [(1, 32), (2, 31)])
 def test_tail_copy_uses_the_audited_helper_contract(row_mask: int, column_mask: int) -> None:
-    _assert_admitted(
-        _function("copy_gm_to_ub<float, 32, 2>", (32, row_mask, column_mask, 0), metadata=(2, 32))
-    )
+    _assert_admitted(_function("copy_gm_to_ub<float, 32, 2>", (32, row_mask, column_mask, 0), metadata=(2, 32)))
 
 
 @pytest.mark.parametrize("row_mask,column_mask", [(0, 32), (2, 0)])
 def test_zero_mask_copy_is_rejected(row_mask: int, column_mask: int) -> None:
-    original = _function(
-        "copy_gm_to_ub<float, 32, 2>", (32, row_mask, column_mask, 0), metadata=(2, 32)
-    )
+    original = _function("copy_gm_to_ub<float, 32, 2>", (32, row_mask, column_mask, 0), metadata=(2, 32))
     with pytest.raises(tvm.error.TVMError, match="GM-to-UB tail-copy contract"):
         _run(original)
 

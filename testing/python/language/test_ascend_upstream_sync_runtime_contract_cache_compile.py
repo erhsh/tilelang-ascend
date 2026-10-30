@@ -26,9 +26,7 @@ from test_ascend_upstream_sync_cross_core_device import (
 )
 
 
-def test_real_cython_store_disk_hit_and_damaged_metadata_miss(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_real_cython_store_disk_hit_and_damaged_metadata_miss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     if not tvm.get_global_func("tl.ascend_sync.Z3ProofServiceAvailable")():
         pytest.skip("requires USE_ASCEND_SYNC_Z3=ON and Bisheng compilation")
     cache = kernel_cache._kernel_cache_instance

@@ -71,9 +71,7 @@ def _if_else_loop_program() -> tvm.tir.PrimFunc:
 
 def _assert_host_control_structure(program: tvm.tir.PrimFunc) -> None:
     before, _ = _pre_sync(program, memory_planning=False)
-    branches = [
-        node for node in _nodes(before.body, tvm.tir.IfThenElse) if node.else_case is not None
-    ]
+    branches = [node for node in _nodes(before.body, tvm.tir.IfThenElse) if node.else_case is not None]
     assert len(branches) == 1, "pre-sync IR must retain the real If/else"
     loops = _nodes(before.body, tvm.tir.For)
     assert len(loops) == 1
@@ -81,9 +79,7 @@ def _assert_host_control_structure(program: tvm.tir.PrimFunc) -> None:
 
     target = tvm.target.Target({"kind": "llvm", "model": "ascendc"})
     with tvm.transform.PassContext(config=_PASS_CONFIGS):
-        after = tilelang.transform.AscendInsertSync(target, "A3")(tvm.IRModule({"main": before}))[
-            "main"
-        ]
+        after = tilelang.transform.AscendInsertSync(target, "A3")(tvm.IRModule({"main": before}))["main"]
     captures = [
         node
         for node in _nodes(after.body, tvm.tir.LetStmt)
@@ -93,9 +89,7 @@ def _assert_host_control_structure(program: tvm.tir.PrimFunc) -> None:
     assert not _nodes(tvm.tir.Evaluate(captures[0].value), tvm.tir.BufferLoad)
     assert len(_nodes(after.body, tvm.tir.For)) == 1
     assert all(node.else_case is None for node in _nodes(after.body, tvm.tir.IfThenElse))
-    assert not any(
-        node.name.startswith("__ascend_if_proxy_") for node in _nodes(after.body, tvm.tir.Var)
-    )
+    assert not any(node.name.startswith("__ascend_if_proxy_") for node in _nodes(after.body, tvm.tir.Var))
 
 
 @pytest.fixture(scope="module")
@@ -107,12 +101,8 @@ def if_else_loop_kernel() -> Any:
 
 
 @pytest.mark.parametrize("trip_count", [0, 1, 3, 5])
-def test_runtime_if_else_keeps_untouched_rows_and_drains_repeated_calls(
-    if_else_loop_kernel: Any, trip_count: int
-) -> None:
-    output = torch.full(
-        (_VECTOR_CORES, _ROWS, _WIDTH), _SENTINEL, dtype=torch.float32, device="npu"
-    )
+def test_runtime_if_else_keeps_untouched_rows_and_drains_repeated_calls(if_else_loop_kernel: Any, trip_count: int) -> None:
+    output = torch.full((_VECTOR_CORES, _ROWS, _WIDTH), _SENTINEL, dtype=torch.float32, device="npu")
     count = torch.empty((trip_count,), dtype=torch.int32, device="npu")
     base = torch.arange(_ROWS * _WIDTH, dtype=torch.float32).reshape(_ROWS, _WIDTH)
     for invocation in range(2):

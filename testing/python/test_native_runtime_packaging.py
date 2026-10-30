@@ -31,9 +31,7 @@ def test_on_copies_library_and_soname_to_wheel_and_editable(tmp_path):
     _write_manifest(binary_dir, sources)
     destinations = [tmp_path / "wheel" / "tilelang" / "lib", tmp_path / "editable" / "lib"]
 
-    copied = _NATIVE_RUNTIME.copy_native_runtime_files(
-        [tmp_path / "no-manifest", binary_dir], destinations, required=True
-    )
+    copied = _NATIVE_RUNTIME.copy_native_runtime_files([tmp_path / "no-manifest", binary_dir], destinations, required=True)
 
     expected = {directory / source.name for directory in destinations for source in sources}
     assert set(copied) == expected
@@ -103,9 +101,7 @@ def test_missing_manifest_allows_older_default_build(tmp_path):
 
 def test_missing_manifest_is_an_error_when_required(tmp_path):
     with pytest.raises(FileNotFoundError, match="Native runtime manifest not found"):
-        _NATIVE_RUNTIME.copy_native_runtime_files(
-            [tmp_path], [tmp_path / "destination"], required=True
-        )
+        _NATIVE_RUNTIME.copy_native_runtime_files([tmp_path], [tmp_path / "destination"], required=True)
 
 
 def test_required_runtime_rejects_first_off_manifest(tmp_path):
@@ -118,9 +114,7 @@ def test_required_runtime_rejects_first_off_manifest(tmp_path):
     _write_manifest(stale, [source])
 
     with pytest.raises(ValueError, match="OFF manifest is empty"):
-        _NATIVE_RUNTIME.copy_native_runtime_files(
-            [current, stale], [tmp_path / "destination"], required=True
-        )
+        _NATIVE_RUNTIME.copy_native_runtime_files([current, stale], [tmp_path / "destination"], required=True)
 
 
 def test_copy_does_not_remove_or_recopy_colocated_source(tmp_path):
@@ -184,12 +178,7 @@ def test_off_cleanup_preserves_search_directories_and_aliases(tmp_path):
     alias = tmp_path / "source-alias"
     alias.symlink_to(binary_dir, target_is_directory=True)
 
-    assert (
-        _NATIVE_RUNTIME.copy_native_runtime_files(
-            [binary_dir, other_source_dir], [binary_dir, other_source_dir, alias]
-        )
-        == []
-    )
+    assert _NATIVE_RUNTIME.copy_native_runtime_files([binary_dir, other_source_dir], [binary_dir, other_source_dir, alias]) == []
 
     for directory in (binary_dir, other_source_dir, alias):
         assert (directory / "libz3.so").read_bytes() == b"source-library"

@@ -40,15 +40,11 @@ def _buffers() -> dict[str, tir.Buffer]:
 
 
 def _copy(name: str, source: tir.Buffer, destination: tir.Buffer) -> tir.Evaluate:
-    return tir.Evaluate(
-        tir.call_extern("handle", name, source.access_ptr("r"), destination.access_ptr("w"))
-    )
+    return tir.Evaluate(tir.call_extern("handle", name, source.access_ptr("r"), destination.access_ptr("w")))
 
 
 def _fill(destination: tir.Buffer) -> tir.Evaluate:
-    return tir.Evaluate(
-        tir.call_extern("handle", "AscendC::Duplicate", destination.access_ptr("w"))
-    )
+    return tir.Evaluate(tir.call_extern("handle", "AscendC::Duplicate", destination.access_ptr("w")))
 
 
 def _store(destination: tir.Buffer, value: tir.PrimExpr | None = None) -> tir.BufferStore:
@@ -79,12 +75,8 @@ def _function(buffers: dict[str, tir.Buffer], statements: list[tir.Stmt]) -> tir
 
 def _run(function: tir.PrimFunc, *, ordinary: bool, vs: bool, platform: str = "A3") -> tir.PrimFunc:
     target = tvm.target.Target("c -keys=ascend -model=ascendc")
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": ordinary, "tl.ascend_auto_sync_vs": vs}
-    ):
-        result = tilelang.transform.AscendInsertSync(target, platform)(
-            tvm.IRModule({"main": function})
-        )
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": ordinary, "tl.ascend_auto_sync_vs": vs}):
+        result = tilelang.transform.AscendInsertSync(target, platform)(tvm.IRModule({"main": function}))
     return result["main"]
 
 
@@ -92,11 +84,7 @@ def _sync_calls(function: tir.PrimFunc) -> list[tir.Call]:
     result = []
 
     def collect(node: object) -> None:
-        if (
-            isinstance(node, tir.Call)
-            and isinstance(node.op, tvm.ir.Op)
-            and node.op.name in _SYNC_OPS
-        ):
+        if isinstance(node, tir.Call) and isinstance(node.op, tvm.ir.Op) and node.op.name in _SYNC_OPS:
             result.append(node)
 
     tir.stmt_functor.post_order_visit(function.body, collect)
@@ -141,9 +129,7 @@ def test_dma_handoffs_require_ordinary_sync(ordinary: bool, vs: bool, direction:
 
 @pytest.mark.parametrize("ordinary,vs", _CONFIGURATIONS)
 @pytest.mark.parametrize("platform", ["A2", "A3", "A5"])
-def test_vector_self_handoff_obeys_platform_and_configuration(
-    ordinary: bool, vs: bool, platform: str
-) -> None:
+def test_vector_self_handoff_obeys_platform_and_configuration(ordinary: bool, vs: bool, platform: str) -> None:
     buffers = _buffers()
     original = _function(
         buffers,
@@ -187,9 +173,7 @@ def test_scalar_handoffs_obey_both_sync_options(ordinary: bool, vs: bool, direct
 
 def test_scalar_self_dependency_needs_no_hardware_event() -> None:
     buffers = _buffers()
-    original = _function(
-        buffers, [_store(buffers["a"]), _store(buffers["b"], tir.BufferLoad(buffers["a"], [0]))]
-    )
+    original = _function(buffers, [_store(buffers["a"]), _store(buffers["b"], tir.BufferLoad(buffers["a"], [0]))])
     assert not _sync_calls(_run(original, ordinary=False, vs=True))
 
 

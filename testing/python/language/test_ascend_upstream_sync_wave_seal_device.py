@@ -98,15 +98,13 @@ def _assert_wave_seal_structure(program: tvm.tir.PrimFunc) -> None:
     loops = _nodes(program.body, tvm.tir.For)
     assert len(loops) == 1 and loops[0].kind == tvm.tir.ForKind.SERIAL
     assert isinstance(loops[0].extent, tvm.tir.Var), "Count.shape must remain runtime-bound"
-    allocations = [
-        buffer for block in _nodes(program.body, tvm.tir.Block) for buffer in block.alloc_buffers
-    ]
+    allocations = [buffer for block in _nodes(program.body, tvm.tir.Block) for buffer in block.alloc_buffers]
     assert len(allocations) == 1 and allocations[0].scope() == "shared.ub"
     assert [int(extent) for extent in allocations[0].shape] == [_WIDTH]
     count = program.buffer_map[program.params[2]]
-    assert not any(
-        load.buffer.data.same_as(count.data) for load in _nodes(program.body, tvm.tir.BufferLoad)
-    ), "Count supplies its shape, not runtime scalar values"
+    assert not any(load.buffer.data.same_as(count.data) for load in _nodes(program.body, tvm.tir.BufferLoad)), (
+        "Count supplies its shape, not runtime scalar values"
+    )
     calls = _nodes(program.body, tvm.tir.Call)
     names = [getattr(call.op, "name", "") for call in calls]
     assert not any("barrier" in name for name in names)

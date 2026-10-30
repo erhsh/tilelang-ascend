@@ -144,9 +144,7 @@ class JITKernel:
         """
         from tilelang.jit.ascend_runtime_contract import validate_cached_auto_gm_manifest
 
-        validate_cached_auto_gm_manifest(
-            func, execution_backend, auto_gm_idx, len(params), auto_gm_manifest, pass_configs
-        )
+        validate_cached_auto_gm_manifest(func, execution_backend, auto_gm_idx, len(params), auto_gm_manifest, pass_configs)
         instance = cls(
             func=func,
             out_idx=out_idx,
@@ -264,9 +262,7 @@ class JITKernel:
                 self._auto_gm_idx = target_prim_func.attrs["auto_gm_indices"]
                 self._auto_gm_idx = [int(item.value) for item in self._auto_gm_idx]
 
-        validate_cached_auto_gm_contract(
-            tilelang_func, execution_backend, self._auto_gm_idx, len(artifact.params)
-        )
+        validate_cached_auto_gm_contract(tilelang_func, execution_backend, self._auto_gm_idx, len(artifact.params))
 
         # Create an adapter based on the specified execution backend.
         if execution_backend == "dlpack":

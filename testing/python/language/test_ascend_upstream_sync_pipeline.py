@@ -56,9 +56,7 @@ class _VectorCompletionOracle:
 
     @staticmethod
     def _require_before(previous, current, description):
-        assert all(
-            before <= after for before, after in zip(previous, current)
-        ), f"memory dependency missing: {description}"
+        assert all(before <= after for before, after in zip(previous, current)), f"memory dependency missing: {description}"
 
     def flag(self, kind, event, event_id):
         source, destination = event.split("_")
@@ -139,11 +137,7 @@ def _execute_protocol(function, vector_id):
             for iteration in range(start, start + extent):
                 visit(statement.body, {**bindings, statement.loop_var: iteration}, resource)
         elif isinstance(statement, tir.IfThenElse):
-            branch = (
-                statement.then_case
-                if integer(statement.condition, bindings)
-                else statement.else_case
-            )
+            branch = statement.then_case if integer(statement.condition, bindings) else statement.else_case
             if branch is not None:
                 visit(branch, bindings, resource)
         elif isinstance(statement, tir.LetStmt):
@@ -216,15 +210,9 @@ def synchronized_pipelines():
     pipelines = {}
     for num_stages, trip_count in _PIPELINE_CASES:
         for memory_planning in (False, True):
-            original, _ = _pre_sync(
-                _pipelined_abs(trip_count, num_stages), memory_planning=memory_planning
-            )
-            with tvm.transform.PassContext(
-                config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}
-            ):
-                result = tilelang.transform.AscendInsertSync(target, "A3")(
-                    tvm.IRModule({"main": original})
-                )["main"]
+            original, _ = _pre_sync(_pipelined_abs(trip_count, num_stages), memory_planning=memory_planning)
+            with tvm.transform.PassContext(config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}):
+                result = tilelang.transform.AscendInsertSync(target, "A3")(tvm.IRModule({"main": original}))["main"]
             pipelines[num_stages, trip_count, memory_planning] = (original, result)
     return pipelines
 
@@ -232,9 +220,7 @@ def synchronized_pipelines():
 @pytest.mark.parametrize("num_stages,trip_count", _PIPELINE_CASES)
 @pytest.mark.parametrize("memory_planning", [False, True])
 @pytest.mark.parametrize("vector_id", [0, 1])
-def test_real_injected_ring_protocol_is_balanced(
-    synchronized_pipelines, num_stages, trip_count, memory_planning, vector_id
-):
+def test_real_injected_ring_protocol_is_balanced(synchronized_pipelines, num_stages, trip_count, memory_planning, vector_id):
     original, result = synchronized_pipelines[num_stages, trip_count, memory_planning]
     original_versions = original.attrs["buffer_versions"]
     result_versions = result.attrs["buffer_versions"]
@@ -252,9 +238,7 @@ def test_real_injected_ring_protocol_is_balanced(
     ]
     assert literal_calls
     assert all(0 <= event_id < 8 for _, _, event_id in literal_calls)
-    print(
-        f"B={num_stages} count={trip_count} memory_planning={memory_planning} literal_events={literal_calls}"
-    )
+    print(f"B={num_stages} count={trip_count} memory_planning={memory_planning} literal_events={literal_calls}")
     tokens = set()
     for invocation in range(3):
         events, computations = _execute_protocol(result, vector_id)
@@ -278,9 +262,7 @@ def test_protocol_oracle_detects_missing_credits_and_drains(synchronized_pipelin
 
 
 @pytest.mark.parametrize("event", ["MTE2_V", "V_MTE2", "V_MTE3", "MTE3_V"])
-def test_completion_oracle_rejects_balanced_flags_with_missing_ring_dependency(
-    synchronized_pipelines, event
-):
+def test_completion_oracle_rejects_balanced_flags_with_missing_ring_dependency(synchronized_pipelines, event):
     _, result = synchronized_pipelines[3, 7, False]
 
     def remove_pair(statement):
@@ -290,8 +272,6 @@ def test_completion_oracle_rejects_balanced_flags_with_missing_ring_dependency(
                 return tir.Evaluate(0)
         return None
 
-    corrupted = result.with_body(
-        tir.stmt_functor.ir_transform(result.body, remove_pair, None, ["tir.Evaluate"])
-    )
+    corrupted = result.with_body(tir.stmt_functor.ir_transform(result.body, remove_pair, None, ["tir.Evaluate"]))
     with pytest.raises(AssertionError, match="memory dependency missing"):
         _execute_protocol(corrupted, 0)

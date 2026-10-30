@@ -74,9 +74,7 @@ def test_other_adapters_cannot_reuse_an_old_allocation_promise(backend: str) -> 
     assert requires_fresh_auto_gm(original)
 
 
-@pytest.mark.parametrize(
-    "target", ["llvm", "pto", "llvm -model=ascendc", tvm.target.Target("llvm")]
-)
+@pytest.mark.parametrize("target", ["llvm", "pto", "llvm -model=ascendc", tvm.target.Target("llvm")])
 def test_unrecognized_targets_do_not_acquire_the_contract(target: object) -> None:
     original = _prepared()
     result = prepare_auto_gm_contract(original, "cython", target)
@@ -121,9 +119,7 @@ def test_a_present_null_marker_is_not_an_absent_contract() -> None:
 
 
 @pytest.mark.parametrize("indices,param_count", [([], 0), ([], 3), ([0, 2], 3)])
-def test_valid_lowered_workspace_indices_are_preserved(
-    indices: list[int], param_count: int
-) -> None:
+def test_valid_lowered_workspace_indices_are_preserved(indices: list[int], param_count: int) -> None:
     before = indices.copy()
     validate_cached_auto_gm_contract(_prepared(), "cython", indices, param_count)
     assert indices == before
@@ -141,9 +137,7 @@ def test_missing_or_nonlist_workspace_metadata_fails_closed(indices: object) -> 
         validate_cached_auto_gm_contract(_prepared(), "cython", indices, 3)
 
 
-@pytest.mark.parametrize(
-    "indices", [[-1], [3], [True], [False], ["0"], [tvm.tir.IntImm("int32", 0)]]
-)
+@pytest.mark.parametrize("indices", [[-1], [3], [True], [False], ["0"], [tvm.tir.IntImm("int32", 0)]])
 def test_workspace_indices_are_strict_integers_in_the_lowered_parameter_range(
     indices: list[object],
 ) -> None:
@@ -185,18 +179,14 @@ def test_unmarked_functions_do_not_require_a_manifest(function: object) -> None:
 
 
 @pytest.mark.parametrize("indices,param_count", [([], 0), ([], 3), ([0, 2], 3)])
-def test_valid_manifests_accept_empty_or_populated_workspace_tables(
-    indices: list[int], param_count: int
-) -> None:
+def test_valid_manifests_accept_empty_or_populated_workspace_tables(indices: list[int], param_count: int) -> None:
     function = _prepared()
     manifest = build_cached_auto_gm_manifest(function, "cython", indices, param_count)
     validate_cached_auto_gm_manifest(function, "cython", indices, param_count, manifest)
 
 
 def test_manifest_count_describes_lowered_parameters_including_added_workspace() -> None:
-    original = tvm.tir.PrimFunc(
-        [tvm.tir.Var(f"arg{i}", "handle") for i in range(3)], tvm.tir.Evaluate(0)
-    )
+    original = tvm.tir.PrimFunc([tvm.tir.Var(f"arg{i}", "handle") for i in range(3)], tvm.tir.Evaluate(0))
     function = prepare_auto_gm_contract(original, "cython", "ascendc")
     manifest = build_cached_auto_gm_manifest(function, "cython", [3], 4)
     validate_cached_auto_gm_manifest(function, "cython", [3], 4, manifest)

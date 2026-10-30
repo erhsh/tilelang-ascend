@@ -34,12 +34,8 @@ def _requires_proof_service() -> None:
 
 def _run(function: tir.PrimFunc) -> tir.PrimFunc:
     target = tvm.target.Target({"kind": "llvm", "model": "ascendc"})
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}
-    ):
-        return tilelang.transform.AscendInsertSync(target, "A3")(tvm.IRModule({"main": function}))[
-            "main"
-        ]
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}):
+        return tilelang.transform.AscendInsertSync(target, "A3")(tvm.IRModule({"main": function}))["main"]
 
 
 def _attributes(function: tir.PrimFunc, key: str) -> list[tir.AttrStmt]:
@@ -82,11 +78,7 @@ def three_stage_programs():
 
 
 def _specialize_runtime_body(function, dimension, trip_count):
-    return function.with_body(
-        tir.stmt_functor.substitute(
-            function.body, {dimension: tir.IntImm(dimension.dtype, trip_count)}
-        )
-    )
+    return function.with_body(tir.stmt_functor.substitute(function.body, {dimension: tir.IntImm(dimension.dtype, trip_count)}))
 
 
 def _assert_runtime_protocol(before, after, trip_count, vector_id, num_stages):
@@ -109,9 +101,9 @@ def _assert_runtime_protocol(before, after, trip_count, vector_id, num_stages):
     logical_id, ring = next(iter(after.attrs[_RINGS].items()))
     assert int(ring[1]) == int(after.attrs[_VERSIONS][logical_id]) == num_stages
     assert len(_nodes(before.body, tir.Allocate)) == len(_nodes(after.body, tir.Allocate))
-    assert not any(
-        var.name.startswith("__ascend_if_proxy_") for var in _nodes(after.body, tir.Var)
-    ), "pipeline cases and bounds must never become synthetic epoch loops"
+    assert not any(var.name.startswith("__ascend_if_proxy_") for var in _nodes(after.body, tir.Var)), (
+        "pipeline cases and bounds must never become synthetic epoch loops"
+    )
     assert tvm.ir.structural_equal(after, _run(after))
 
 
@@ -136,9 +128,7 @@ def test_three_stage_dynamic_pipeline_preserves_true_ring_and_protocol(
 
 
 @pytest.mark.parametrize("memory_planning", [False, True])
-def test_dynamic_pipeline_metadata_survives_all_relevant_passes(
-    dynamic_programs, memory_planning: bool
-) -> None:
+def test_dynamic_pipeline_metadata_survives_all_relevant_passes(dynamic_programs, memory_planning: bool) -> None:
     before, snapshots, _ = dynamic_programs[memory_planning]
     required = {
         "tl.InjectSoftwarePipeline",
@@ -159,11 +149,7 @@ def test_dynamic_pipeline_metadata_survives_all_relevant_passes(
         assert isinstance(scopes[0].value, tir.Var), stage
         frames = _attributes(function, _STAGE)
         assert frames and all(frame.node[0].same_as(owner) for frame in frames), stage
-    stores = [
-        frame
-        for frame in _attributes(before, _STAGE)
-        if _contains_operation(frame.body, "copy_ub_to_gm")
-    ]
+    stores = [frame for frame in _attributes(before, _STAGE) if _contains_operation(frame.body, "copy_ub_to_gm")]
     assert len(stores) == 3, "steady and both epilogue B1 stores need stage clocks"
 
 
@@ -188,10 +174,7 @@ def test_dynamic_completion_oracle_rejects_deleted_whole_event_pairs(
     def remove_pair(statement):
         if isinstance(statement, tir.Evaluate) and isinstance(statement.value, tir.Call):
             call = statement.value
-            if (
-                _operation(call) in ("tl.ascend_auto_set_flag", "tl.ascend_auto_wait_flag")
-                and call.args[0].value == event
-            ):
+            if _operation(call) in ("tl.ascend_auto_set_flag", "tl.ascend_auto_wait_flag") and call.args[0].value == event:
                 return tir.Evaluate(0)
         return None
 
@@ -204,9 +187,7 @@ def test_dynamic_completion_oracle_rejects_deleted_whole_event_pairs(
 
 
 @pytest.mark.parametrize("memory_planning", [False, True])
-def test_three_stage_slot_cannot_hide_a_different_logical_clock(
-    three_stage_programs, memory_planning
-) -> None:
+def test_three_stage_slot_cannot_hide_a_different_logical_clock(three_stage_programs, memory_planning) -> None:
     before = three_stage_programs[memory_planning][0]
     malformed = _rewrite_attribute(
         before,
@@ -279,9 +260,7 @@ def test_multiple_owners_or_rings_are_not_silently_coalesced(dynamic_programs, m
 
 
 @pytest.mark.parametrize("metadata", [_EXTENT, _STAGE])
-def test_extent_and_stage_clock_changes_invalidate_the_bounds_certificate(
-    dynamic_programs, metadata
-) -> None:
+def test_extent_and_stage_clock_changes_invalidate_the_bounds_certificate(dynamic_programs, metadata) -> None:
     before = dynamic_programs[False][0]
     malformed = _rewrite_attribute(
         before,
@@ -417,9 +396,7 @@ def test_user_ring_if_cannot_borrow_an_injector_bounds_marker(dynamic_programs) 
     malformed = _rewrite_attribute(
         before,
         _CLOCK,
-        lambda attr: tir.AttrStmt(
-            attr.node, attr.attr_key, attr.value, tir.IfThenElse(predicate, attr.body, None)
-        ),
+        lambda attr: tir.AttrStmt(attr.node, attr.attr_key, attr.value, tir.IfThenElse(predicate, attr.body, None)),
     )
     malformed = tir.PrimFunc(
         [*malformed.params, predicate],
@@ -449,9 +426,7 @@ def test_async_protocol_hidden_inside_stage_payload_is_rejected(dynamic_programs
 
 
 @pytest.mark.parametrize("wrapper", ["for", "if", "extra"])
-def test_outer_semantic_control_and_extra_computation_remain_unsupported(
-    dynamic_programs, wrapper
-) -> None:
+def test_outer_semantic_control_and_extra_computation_remain_unsupported(dynamic_programs, wrapper) -> None:
     before = dynamic_programs[False][0]
     if wrapper == "for":
         body = tir.For(tir.Var("outer", "int32"), 0, 2, tir.ForKind.SERIAL, before.body)
@@ -480,9 +455,7 @@ def test_dead_pipeline_metadata_does_not_hide_executable_wrapper_effects(operati
         wrapped = tir.LetStmt(tir.Var("saved", "int32"), source[0], before.body)
         buffer_map = dict(before.buffer_map.items())
         buffer_map[source.data] = source
-        malformed = tir.PrimFunc(
-            [*before.params, source.data], wrapped, before.ret_type, buffer_map, before.attrs
-        )
+        malformed = tir.PrimFunc([*before.params, source.data], wrapped, before.ret_type, buffer_map, before.attrs)
     else:
         malformed = before.with_body(
             tir.LetStmt(
@@ -514,9 +487,7 @@ def test_zero_work_does_not_hide_corrupted_provenance(mutation) -> None:
     elif mutation == "missing_versions":
         malformed = before.without_attr(_VERSIONS)
     elif mutation == "clock_id":
-        malformed = before.with_body(
-            tir.AttrStmt([tir.Var("unknown_ring", "handle")], _CLOCK, 0, before.body)
-        )
+        malformed = before.with_body(tir.AttrStmt([tir.Var("unknown_ring", "handle")], _CLOCK, 0, before.body))
     else:
         versions = dict(before.attrs[_VERSIONS].items())
         versions[next(iter(before.attrs[_RINGS]))] = 3

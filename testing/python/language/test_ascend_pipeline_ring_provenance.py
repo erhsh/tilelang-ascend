@@ -44,9 +44,7 @@ def _pipelined_abs(trip_count: int, num_stages: int = 2):
 
 def _nodes(statement, node_type):
     result = []
-    tir.stmt_functor.post_order_visit(
-        statement, lambda node: result.append(node) if isinstance(node, node_type) else None
-    )
+    tir.stmt_functor.post_order_visit(statement, lambda node: result.append(node) if isinstance(node, node_type) else None)
     return result
 
 
@@ -96,9 +94,7 @@ def _pre_sync(program, *, backend="upstream", memory_planning=False):
 @pytest.mark.parametrize("num_stages,trip_count", [(2, 4), (2, 5), (3, 7), (3, 8)])
 @pytest.mark.parametrize("memory_planning", [False, True])
 def test_real_pipelined_vector_ring_survives_lowering(num_stages, trip_count, memory_planning):
-    function, snapshots = _pre_sync(
-        _pipelined_abs(trip_count, num_stages), memory_planning=memory_planning
-    )
+    function, snapshots = _pre_sync(_pipelined_abs(trip_count, num_stages), memory_planning=memory_planning)
     assert {
         "tl.InjectSoftwarePipeline",
         "tl.AscendLowerOpaqueBlock",
@@ -213,10 +209,7 @@ def test_injector_records_padded_physical_stride():
     assert int(record[4]) == 128 * 208 * 16
     assert int(record[4]) > 128 * 200 * 16
     allocation = next(
-        buffer
-        for block in _nodes(function.body, tir.Block)
-        for buffer in block.alloc_buffers
-        if buffer.data.same_as(record[2])
+        buffer for block in _nodes(function.body, tir.Block) for buffer in block.alloc_buffers if buffer.data.same_as(record[2])
     )
     assert [int(extent) for extent in allocation.shape] == [2, 128, 208]
 
@@ -231,21 +224,13 @@ def test_nonzero_min_keeps_real_version_count_without_false_provenance():
 def test_storage_merge_preserves_logical_ids_and_real_bit_offsets():
     first = tir.decl_buffer((128,), "float32", name="first", scope="shared.l0a")
     second = tir.decl_buffer((128,), "float32", name="second", scope="shared.l0a")
-    touch = tir.Evaluate(
-        tir.call_extern("handle", "touch_both", first.access_ptr("rw"), second.access_ptr("rw"))
-    )
+    touch = tir.Evaluate(tir.call_extern("handle", "touch_both", first.access_ptr("rw"), second.access_ptr("rw")))
     body = tir.AttrStmt(tvm.runtime.convert([second.data]), _CLOCK, 0, touch)
     for buffer in (second, first):
         body = tir.Allocate(buffer.data, buffer.dtype, [128], tir.const(True, "bool"), body)
-    body = tir.AttrStmt(
-        tir.IterVar(tvm.ir.Range(0, 1), "block", 1, "blockIdx.x"), "thread_extent", 1, body
-    )
-    function = tir.PrimFunc([], body).with_attr(
-        _PROVENANCE, {first.data: _record(first.data), second.data: _record(second.data)}
-    )
-    result = tilelang.transform.AscendStorageRewrite(is_npu=True)(tvm.IRModule({"main": function}))[
-        "main"
-    ]
+    body = tir.AttrStmt(tir.IterVar(tvm.ir.Range(0, 1), "block", 1, "blockIdx.x"), "thread_extent", 1, body)
+    function = tir.PrimFunc([], body).with_attr(_PROVENANCE, {first.data: _record(first.data), second.data: _record(second.data)})
+    result = tilelang.transform.AscendStorageRewrite(is_npu=True)(tvm.IRModule({"main": function}))["main"]
 
     records = result.attrs[_PROVENANCE]
     assert set(records.keys()) == {first.data, second.data}
@@ -254,11 +239,7 @@ def test_storage_merge_preserves_logical_ids_and_real_bit_offsets():
     assert sorted(int(record[3]) for record in records.values()) == [0, 4096]
     assert all(int(record[4]) == 2048 for record in records.values())
     assert _clocks(result)[0].node[0].same_as(second.data)
-    pointers = [
-        node
-        for node in _nodes(result.body, tir.Call)
-        if node.op.same_as(tvm.ir.Op.get("tir.tvm_access_ptr"))
-    ]
+    pointers = [node for node in _nodes(result.body, tir.Call) if node.op.same_as(tvm.ir.Op.get("tir.tvm_access_ptr"))]
     assert sorted(int(pointer.args[2]) * 32 for pointer in pointers) == [0, 4096]
 
 
@@ -276,9 +257,7 @@ def test_pointer_retyping_updates_physical_root_without_scaling_bits():
     body = tir.Allocate(backing.data, backing.dtype, [128], tir.const(True, "bool"), body)
     function = tir.PrimFunc([], body).with_attr(_PROVENANCE, {alias: _record(alias, base_bits=32)})
 
-    result = tilelang.transform.AscendStorageRewrite(is_npu=True)(tvm.IRModule({"main": function}))[
-        "main"
-    ]
+    result = tilelang.transform.AscendStorageRewrite(is_npu=True)(tvm.IRModule({"main": function}))["main"]
 
     record = result.attrs[_PROVENANCE][alias]
     assert not record[2].same_as(alias)
@@ -291,15 +270,11 @@ def test_clock_shell_is_transparent_to_memory_planning():
     program, _ = _pre_sync(_pipelined_abs(5))
     stripped_body = tir.stmt_functor.ir_transform(
         program.body,
-        lambda node: node.body
-        if isinstance(node, tir.AttrStmt) and node.attr_key == _CLOCK
-        else None,
+        lambda node: node.body if isinstance(node, tir.AttrStmt) and node.attr_key == _CLOCK else None,
         None,
         ["tir.AttrStmt"],
     )
-    attrs = {
-        key: value for key, value in program.attrs.items() if key not in ("address_map", "size_map")
-    }
+    attrs = {key: value for key, value in program.attrs.items() if key not in ("address_map", "size_map")}
     functions = [
         tir.PrimFunc(
             program.params,
@@ -311,10 +286,7 @@ def test_clock_shell_is_transparent_to_memory_planning():
         for body in (program.body, stripped_body)
     ]
     with tvm.transform.PassContext(config={"tl.ascend_memory_planning": True}):
-        results = [
-            tilelang.transform.AscendMemoryPlanning()(tvm.IRModule({"main": function}))["main"]
-            for function in functions
-        ]
+        results = [tilelang.transform.AscendMemoryPlanning()(tvm.IRModule({"main": function}))["main"] for function in functions]
 
     def allocation_plan(function):
         # IRModule construction may alpha-rename the two functions' pointer
@@ -322,10 +294,7 @@ def test_clock_shell_is_transparent_to_memory_planning():
         # each named allocation's actual address and size after planning.
         addresses = function.attrs["address_map"]
         sizes = function.attrs["size_map"]
-        plan = {
-            variable.name: (int(address), int(sizes[variable]))
-            for variable, address in addresses.items()
-        }
+        plan = {variable.name: (int(address), int(sizes[variable])) for variable, address in addresses.items()}
         assert len(plan) == len(addresses)
         return plan
 

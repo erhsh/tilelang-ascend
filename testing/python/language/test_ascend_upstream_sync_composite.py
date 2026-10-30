@@ -27,9 +27,7 @@ _RESERVED = {
 
 
 def _gemms(function):
-    return [
-        call for call in _nodes(function.body, tir.Call) if getattr(call.op, "name", None) == _GEMM
-    ]
+    return [call for call in _nodes(function.body, tir.Call) if getattr(call.op, "name", None) == _GEMM]
 
 
 def _events(function):
@@ -42,12 +40,8 @@ def _events(function):
 
 def _run(function, *, platform="A3", model="ascendc", target_kind="c"):
     target = tvm.target.Target(f"{target_kind} -keys=ascend -model={model}")
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}
-    ):
-        return tilelang.transform.AscendInsertSync(target, platform)(
-            tvm.IRModule({"main": function})
-        )["main"]
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}):
+        return tilelang.transform.AscendInsertSync(target, platform)(tvm.IRModule({"main": function}))["main"]
 
 
 def _rewrite_gemm(function, rewrite):
@@ -60,9 +54,7 @@ def _rewrite_gemm(function, rewrite):
             return rewrite(statement.value)
         return None
 
-    return function.with_body(
-        tir.stmt_functor.ir_transform(function.body, visit, None, ["tir.Evaluate"])
-    )
+    return function.with_body(tir.stmt_functor.ir_transform(function.body, visit, None, ["tir.Evaluate"]))
 
 
 def _changed_call(call, *, template=None, n_actual=None, clear=None):
@@ -101,15 +93,12 @@ def flat_gemms():
 @pytest.mark.parametrize("k", [64, 256])
 @pytest.mark.parametrize("target_kind", ["c", "llvm"])
 @pytest.mark.parametrize("model", ["ascendc", "auto"])
-def test_flat_real_gemm_preserves_one_calculation_and_reserves_hidden_events(
-    flat_gemms, k, target_kind, model
-):
+def test_flat_real_gemm_preserves_one_calculation_and_reserves_hidden_events(flat_gemms, k, target_kind, model):
     original = flat_gemms[k]
     assert len(_gemms(original)) == 1
     assert not _nodes(original.body, tir.For)
     assert not any(
-        "flag" in str(getattr(call.op, "name", ""))
-        or "barrier" in str(getattr(call.op, "name", ""))
+        "flag" in str(getattr(call.op, "name", "")) or "barrier" in str(getattr(call.op, "name", ""))
         for call in _nodes(original.body, tir.Call)
     )
     result = _run(original, target_kind=target_kind, model=model)
@@ -143,9 +132,7 @@ def test_flat_accumulating_gemm_preserves_c_read_write_mask(flat_gemms):
     assert int(_gemms(result)[1].args[3].args[4]) == 3
     for calculation, expected in zip(_gemms(result), _gemms(original)):
         tvm.ir.assert_structural_equal(calculation, expected)
-    assert any(
-        event == "M_MTE1" and event_id not in (0, 1) for _, event, event_id in _events(result)
-    )
+    assert any(event == "M_MTE1" and event_id not in (0, 1) for _, event, event_id in _events(result))
 
 
 @pytest.mark.parametrize(
@@ -196,9 +183,7 @@ def test_nonconflicting_manual_id_stays_reserved_for_generated_flags(flat_gemms)
 def test_external_k_loop_is_rejected_until_separate_hardware_acceptance(flat_gemms):
     original = _rewrite_gemm(
         flat_gemms[64],
-        lambda call: tir.For(
-            tir.Var("outer_k", "int32"), 0, 2, tir.ForKind.SERIAL, tir.Evaluate(call)
-        ),
+        lambda call: tir.For(tir.Var("outer_k", "int32"), 0, 2, tir.ForKind.SERIAL, tir.Evaluate(call)),
     )
     with pytest.raises(tvm.error.TVMError, match="(?i)(composite.*For|external.*loop)"):
         _run(original)
@@ -251,11 +236,7 @@ def test_external_conditional_control_is_outside_the_first_flat_contract(flat_ge
 
 def test_user_l0ab_pool_cannot_alias_hidden_scratch(flat_gemms):
     user_l0 = tir.decl_buffer((64,), "float16", name="user_l0", scope="wmma.matrix_a")
-    original = flat_gemms[64].with_body(
-        tir.Allocate(
-            user_l0.data, user_l0.dtype, [64], tir.const(True, "bool"), flat_gemms[64].body
-        )
-    )
+    original = flat_gemms[64].with_body(tir.Allocate(user_l0.data, user_l0.dtype, [64], tir.const(True, "bool"), flat_gemms[64].body))
     with pytest.raises(tvm.error.TVMError, match="(?i)(hidden.*L0|user.*L0|pool)"):
         _run(original)
 
@@ -302,9 +283,7 @@ def test_composite_target_contract_is_explicit(flat_gemms, platform, model):
     ],
 )
 def test_dynamic_or_nonpositive_template_shape_is_rejected(flat_gemms, template):
-    original = _rewrite_gemm(
-        flat_gemms[64], lambda call: tir.Evaluate(_changed_call(call, template=template))
-    )
+    original = _rewrite_gemm(flat_gemms[64], lambda call: tir.Evaluate(_changed_call(call, template=template)))
     with pytest.raises(tvm.error.TVMError, match="(?i)(static positive|static.*shape)"):
         _run(original)
 
@@ -351,9 +330,7 @@ def test_gemm_execution_owner_cannot_be_vector(flat_gemms):
 def test_untyped_extern_gemm_is_not_accepted_by_name(flat_gemms):
     original = _rewrite_gemm(
         flat_gemms[64],
-        lambda call: tir.Evaluate(
-            tir.call_extern("handle", "tl::ascend::" + call.args[0].value, *list(call.args[1:]))
-        ),
+        lambda call: tir.Evaluate(tir.call_extern("handle", "tl::ascend::" + call.args[0].value, *list(call.args[1:]))),
     )
     with pytest.raises(tvm.error.TVMError, match="(?i)(canonical typed|composite)"):
         _run(original)
@@ -362,9 +339,7 @@ def test_untyped_extern_gemm_is_not_accepted_by_name(flat_gemms):
 def test_gemm_v1_stays_rejected_without_an_audited_helper(flat_gemms):
     original = _rewrite_gemm(
         flat_gemms[64],
-        lambda call: tir.Evaluate(
-            tir.Call("handle", tvm.ir.Op.get("tl.ascend_gemm_v1"), list(call.args[:5]))
-        ),
+        lambda call: tir.Evaluate(tir.Call("handle", tvm.ir.Op.get("tl.ascend_gemm_v1"), list(call.args[:5]))),
     )
     with pytest.raises(tvm.error.TVMError, match="(?i)(gemm_v1|no audited helper)"):
         _run(original)

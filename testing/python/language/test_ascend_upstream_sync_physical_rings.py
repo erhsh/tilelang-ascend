@@ -50,9 +50,7 @@ def _function(
         result_address = allocation_bytes
     source = tir.decl_buffer((max(64, copy_columns),), "float32", name="input")
     output = tir.decl_buffer((64,), "float32", name="output")
-    physical = tir.decl_buffer(
-        (allocation_elements,), "float32", name="physical", scope="shared.ub"
-    )
+    physical = tir.decl_buffer((allocation_elements,), "float32", name="physical", scope="shared.ub")
     # The stable identity differs from the final pointer after StorageRewrite.
     logical = tir.decl_buffer((64,), "float32", name="logical", scope="shared.ub")
     result = tir.decl_buffer((max(64, abs_count),), "float32", name="result", scope="shared.ub")
@@ -87,9 +85,7 @@ def _function(
         body = tir.AttrStmt(tvm.runtime.convert([logical.data]), CLOCK, clock, body)
     if loop_var is not None:
         body = tir.For(loop_var, 0, 2, tir.ForKind.SERIAL, body)
-    store = tir.Evaluate(
-        tir.call_extern("handle", "copy_ub_to_gm", result.access_ptr("r"), output.access_ptr("w"))
-    )
+    store = tir.Evaluate(tir.call_extern("handle", "copy_ub_to_gm", result.access_ptr("r"), output.access_ptr("w")))
     body = tir.SeqStmt([body, store])
     body = tir.AttrStmt(tir.IntImm("int32", 0), "resource_scope", 1, body)
     for buffer in (physical, result):
@@ -116,9 +112,7 @@ def _function(
             buffer_map={source.data: source, output.data: output},
         )
         .with_attr("address_map", {physical.data: 0, result.data: result_address})
-        .with_attr(
-            "size_map", {physical.data: allocation_bytes, result.data: max(64, abs_count) * 4}
-        )
+        .with_attr("size_map", {physical.data: allocation_bytes, result.data: max(64, abs_count) * 4})
         .with_attr("buffer_versions", version_map)
         .with_attr(PROVENANCE, provenance)
         .with_attr("tir.noalias", True)
@@ -127,9 +121,7 @@ def _function(
 
 def _run(function: tir.PrimFunc) -> tir.PrimFunc:
     target = tvm.target.Target("c -keys=ascend -model=ascendc")
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}
-    ):
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}):
         result = tilelang.transform.AscendInsertSync(target, "A3")(tvm.IRModule({"main": function}))
     return result["main"]
 
@@ -160,16 +152,8 @@ def _assert_mte2_vector_handoff(function: tir.PrimFunc) -> None:
             calls.append(node)
 
     tir.stmt_functor.post_order_visit(result.body, collect)
-    sets = [
-        call
-        for call in calls
-        if call.op.name == "tl.ascend_auto_set_flag" and call.args[0].value == "MTE2_V"
-    ]
-    waits = [
-        call
-        for call in calls
-        if call.op.name == "tl.ascend_auto_wait_flag" and call.args[0].value == "MTE2_V"
-    ]
+    sets = [call for call in calls if call.op.name == "tl.ascend_auto_set_flag" and call.args[0].value == "MTE2_V"]
+    waits = [call for call in calls if call.op.name == "tl.ascend_auto_wait_flag" and call.args[0].value == "MTE2_V"]
     assert sets and waits
     assert {int(call.args[1]) for call in sets} == {int(call.args[1]) for call in waits}
 
@@ -193,11 +177,7 @@ def test_simplified_physical_offset_is_proven_against_the_skewed_clock(versions:
     index = tir.Var("tile", "int32")
     # With 0 <= tile < 2, tile*64 equals ((tile+B) % B)*64. This is the
     # actual simplified steady-loop form produced by the old injector.
-    _assert_mte2_vector_handoff(
-        _function(
-            clock=index + versions, pointer_offset=index * 64, loop_var=index, versions=versions
-        )
-    )
+    _assert_mte2_vector_handoff(_function(clock=index + versions, pointer_offset=index * 64, loop_var=index, versions=versions))
 
 
 @pytest.mark.parametrize("wrap", [1, 2])
@@ -235,9 +215,7 @@ def test_last_slot_and_wrapped_slot_use_the_real_version_count(wrap: int) -> Non
         ({"scalar_access": True}, "scalar accesses"),
     ],
 )
-def test_unknown_or_inconsistent_ring_contract_is_rejected(
-    kwargs: dict[str, object], diagnostic: str
-) -> None:
+def test_unknown_or_inconsistent_ring_contract_is_rejected(kwargs: dict[str, object], diagnostic: str) -> None:
     with pytest.raises(tvm.error.TVMError, match=diagnostic):
         _run(_function(**kwargs))
 
@@ -284,9 +262,7 @@ def test_valid_b3_ring_cannot_spill_past_the_actual_reserved_event_pool() -> Non
             )
         return None
 
-    original = original.with_body(
-        tir.stmt_functor.ir_transform(original.body, reserve, None, ["tir.AttrStmt"])
-    )
+    original = original.with_body(tir.stmt_functor.ir_transform(original.body, reserve, None, ["tir.AttrStmt"]))
     with pytest.raises(tvm.error.TVMError, match="(?i)(capacity exhausted|exhausted.*event slots)"):
         _run(original)
 
@@ -312,9 +288,7 @@ def test_b3_preserves_guard_free_admission():
             return tir.AttrStmt(statement.node, statement.attr_key, statement.value, body)
         return None
 
-    original = original.with_body(
-        tir.stmt_functor.ir_transform(original.body, guarded, None, ["tir.AttrStmt"])
-    )
+    original = original.with_body(tir.stmt_functor.ir_transform(original.body, guarded, None, ["tir.AttrStmt"]))
     with pytest.raises(tvm.error.TVMError, match="requires guard-free tasks"):
         _run(original)
 
@@ -326,14 +300,10 @@ def test_b3_preserves_static_loop_bounds():
 
     def dynamic(statement):
         if isinstance(statement, tir.For):
-            return tir.For(
-                statement.loop_var, statement.min, extent, statement.kind, statement.body
-            )
+            return tir.For(statement.loop_var, statement.min, extent, statement.kind, statement.body)
         return None
 
     body = tir.stmt_functor.ir_transform(original.body, dynamic, None, ["tir.For"])
-    original = tir.PrimFunc(
-        [*original.params, extent], body, original.ret_type, original.buffer_map, original.attrs
-    )
+    original = tir.PrimFunc([*original.params, extent], body, original.ret_type, original.buffer_map, original.attrs)
     with pytest.raises(tvm.error.TVMError, match="requires static For bounds"):
         _run(original)

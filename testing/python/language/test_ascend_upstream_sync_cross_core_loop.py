@@ -83,9 +83,7 @@ def _call_name(call):
 
 def _nodes(statement, kind):
     result = []
-    tir.stmt_functor.post_order_visit(
-        statement, lambda node: result.append(node) if isinstance(node, kind) else None
-    )
+    tir.stmt_functor.post_order_visit(statement, lambda node: result.append(node) if isinstance(node, kind) else None)
     return result
 
 
@@ -100,20 +98,14 @@ def _simple_prefix(trips, *, mutation=None):
             return node
         body = node
         if mutation == "inside_set":
-            flags = [
-                call
-                for call in _nodes(original.body, tir.Call)
-                if call.op.name == "tl.ascend_auto_set_cross_flag"
-            ]
+            flags = [call for call in _nodes(original.body, tir.Call) if call.op.name == "tl.ascend_auto_set_cross_flag"]
             body = tir.SeqStmt([node, tir.Evaluate(flags[0])])
         if mutation == "gm_write":
             output = original.buffer_map[original.params[2]]
             body = tir.SeqStmt([node, tir.BufferStore(output, tir.FloatImm("float32", 1), [0])])
         return tir.For(index, 0, trips, tir.ForKind.SERIAL, body)
 
-    result = original.with_body(
-        tir.stmt_functor.ir_transform(original.body, None, replace, ["tir.Evaluate"])
-    )
+    result = original.with_body(tir.stmt_functor.ir_transform(original.body, None, replace, ["tir.Evaluate"]))
     if isinstance(trips, tir.Var):
         result = tir.PrimFunc(
             list(result.params) + [trips],
@@ -149,17 +141,13 @@ def _executed(function, resource, vector_id):
             execute(statement.body, values)
         elif isinstance(statement, tir.LetStmt):
             value = integer(statement.value, values)
-            execute(
-                statement.body, {**values, statement.var: tir.const(value, statement.var.dtype)}
-            )
+            execute(statement.body, {**values, statement.var: tir.const(value, statement.var.dtype)})
         elif isinstance(statement, tir.For):
             minimum, extent = integer(statement.min, values), integer(statement.extent, values)
             for index in range(minimum, minimum + extent):
                 execute(statement.body, {**values, statement.loop_var: tir.const(index, "int32")})
         elif isinstance(statement, tir.IfThenElse):
-            branch = (
-                statement.then_case if integer(statement.condition, values) else statement.else_case
-            )
+            branch = statement.then_case if integer(statement.condition, values) else statement.else_case
             if branch is not None:
                 execute(branch, values)
         elif isinstance(statement, tir.Evaluate):
@@ -179,9 +167,7 @@ def _completion_oracle(function, vector_id, *, omit_c_completion=False):
     propagate its clock to FIX, the existing cross instruction propagates FIX
     to V's S, and the local engine must propagate S before the V consumer.
     """
-    pipes = [
-        (owner, pipe) for owner in (0, 1) for pipe in ("S", "MTE1", "MTE2", "MTE3", "V", "M", "FIX")
-    ]
+    pipes = [(owner, pipe) for owner in (0, 1) for pipe in ("S", "MTE1", "MTE2", "MTE3", "V", "M", "FIX")]
     clocks = {pipe: [0] * len(pipes) for pipe in pipes}
     tokens, release, workspace, loaded, transformed = {}, None, None, None, None
     reads, counts = [], Counter()
@@ -261,9 +247,7 @@ def test_c_prefix_keeps_real_loop_and_completes_war_before_publication(trips, ve
         _completion_oracle(result, vector_id, omit_c_completion=True)
 
 
-@pytest.mark.parametrize(
-    "mutation,diagnostic", [("inside_set", "outside"), ("gm_write", "cannot.*GM")]
-)
+@pytest.mark.parametrize("mutation,diagnostic", [("inside_set", "outside"), ("gm_write", "cannot.*GM")])
 def test_c_prefix_cannot_contain_publication_or_gm_overwrite(mutation, diagnostic):
     with pytest.raises(tvm.error.TVMError, match=diagnostic):
         _run(_simple_prefix(2, mutation=mutation))
@@ -301,9 +285,7 @@ def test_complete_c_prefix_must_precede_the_outside_set():
         statements.insert(loops[0], publication)
         return tir.SeqStmt(statements)
 
-    changed = original.with_body(
-        tir.stmt_functor.ir_transform(original.body, None, replace, ["tir.SeqStmt"])
-    )
+    changed = original.with_body(tir.stmt_functor.ir_transform(original.body, None, replace, ["tir.SeqStmt"]))
     with pytest.raises(tvm.error.TVMError, match="complete C-only prefix For before"):
         _run(changed)
 
@@ -312,11 +294,7 @@ def test_vector_control_is_not_admitted_by_cube_prefix_support():
     original = _simple_prefix(2)
 
     def replace(node):
-        if (
-            isinstance(node, tir.AttrStmt)
-            and node.attr_key == "resource_scope"
-            and int(node.value) == 1
-        ):
+        if isinstance(node, tir.AttrStmt) and node.attr_key == "resource_scope" and int(node.value) == 1:
             return tir.AttrStmt(
                 node.node,
                 node.attr_key,
@@ -325,9 +303,7 @@ def test_vector_control_is_not_admitted_by_cube_prefix_support():
             )
         return node
 
-    changed = original.with_body(
-        tir.stmt_functor.ir_transform(original.body, None, replace, ["tir.AttrStmt"])
-    )
+    changed = original.with_body(tir.stmt_functor.ir_transform(original.body, None, replace, ["tir.AttrStmt"]))
     with pytest.raises(tvm.error.TVMError, match="flat input"):
         _run(changed)
 
@@ -338,9 +314,7 @@ def test_real_developer_kloop_and_single_publication_keep_computation(k_tiles, e
     before = _pre_sync(_developer_kloop_gemm_exp(k_tiles, explicit_noalias=explicit_noalias))
     after = _run(before)
     assert len(_nodes(after.body, tir.For)) == 1
-    original = [
-        call for call in _nodes(before.body, tir.Call) if call.op.name != "tir.tvm_access_ptr"
-    ]
+    original = [call for call in _nodes(before.body, tir.Call) if call.op.name != "tir.tvm_access_ptr"]
     retained = [
         call
         for call in _nodes(after.body, tir.Call)

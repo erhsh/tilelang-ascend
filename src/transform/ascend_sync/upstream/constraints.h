@@ -168,10 +168,11 @@ struct Constr {
   Range range;
 
   Constr(PrimExpr constr, bool is_assume = false)
-      : kind(kConstr), value(constr), is_assume(is_assume){};
-  Constr(tir::Var var, PrimExpr val) : kind(kBindValue), var(var), value(val){};
+      : kind(kConstr), value(constr), is_assume(is_assume) {};
+  Constr(tir::Var var, PrimExpr val)
+      : kind(kBindValue), var(var), value(val) {};
   Constr(tir::Var var, Range range)
-      : kind(kBindRange), var(var), range(range){};
+      : kind(kBindRange), var(var), range(range) {};
 
   Constr() = default;
   Constr(const Constr &other) = default;

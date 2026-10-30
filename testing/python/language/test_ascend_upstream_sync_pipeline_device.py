@@ -27,9 +27,7 @@ def _requires_proof_service() -> None:
 
 
 @pytest.mark.parametrize("num_stages,trip_count", [(2, 4), (2, 5), (3, 7), (3, 8)])
-def test_upstream_sync_injected_ring_wrap_and_repeated_invocation(
-    num_stages: int, trip_count: int
-) -> None:
+def test_upstream_sync_injected_ring_wrap_and_repeated_invocation(num_stages: int, trip_count: int) -> None:
     kernel = _compile_device_kernel(_pipelined_abs(trip_count, num_stages))
     source = torch.arange(trip_count * 64, dtype=torch.float32).reshape(trip_count, 64)
     output = torch.empty((2, trip_count, 64), dtype=torch.float32, device="npu")

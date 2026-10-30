@@ -115,9 +115,7 @@ def optional_alias_loop_kernel() -> Any:
 
 
 @pytest.mark.parametrize("trip_count", [0, 1, 3])
-def test_upstream_sync_optional_loop_preserves_alias_values(
-    optional_alias_loop_kernel: Any, trip_count: int
-) -> None:
+def test_upstream_sync_optional_loop_preserves_alias_values(optional_alias_loop_kernel: Any, trip_count: int) -> None:
     source = torch.arange(_WIDTH, dtype=torch.float32, device="npu") - 32
     output = torch.full((_VECTOR_CORES, 3, _WIDTH), -99.0, dtype=torch.float32, device="npu")
     count = torch.empty((trip_count,), dtype=torch.int32, device="npu")
@@ -235,16 +233,10 @@ def optional_load_kernel() -> Any:
 
 
 @pytest.mark.parametrize("trip_count", [0, 1])
-def test_upstream_sync_optional_producer_has_a_matching_handoff(
-    optional_load_kernel: Any, trip_count: int
-) -> None:
+def test_upstream_sync_optional_producer_has_a_matching_handoff(optional_load_kernel: Any, trip_count: int) -> None:
     source = torch.arange(_WIDTH, dtype=torch.float32) - 32
     output = torch.empty((_VECTOR_CORES, _WIDTH), dtype=torch.float32, device="npu")
     count = torch.empty((trip_count,), dtype=torch.int32, device="npu")
     optional_load_kernel(source.npu(), output, count)
-    expected = (
-        source.expand(_VECTOR_CORES, -1)
-        if trip_count
-        else torch.ones((_VECTOR_CORES, _WIDTH), dtype=torch.float32)
-    )
+    expected = source.expand(_VECTOR_CORES, -1) if trip_count else torch.ones((_VECTOR_CORES, _WIDTH), dtype=torch.float32)
     torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)

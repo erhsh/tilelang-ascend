@@ -22,9 +22,9 @@ def _requires_proof_service() -> None:
 
 
 def _contract(function: tir.PrimFunc, indices: object = (1,)) -> tir.PrimFunc:
-    return function.with_attr(
-        AUTO_GM_FRESH_CONTRACT_ATTR, tir.StringImm(AUTO_GM_FRESH_CONTRACT_VERSION)
-    ).with_attr("auto_gm_indices", list(indices))
+    return function.with_attr(AUTO_GM_FRESH_CONTRACT_ATTR, tir.StringImm(AUTO_GM_FRESH_CONTRACT_VERSION)).with_attr(
+        "auto_gm_indices", list(indices)
+    )
 
 
 def _copy(
@@ -72,11 +72,7 @@ def _single_resource() -> tir.PrimFunc:
 
 
 def _local_events(function: tir.PrimFunc) -> list[str]:
-    return [
-        call.args[0].value
-        for _, call in _commands(function.body)
-        if _name(call) == "tl.ascend_auto_set_flag"
-    ]
+    return [call.args[0].value for _, call in _commands(function.body) if _name(call) == "tl.ascend_auto_set_flag"]
 
 
 def test_only_versioned_allocator_contract_proves_workspace_disjoint() -> None:
@@ -102,9 +98,7 @@ def test_unknown_fresh_workspace_schema_rejects(version: object) -> None:
 
 
 def test_missing_fresh_workspace_indices_are_not_an_empty_list() -> None:
-    function = _single_resource().with_attr(
-        AUTO_GM_FRESH_CONTRACT_ATTR, tir.StringImm(AUTO_GM_FRESH_CONTRACT_VERSION)
-    )
+    function = _single_resource().with_attr(AUTO_GM_FRESH_CONTRACT_ATTR, tir.StringImm(AUTO_GM_FRESH_CONTRACT_VERSION))
     with pytest.raises(tvm.error.TVMError, match="requires auto_gm_indices"):
         _run(function)
 
@@ -115,9 +109,7 @@ def test_sync_proof_cannot_survive_allocator_contract_changes(change: str) -> No
     if change == "remove_contract":
         modified = synchronized.without_attr(AUTO_GM_FRESH_CONTRACT_ATTR)
     elif change == "change_version":
-        modified = synchronized.with_attr(
-            AUTO_GM_FRESH_CONTRACT_ATTR, tir.StringImm("cython-auto-gm-v2")
-        )
+        modified = synchronized.with_attr(AUTO_GM_FRESH_CONTRACT_ATTR, tir.StringImm("cython-auto-gm-v2"))
     else:
         modified = synchronized.with_attr("auto_gm_indices", [])
     with pytest.raises(tvm.error.TVMError, match="inputs changed after synchronization"):
@@ -178,9 +170,7 @@ def _mixed(
     )
     for buffer in (l1, accumulator, local):
         body = tir.Allocate(buffer.data, buffer.dtype, buffer.shape, tir.const(True, "bool"), body)
-    body = tir.AttrStmt(
-        tir.IterVar(None, vid, tir.IterVar.ThreadIndex, "threadIdx.x"), "thread_extent", 2, body
-    )
+    body = tir.AttrStmt(tir.IterVar(None, vid, tir.IterVar.ThreadIndex, "threadIdx.x"), "thread_extent", 2, body)
     body = tir.AttrStmt(
         tir.IterVar(None, tir.Var("bx", "int32"), tir.IterVar.ThreadIndex, "blockIdx.x"),
         "thread_extent",
@@ -211,12 +201,8 @@ def test_fresh_workspace_publication_orders_potential_input_output_war() -> None
 
 def test_default_auto_target_keeps_the_existing_ascendc_dispatch() -> None:
     target = tvm.target.Target("llvm -model=auto")
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}
-    ):
-        result = tilelang.transform.AscendInsertSync(target, "A3")(
-            tvm.IRModule({"main": _mixed()})
-        )["main"]
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}):
+        result = tilelang.transform.AscendInsertSync(target, "A3")(tvm.IRModule({"main": _mixed()}))["main"]
     assert "MTE2_FIX" in _local_events(result)
     assert "S_MTE2" in _local_events(result)
 
@@ -236,8 +222,6 @@ def test_default_auto_target_keeps_the_existing_ascendc_dispatch() -> None:
         ({"late_cube_read": True}, "every C input read before Set"),
     ],
 )
-def test_fresh_workspace_admission_does_not_hide_other_alias_hazards(
-    options: dict[str, object], diagnostic: str
-) -> None:
+def test_fresh_workspace_admission_does_not_hide_other_alias_hazards(options: dict[str, object], diagnostic: str) -> None:
     with pytest.raises(tvm.error.TVMError, match=diagnostic):
         _run(_mixed(**options))

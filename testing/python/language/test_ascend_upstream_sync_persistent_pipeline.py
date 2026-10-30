@@ -156,11 +156,7 @@ def _commands(function: tir.PrimFunc, cid: int, vid: int, rows: int, tiles: int)
                 except LoopBreak:
                     break
         elif isinstance(statement, tir.IfThenElse):
-            branch = (
-                statement.then_case
-                if integer(statement.condition, bindings)
-                else statement.else_case
-            )
+            branch = statement.then_case if integer(statement.condition, bindings) else statement.else_case
             if branch is not None:
                 visit(branch, bindings, resource)
         elif isinstance(statement, tir.LetStmt):
@@ -355,10 +351,7 @@ def _expected_elements(rows: int, tiles: int, cid: int, vid: int) -> set[int]:
 
 
 def _without_pairs(program: _Program, removed) -> _Program:
-    queues = tuple(
-        tuple(command for command in queue if command.event not in removed)
-        for queue in program.queues
-    )
+    queues = tuple(tuple(command for command in queue if command.event not in removed) for queue in program.queues)
     return _Program(queues, program.computations)
 
 
@@ -426,9 +419,9 @@ def test_persistent_sip_retains_physical_layout_and_true_inner_period(
         for branch in _nodes(after.body, tir.IfThenElse)
         for call in _nodes(branch, tir.Call)
     ), "the normalized static computation must not remain under a semantic If"
-    assert len(_nodes(after.body, tir.For)) == 1 + (
-        tiles > 3
-    ), "retain actual outer/steady loops; Simplify removes the N3 extent-one steady For"
+    assert len(_nodes(after.body, tir.For)) == 1 + (tiles > 3), (
+        "retain actual outer/steady loops; Simplify removes the N3 extent-one steady For"
+    )
     assert not any(var.name.startswith("__ascend_if_proxy_") for var in _nodes(after.body, tir.Var))
     tvm.ir.assert_structural_equal(after, _run(after, target_kind="llvm"))
 
@@ -450,15 +443,10 @@ def test_real_persistent_sip_async_queues_preserve_all_worker_bytes(
                 "tl.ascend_abs": waves * tiles,
                 "copy_ub_to_gm": waves * tiles,
             }
-            seals = Counter(
-                (command.kind, command.event)
-                for queue in program.queues
-                for command in queue
-                if command.event in _SEALS
+            seals = Counter((command.kind, command.event) for queue in program.queues for command in queue if command.event in _SEALS)
+            assert seals == Counter({(kind, event): waves for event in _SEALS for kind in ("set", "wait")}), (
+                "every executed wave requires exactly one complete six-pair seal"
             )
-            assert seals == Counter(
-                {(kind, event): waves for event in _SEALS for kind in ("set", "wait")}
-            ), "every executed wave requires exactly one complete six-pair seal"
             for priority in _ADVERSARIAL:
                 execution = _run_schedule(program, priority=priority)
                 assert set(execution.outputs) == expected
@@ -471,9 +459,7 @@ def test_real_persistent_sip_async_queues_preserve_all_worker_bytes(
 
 
 @pytest.mark.parametrize("memory_planning", [False, True])
-def test_real_persistent_sip_survives_every_fifo_priority_and_random_delays(
-    persistent_pipelines, memory_planning: bool
-) -> None:
+def test_real_persistent_sip_survives_every_fifo_priority_and_random_delays(persistent_pipelines, memory_planning: bool) -> None:
     rows, tiles = 9, 5
     _, after = persistent_pipelines[rows, tiles, memory_planning]
     for cid in range(_WORKERS):
@@ -487,9 +473,7 @@ def test_real_persistent_sip_survives_every_fifo_priority_and_random_delays(
 
 
 @pytest.mark.parametrize("memory_planning", [False, True])
-def test_async_oracle_exposes_removed_whole_wave_boundaries(
-    persistent_pipelines, memory_planning: bool
-) -> None:
+def test_async_oracle_exposes_removed_whole_wave_boundaries(persistent_pipelines, memory_planning: bool) -> None:
     _, after = persistent_pipelines[9, 5, memory_planning]
     program = _commands(after, 0, 0, 9, 5)
     present = {command.event for queue in program.queues for command in queue if command.event}
@@ -518,9 +502,7 @@ def _rewrite_owner(function: tir.PrimFunc, rewrite) -> tir.PrimFunc:
         if isinstance(statement, tir.AttrStmt) and statement.attr_key == _EXTENT:
             assert not changed, "the fixture must contain exactly one owner"
             changed = True
-            return tir.AttrStmt(
-                statement.node, statement.attr_key, statement.value, rewrite(statement.body)
-            )
+            return tir.AttrStmt(statement.node, statement.attr_key, statement.value, rewrite(statement.body))
         return None
 
     body = tir.stmt_functor.ir_transform(function.body, visit, None, ["tir.AttrStmt"])
@@ -545,9 +527,7 @@ def _append_outside_owner(function: tir.PrimFunc, statement: tir.Stmt) -> tir.Pr
 
 
 @pytest.mark.parametrize("change", ["negative_offset", "ring_root", "small_size", "wide_order"])
-def test_closed_owner_rejects_unproven_result_footprint_or_stage(
-    persistent_pipelines, change: str
-) -> None:
+def test_closed_owner_rejects_unproven_result_footprint_or_stage(persistent_pipelines, change: str) -> None:
     before, _ = persistent_pipelines[9, 5, False]
     versions = before.attrs["buffer_versions"]
     result = next(root for root, version in versions.items() if int(version) == 1)
@@ -561,20 +541,14 @@ def test_closed_owner_rejects_unproven_result_footprint_or_stage(
 
         def stage(node):
             nonlocal changed
-            if (
-                isinstance(node, tir.AttrStmt)
-                and node.attr_key.endswith("_pipeline_stage")
-                and not changed
-            ):
+            if isinstance(node, tir.AttrStmt) and node.attr_key.endswith("_pipeline_stage") and not changed:
                 changed = True
                 fields = list(node.node)
                 fields[3] = tir.IntImm("int64", int(fields[3]) + (1 << 32))
                 return tir.AttrStmt(fields, node.attr_key, node.value, node.body)
             return None
 
-        malformed = before.with_body(
-            tir.stmt_functor.ir_transform(before.body, stage, None, ["tir.AttrStmt"])
-        )
+        malformed = before.with_body(tir.stmt_functor.ir_transform(before.body, stage, None, ["tir.AttrStmt"]))
         assert changed
     else:
         changed = False
@@ -594,9 +568,7 @@ def test_closed_owner_rejects_unproven_result_footprint_or_stage(
                 return tir.Call(node.dtype, node.op, arguments)
             return None
 
-        malformed = before.with_body(
-            tir.stmt_functor.ir_transform(before.body, None, pointer, ["tir.Call"])
-        )
+        malformed = before.with_body(tir.stmt_functor.ir_transform(before.body, None, pointer, ["tir.Call"]))
         assert changed
     with pytest.raises(tvm.error.TVMError, match="(?i)(Persistent|pipeline|footprint|stage)"):
         _run(malformed, target_kind="llvm")
@@ -630,9 +602,7 @@ def test_persistent_sip_rejects_unproven_outer_forms(persistent_pipelines, chang
     elif change == "mutable":
         source = before.buffer_map[before.params[0]]
         read = tir.BufferLoad(source, [0] * len(source.shape))
-        malformed = _rewrite_owner(
-            before, lambda body: tir.LetStmt(tir.Var("mutable_saved", "float32"), read, body)
-        )
+        malformed = _rewrite_owner(before, lambda body: tir.LetStmt(tir.Var("mutable_saved", "float32"), read, body))
     elif change == "user_flag":
         flags = [
             tir.Evaluate(
@@ -666,8 +636,7 @@ def test_persistent_sip_rejects_unproven_outer_forms(persistent_pipelines, chang
         extra = next(
             statement
             for statement in _nodes(before.body, tir.Evaluate)
-            if isinstance(statement.value, tir.Call)
-            and _operation(statement.value) == "copy_gm_to_ub"
+            if isinstance(statement.value, tir.Call) and _operation(statement.value) == "copy_gm_to_ub"
         )
         steady = next(loop for loop in _nodes(before.body, tir.For) if not _has_break(loop.body))
         assert not any(var.same_as(steady.loop_var) for var in _nodes(extra, tir.Var))
@@ -697,18 +666,12 @@ def test_persistent_sip_rejects_unproven_outer_forms(persistent_pipelines, chang
 
         def change_header(statement):
             if isinstance(statement, tir.IfThenElse) and _has_break(statement.then_case):
-                return tir.IfThenElse(
-                    tir.Or(statement.condition, unknown), statement.then_case, statement.else_case
-                )
+                return tir.IfThenElse(tir.Or(statement.condition, unknown), statement.then_case, statement.else_case)
             return None
 
         body = tir.stmt_functor.ir_transform(before.body, change_header, None, ["tir.IfThenElse"])
-        malformed = tir.PrimFunc(
-            [*before.params, unknown], body, before.ret_type, before.buffer_map, before.attrs
-        )
-    with pytest.raises(
-        tvm.error.TVMError, match="(?i)(persistent|owner|pipeline|pure|scope|canonical|flag)"
-    ):
+        malformed = tir.PrimFunc([*before.params, unknown], body, before.ret_type, before.buffer_map, before.attrs)
+    with pytest.raises(tvm.error.TVMError, match="(?i)(persistent|owner|pipeline|pure|scope|canonical|flag)"):
         _run(malformed, target_kind="llvm")
 
 
@@ -720,9 +683,7 @@ def test_dynamic_inner_pipeline_remains_outside_the_first_persistent_contract() 
 
 @pytest.mark.parametrize("tiles", [3, 5])
 @pytest.mark.parametrize("owners", ["keep", "missing", "empty", "all_owner_shells_removed"])
-def test_divisible_persistent_without_break_certificate_cannot_use_generic_ring_path(
-    owners: str, tiles: int
-) -> None:
+def test_divisible_persistent_without_break_certificate_cannot_use_generic_ring_path(owners: str, tiles: int) -> None:
     before, _ = _pre_sync(_persistent_pipelined_abs(rows=8, tiles=tiles))
     assert not _has_break(before.body)
     assert len(_nodes(before.body, tir.For)) == 1 + (tiles > 3)
@@ -736,9 +697,7 @@ def test_divisible_persistent_without_break_certificate_cannot_use_generic_ring_
     elif owners == "all_owner_shells_removed":
 
         def remove_owner_shell(node):
-            if isinstance(node, tir.AttrStmt) and node.attr_key.startswith(
-                "tl.ascend_physical_pipeline_"
-            ):
+            if isinstance(node, tir.AttrStmt) and node.attr_key.startswith("tl.ascend_physical_pipeline_"):
                 return node.body
             return None
 

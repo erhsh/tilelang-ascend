@@ -118,9 +118,7 @@ class _CubeCompletionOracle:
 
     def _require_before(self, previous, current, description):
         if self.check_dependencies:
-            assert all(
-                before <= after for before, after in zip(previous, current)
-            ), f"byte dependency missing: {description}"
+            assert all(before <= after for before, after in zip(previous, current)), f"byte dependency missing: {description}"
 
     def flag(self, kind, event, event_id):
         source, destination = event.split("_")
@@ -190,9 +188,7 @@ class _CubeCompletionOracle:
         clear = integer(call.args[4], bindings)
         for address in accumulator:
             if address in self.writes:
-                self._require_before(
-                    self.writes[address], acquire, f"before accumulating GEMM acquire {address}"
-                )
+                self._require_before(self.writes[address], acquire, f"before accumulating GEMM acquire {address}")
             else:
                 assert clear == 1, "the first GEMM must initialize every L0C byte"
         # This is an explicit helper contract edge, not an inference from its
@@ -237,11 +233,7 @@ def _execute_cube_protocol(function: tir.PrimFunc, *, check_dependencies=True) -
             for index in range(minimum, minimum + extent):
                 visit(statement.body, {**bindings, statement.loop_var: index}, resource)
         elif isinstance(statement, tir.IfThenElse):
-            branch = (
-                statement.then_case
-                if integer(statement.condition, bindings)
-                else statement.else_case
-            )
+            branch = statement.then_case if integer(statement.condition, bindings) else statement.else_case
             if branch is not None:
                 visit(branch, bindings, resource)
         elif isinstance(statement, tir.LetStmt):
@@ -340,9 +332,7 @@ def _assert_maps_and_clocks_preserved(before: tir.PrimFunc, after: tir.PrimFunc)
 
 @pytest.mark.parametrize("trip_count", _TRIP_COUNTS)
 @pytest.mark.parametrize("memory_planning", [False, True])
-def test_static_cube_sip_keeps_true_b2_and_independent_lead_one(
-    cube_pipelines, trip_count: int, memory_planning: bool
-) -> None:
+def test_static_cube_sip_keeps_true_b2_and_independent_lead_one(cube_pipelines, trip_count: int, memory_planning: bool) -> None:
     before, after = cube_pipelines[trip_count, memory_planning]
     rings = list(before.attrs[_RINGS].values())
     assert len(rings) == 2 and not rings[0][2].same_as(rings[1][2])
@@ -360,9 +350,9 @@ def test_static_cube_sip_keeps_true_b2_and_independent_lead_one(
     loops = _nodes(before.body, tir.For)
     assert len(loops) == 1 and int(loops[0].extent) == trip_count - 1
     assert len(_gemms(before)) == 2, "one steady GEMM and one epilogue GEMM"
-    assert not any(
-        _operation(call) == "copy_l0c_to_gm" for call in _nodes(envelope[0].body, tir.Call)
-    ), "final FIX must remain outside the SIP owner"
+    assert not any(_operation(call) == "copy_l0c_to_gm" for call in _nodes(envelope[0].body, tir.Call)), (
+        "final FIX must remain outside the SIP owner"
+    )
     assert not _events(before)
     _assert_maps_and_clocks_preserved(before, after)
     generated = _events(after)
@@ -374,9 +364,7 @@ def test_static_cube_sip_keeps_true_b2_and_independent_lead_one(
 
 @pytest.mark.parametrize("trip_count", _TRIP_COUNTS)
 @pytest.mark.parametrize("memory_planning", [False, True])
-def test_static_cube_sip_orders_actual_l1_bytes_and_c_completion(
-    cube_pipelines, trip_count: int, memory_planning: bool
-) -> None:
+def test_static_cube_sip_orders_actual_l1_bytes_and_c_completion(cube_pipelines, trip_count: int, memory_planning: bool) -> None:
     before, after = cube_pipelines[trip_count, memory_planning]
     source_a, source_b = (before.buffer_map[parameter].data for parameter in before.params[:2])
     tokens = set()
@@ -412,15 +400,11 @@ def _without_event_pairs(function: tir.PrimFunc, directions: set[str]) -> tir.Pr
                 return tir.Evaluate(0)
         return None
 
-    return function.with_body(
-        tir.stmt_functor.ir_transform(function.body, rewrite, None, ["tir.Evaluate"])
-    )
+    return function.with_body(tir.stmt_functor.ir_transform(function.body, rewrite, None, ["tir.Evaluate"]))
 
 
 @pytest.mark.parametrize("memory_planning", [False, True])
-def test_cube_byte_oracle_detects_balanced_protocol_dependency_cuts(
-    cube_pipelines, memory_planning: bool
-) -> None:
+def test_cube_byte_oracle_detects_balanced_protocol_dependency_cuts(cube_pipelines, memory_planning: bool) -> None:
     _, after = cube_pipelines[5, memory_planning]
     present = {event for _, event, _ in _events(after)}
     # Test each actual direction independently. The engine may supply redundant
@@ -446,11 +430,7 @@ def test_cube_byte_oracle_detects_balanced_protocol_dependency_cuts(
             assert "byte dependency missing" in str(error), str(error)
     cuts = {
         "initial L1 readiness": {event for event in present if event.split("_")[0] == "MTE2"},
-        "L1 reuse and accumulation": {
-            event
-            for event in present
-            if event.split("_")[0] == "M" and event.split("_")[1] != "FIX"
-        },
+        "L1 reuse and accumulation": {event for event in present if event.split("_")[0] == "M" and event.split("_")[1] != "FIX"},
         "final FIX acquire": {event for event in present if event.split("_")[1] == "FIX"},
     }
     for description, directions in cuts.items():
@@ -469,9 +449,7 @@ def _change_first_clock(function: tir.PrimFunc) -> tir.PrimFunc:
         nonlocal changed
         if not changed and isinstance(statement, tir.AttrStmt) and statement.attr_key == _CLOCK:
             changed = True
-            return tir.AttrStmt(
-                statement.node, statement.attr_key, statement.value + 2, statement.body
-            )
+            return tir.AttrStmt(statement.node, statement.attr_key, statement.value + 2, statement.body)
         return None
 
     body = tir.stmt_functor.ir_transform(function.body, rewrite, None, ["tir.AttrStmt"])
@@ -533,12 +511,7 @@ def _merge_l1_roots(function: tir.PrimFunc) -> tir.PrimFunc:
     second_fields[2] = first_root
     second_fields[3] = second_fields[3] + first_bytes * 8
     rings[second_id] = second_fields
-    return (
-        function.with_body(body)
-        .with_attr("address_map", addresses)
-        .with_attr("size_map", sizes)
-        .with_attr(_RINGS, rings)
-    )
+    return function.with_body(body).with_attr("address_map", addresses).with_attr("size_map", sizes).with_attr(_RINGS, rings)
 
 
 @pytest.mark.parametrize("memory_planning", [False, True])
@@ -552,9 +525,7 @@ def test_same_root_logical_cube_rings_remain_rejected(cube_pipelines, memory_pla
     records = list(merged.attrs[_RINGS].values())
     assert records[0][2].same_as(records[1][2])
     assert [int(record[1]) for record in records] == [2, 2]
-    with pytest.raises(
-        tvm.error.TVMError, match="(?i)(multiple logical|independent.*root|same.*root)"
-    ):
+    with pytest.raises(tvm.error.TVMError, match="(?i)(multiple logical|independent.*root|same.*root)"):
         _run(merged, target_kind="llvm")
 
 
@@ -585,9 +556,7 @@ def test_static_cube_sip_rejects_inconsistent_ring_facts(cube_pipelines, change:
         # slot even though the descriptive access_ptr extent remains short.
         malformed = _rewrite_gemm(
             before,
-            lambda call: tir.Evaluate(
-                _changed_call(call, template="gemm_v0<half, float, 16, 16, 128, false, false, 64>")
-            ),
+            lambda call: tir.Evaluate(_changed_call(call, template="gemm_v0<half, float, 16, 16, 128, false, false, 64>")),
         )
     with pytest.raises(tvm.error.TVMError, match="(?i)(version|clock|slot|footprint|extent|stage)"):
         _run(malformed, target_kind="llvm")
@@ -601,29 +570,21 @@ def test_static_cube_sip_requires_its_a3_ascendc_target(cube_pipelines, platform
 
 
 @pytest.mark.parametrize("change", ["non_cube", "opaque", "user_l0ab"])
-def test_static_cube_sip_keeps_owner_effect_and_hidden_scratch_restrictions(
-    cube_pipelines, change: str
-) -> None:
+def test_static_cube_sip_keeps_owner_effect_and_hidden_scratch_restrictions(cube_pipelines, change: str) -> None:
     before, _ = cube_pipelines[5, False]
     if change == "non_cube":
         malformed = _rewrite_gemm(
             before,
-            lambda call: tir.AttrStmt(
-                tir.IntImm("int32", 0), "resource_scope", 1, tir.Evaluate(call)
-            ),
+            lambda call: tir.AttrStmt(tir.IntImm("int32", 0), "resource_scope", 1, tir.Evaluate(call)),
         )
     elif change == "opaque":
         malformed = _rewrite_gemm(
             before,
-            lambda call: tir.SeqStmt(
-                [tir.Evaluate(call), tir.Evaluate(tir.call_extern("handle", "unknown_cube_effect"))]
-            ),
+            lambda call: tir.SeqStmt([tir.Evaluate(call), tir.Evaluate(tir.call_extern("handle", "unknown_cube_effect"))]),
         )
     else:
         user_l0 = tir.decl_buffer((64,), "float16", name="user_l0", scope="wmma.matrix_a")
-        malformed = before.with_body(
-            tir.Allocate(user_l0.data, user_l0.dtype, [64], tir.const(True, "bool"), before.body)
-        )
+        malformed = before.with_body(tir.Allocate(user_l0.data, user_l0.dtype, [64], tir.const(True, "bool"), before.body))
     with pytest.raises(tvm.error.TVMError, match="(?i)(Cube|resource|opaque|unknown|L0|contract)"):
         _run(malformed, target_kind="llvm")
 
@@ -677,11 +638,7 @@ def test_vector_helper_cannot_borrow_the_l1_ring_capability() -> None:
 @pytest.mark.parametrize("clear", ["always_false", "always_true", "opaque"])
 def test_cube_sip_clear_is_proven_in_its_actual_logical_clock_domain(cube_pipelines, clear) -> None:
     before, _ = cube_pipelines[5, False]
-    value = (
-        tir.call_extern("bool", "opaque_clear")
-        if clear == "opaque"
-        else tir.const(clear == "always_true", "bool")
-    )
+    value = tir.call_extern("bool", "opaque_clear") if clear == "opaque" else tir.const(clear == "always_true", "bool")
     malformed = _rewrite_gemm(before, lambda call: tir.Evaluate(_changed_call(call, clear=value)))
     with pytest.raises(tvm.error.TVMError, match="(?i)(clear|pure)"):
         _run(malformed, target_kind="llvm")

@@ -60,11 +60,7 @@ def test_bisheng_compiles_upstream_sync_abi(target, platform, program_kind):
     except tvm.error.TVMError as error:
         # Verified with the legacy backend too. Only this exact pre-existing
         # codegen limitation is expected; synchronization failures still fail.
-        if (
-            target == "ascendc"
-            and platform == "A5"
-            and "Unresolved call Op(tl.ascend_abs)" in str(error)
-        ):
+        if target == "ascendc" and platform == "A5" and "Unresolved call Op(tl.ascend_abs)" in str(error):
             pytest.xfail("Existing A5/AscendC codegen has no tl.ascend_abs lowering")
         raise
     assert kernel.get_kernel_source()
@@ -78,14 +74,6 @@ def test_bisheng_compiles_upstream_sync_abi(target, platform, program_kind):
                 lambda node: calls.append(node) if isinstance(node, tvm.tir.Call) else None,
             )
     if platform == "A5":
-        assert any(
-            getattr(call.op, "name", "") == "tl.ascend_auto_set_flag"
-            and call.args[0].value == "V_V"
-            for call in calls
-        )
+        assert any(getattr(call.op, "name", "") == "tl.ascend_auto_set_flag" and call.args[0].value == "V_V" for call in calls)
     else:
-        assert any(
-            getattr(call.op, "name", "") == "tl.ascend_auto_barrier"
-            and call.args[0].value == "PIPE_V"
-            for call in calls
-        )
+        assert any(getattr(call.op, "name", "") == "tl.ascend_auto_barrier" and call.args[0].value == "PIPE_V" for call in calls)

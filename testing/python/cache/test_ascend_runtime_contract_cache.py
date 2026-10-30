@@ -64,9 +64,7 @@ class _ManifestCacheChecks:
             return_value=lambda: version[0],
         ):
             self._write_indices([])
-            manifest = self.contract.build_cached_auto_gm_manifest(
-                self.func, "ctypes", [], 1, configs
-            )
+            manifest = self.contract.build_cached_auto_gm_manifest(self.func, "ctypes", [], 1, configs)
             (self.entry / self.contract.AUTO_GM_MANIFEST_PATH).write_text(json.dumps(manifest))
             self.assertIs(self._load(pass_configs=configs, execution_backend="ctypes"), self.kernel)
             version[0] = "test-engine-v2"
@@ -75,9 +73,7 @@ class _ManifestCacheChecks:
 
     def test_missing_upstream_native_abi_requires_rebuild_instead_of_a_saltless_load(self):
         with (
-            mock.patch.object(
-                self.modules["tvm"], "get_global_func", create=True, return_value=None
-            ),
+            mock.patch.object(self.modules["tvm"], "get_global_func", create=True, return_value=None),
             self.assertRaisesRegex(RuntimeError, "rebuild the native TileLang"),
         ):
             self._load(pass_configs={"tl.ascend_sync_backend": "upstream"})
@@ -99,9 +95,7 @@ class _ManifestCacheChecks:
         )
 
     def _write_manifest(self, indices, param_count=1, **changes):
-        manifest = self.contract.build_cached_auto_gm_manifest(
-            self.func, "cython", indices, param_count
-        )
+        manifest = self.contract.build_cached_auto_gm_manifest(self.func, "cython", indices, param_count)
         manifest.update(changes)
         (self.entry / self.contract.AUTO_GM_MANIFEST_PATH).write_text(json.dumps(manifest))
 
@@ -191,9 +185,7 @@ class _KeyedContractWriterChecks:
         self.assertFalse(entry.exists())
 
 
-class TestAscendRuntimeContractCache(
-    _KeyedContractWriterChecks, _ManifestCacheChecks, KernelCacheRecoveryMixin, unittest.TestCase
-):
+class TestAscendRuntimeContractCache(_KeyedContractWriterChecks, _ManifestCacheChecks, KernelCacheRecoveryMixin, unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.modules["tvm.tir"].StringImm = _StringImm
@@ -211,11 +203,7 @@ class TestAscendRuntimeContractCache(
         self.func = SimpleNamespace(
             params=["A", "B", "C"],
             script=lambda: "marked Ascend source(A, B, C): cython-auto-gm-v1",
-            attrs={
-                self.contract.AUTO_GM_FRESH_CONTRACT_ATTR: _StringImm(
-                    self.contract.AUTO_GM_FRESH_CONTRACT_VERSION
-                )
-            },
+            attrs={self.contract.AUTO_GM_FRESH_CONTRACT_ATTR: _StringImm(self.contract.AUTO_GM_FRESH_CONTRACT_VERSION)},
         )
         self._write_manifest([])
 
@@ -256,9 +244,7 @@ class TestAscendRuntimeContractCache(
         self.jit_kernel.from_database.assert_not_called()
 
     def test_wrong_schema_type_is_a_miss(self):
-        self.func.attrs[self.contract.AUTO_GM_FRESH_CONTRACT_ATTR] = (
-            self.contract.AUTO_GM_FRESH_CONTRACT_VERSION
-        )
+        self.func.attrs[self.contract.AUTO_GM_FRESH_CONTRACT_ATTR] = self.contract.AUTO_GM_FRESH_CONTRACT_VERSION
         self.assertIsNone(self._load())
         self.jit_kernel.from_database.assert_not_called()
 
@@ -312,11 +298,7 @@ class _AdditionalContractLoaderMixin(_ManifestCacheChecks, KernelCacheRecoveryMi
         self.func = SimpleNamespace(
             params=["A", "B", "C"],
             script=lambda: "marked Ascend source(A, B, C): cython-auto-gm-v1",
-            attrs={
-                self.contract.AUTO_GM_FRESH_CONTRACT_ATTR: _StringImm(
-                    self.contract.AUTO_GM_FRESH_CONTRACT_VERSION
-                )
-            },
+            attrs={self.contract.AUTO_GM_FRESH_CONTRACT_ATTR: _StringImm(self.contract.AUTO_GM_FRESH_CONTRACT_VERSION)},
         )
         self.kernel = object()
         self.jit_kernel.from_database.return_value = self.kernel
@@ -338,9 +320,7 @@ class TestAscendAutotuneResultContractCache(_AdditionalContractLoaderMixin, unit
         self._write_manifest([])
 
     def _load(self, **kwargs):
-        return self.result_cls._load_kernel_from_disk(
-            self.result_cls, self.entry, func=self.func, **kwargs
-        )
+        return self.result_cls._load_kernel_from_disk(self.result_cls, self.entry, func=self.func, **kwargs)
 
     def _save(self, kernel):
         self.result_cls._save_kernel_to_disk(self.result_cls, self.entry, kernel)
@@ -410,9 +390,7 @@ class TestAscendAutotuneResultContractCache(_AdditionalContractLoaderMixin, unit
         self.assertEqual(self.jit_kernel.from_database.call_args.kwargs["auto_gm_idx"], [])
 
 
-class TestAscendLegacyTunerContractCache(
-    _KeyedContractWriterChecks, _AdditionalContractLoaderMixin, unittest.TestCase
-):
+class TestAscendLegacyTunerContractCache(_KeyedContractWriterChecks, _AdditionalContractLoaderMixin, unittest.TestCase):
     def setUp(self):
         super().setUp()
         tuner_cache = _load_standalone(

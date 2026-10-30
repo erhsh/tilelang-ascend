@@ -37,10 +37,7 @@ def _requires_proof_service() -> None:
 def pto_flat_gemms():
     # Both K values are divisible by the factory's default kL0Size=128.
     # K128 has one internal step; K256 exercises the audited internal reuse.
-    return {
-        k: _pre_sync(gemm_nt(16, 16, k, "float16", "float").with_attr("tir.noalias", True))[0]
-        for k in (128, 256)
-    }
+    return {k: _pre_sync(gemm_nt(16, 16, k, "float16", "float").with_attr("tir.noalias", True))[0] for k in (128, 256)}
 
 
 def _operation(call: tir.Call) -> str:
@@ -84,9 +81,7 @@ def _assert_original_computation_and_maps(before: tir.PrimFunc, after: tir.PrimF
 
 @pytest.mark.parametrize("k", [128, 256])
 @pytest.mark.parametrize("target_kind", ["c", "llvm"])
-def test_pto_flat_gemm_preserves_one_calculation_and_routes_acquire_completion(
-    pto_flat_gemms, k: int, target_kind: str
-) -> None:
+def test_pto_flat_gemm_preserves_one_calculation_and_routes_acquire_completion(pto_flat_gemms, k: int, target_kind: str) -> None:
     before = pto_flat_gemms[k]
     assert not _nodes(before.body, tir.For)
     assert not _nodes(before.body, tir.IfThenElse)
@@ -129,11 +124,7 @@ def test_nonconflicting_forward_manual_pair_remains_reserved(pto_flat_gemms, pos
     _assert_hidden_ids_are_reserved(after)
     ids = [event_id for _, event, event_id in _events(after) if event == "MTE2_MTE1"]
     assert ids and all(event_id not in (1, 7) for event_id in ids)
-    manual = [
-        call
-        for call in _nodes(after.body, tir.Call)
-        if _operation(call) in ("tl.ascend_set_flag", "tl.ascend_wait_flag")
-    ]
+    manual = [call for call in _nodes(after.body, tir.Call) if _operation(call) in ("tl.ascend_set_flag", "tl.ascend_wait_flag")]
     assert len(manual) == 2
     assert {_operation(call) for call in manual} == {"tl.ascend_set_flag", "tl.ascend_wait_flag"}
     for call in manual:
@@ -151,20 +142,14 @@ def _with_parameter(function: tir.PrimFunc, parameter: tir.Var) -> tir.PrimFunc:
     )
 
 
-@pytest.mark.parametrize(
-    "change", ["k64", "m32", "kl0_64", "transpose_a", "transpose_b", "clear_false", "clear_dynamic"]
-)
-def test_pto_flat_profile_rejects_unvalidated_shapes_and_helper_modes(
-    pto_flat_gemms, change
-) -> None:
+@pytest.mark.parametrize("change", ["k64", "m32", "kl0_64", "transpose_a", "transpose_b", "clear_false", "clear_dynamic"])
+def test_pto_flat_profile_rejects_unvalidated_shapes_and_helper_modes(pto_flat_gemms, change) -> None:
     original = pto_flat_gemms[128]
     if change in ("k64", "m32"):
         m, k = (16, 64) if change == "k64" else (32, 128)
         original = _pre_sync(gemm_nt(m, 16, k, "float16", "float"))[0]
     elif change == "clear_false":
-        original = _rewrite_gemm(
-            original, lambda call: tir.Evaluate(_changed_call(call, clear=tir.const(False, "bool")))
-        )
+        original = _rewrite_gemm(original, lambda call: tir.Evaluate(_changed_call(call, clear=tir.const(False, "bool"))))
     elif change == "clear_dynamic":
         clear = tir.Var("runtime_clear", "bool")
         original = _with_parameter(
@@ -174,13 +159,8 @@ def test_pto_flat_profile_rejects_unvalidated_shapes_and_helper_modes(
     else:
         transpose_a, transpose_b = change == "transpose_a", change == "transpose_b"
         k_l0 = 64 if change == "kl0_64" else 128
-        template = (
-            "gemm_v0<half, float, 16, 16, 128, "
-            f"{str(transpose_a).lower()}, {str(transpose_b).lower()}, {k_l0}>"
-        )
-        original = _rewrite_gemm(
-            original, lambda call: tir.Evaluate(_changed_call(call, template=template))
-        )
+        template = f"gemm_v0<half, float, 16, 16, 128, {str(transpose_a).lower()}, {str(transpose_b).lower()}, {k_l0}>"
+        original = _rewrite_gemm(original, lambda call: tir.Evaluate(_changed_call(call, template=template)))
     with pytest.raises(tvm.error.TVMError, match=_PROFILE):
         _run(original, model="pto", target_kind="llvm")
 
@@ -195,17 +175,11 @@ def test_pto_flat_profile_rejects_unvalidated_shapes_and_helper_modes(
         ("base_offset", "Composite gemm_v0 currently requires base allocation pointers"),
     ],
 )
-def test_pto_retains_common_typed_and_physical_input_checks(
-    pto_flat_gemms, change, diagnostic
-) -> None:
+def test_pto_retains_common_typed_and_physical_input_checks(pto_flat_gemms, change, diagnostic) -> None:
     original = pto_flat_gemms[128]
     if change in ("partial_n", "dynamic_n"):
-        n_actual = (
-            tir.IntImm("int32", 8) if change == "partial_n" else tir.Var("runtime_n", "int32")
-        )
-        original = _rewrite_gemm(
-            original, lambda call: tir.Evaluate(_changed_call(call, n_actual=n_actual))
-        )
+        n_actual = tir.IntImm("int32", 8) if change == "partial_n" else tir.Var("runtime_n", "int32")
+        original = _rewrite_gemm(original, lambda call: tir.Evaluate(_changed_call(call, n_actual=n_actual)))
         if change == "dynamic_n":
             original = _with_parameter(original, n_actual)
     elif change == "footprint":
@@ -240,34 +214,24 @@ def test_pto_retains_common_typed_and_physical_input_checks(
         ("vector_owner", _PROFILE + "|Composite gemm_v0 execution owner must be Cube"),
     ],
 )
-def test_pto_flat_profile_keeps_control_storage_and_cube_ownership_boundaries(
-    pto_flat_gemms, change, diagnostic
-) -> None:
+def test_pto_flat_profile_keeps_control_storage_and_cube_ownership_boundaries(pto_flat_gemms, change, diagnostic) -> None:
     original = pto_flat_gemms[128]
     if change == "outer_for":
         original = _rewrite_gemm(
             original,
-            lambda call: tir.For(
-                tir.Var("outer_k", "int32"), 0, 2, tir.ForKind.SERIAL, tir.Evaluate(call)
-            ),
+            lambda call: tir.For(tir.Var("outer_k", "int32"), 0, 2, tir.ForKind.SERIAL, tir.Evaluate(call)),
         )
     elif change == "outer_if":
-        original = _rewrite_gemm(
-            original, lambda call: tir.IfThenElse(tir.const(True, "bool"), tir.Evaluate(call), None)
-        )
+        original = _rewrite_gemm(original, lambda call: tir.IfThenElse(tir.const(True, "bool"), tir.Evaluate(call), None))
     elif change == "ring_b2":
         original = original.with_attr("buffer_versions", {_gemms(original)[0].args[1].args[1]: 2})
     elif change == "user_l0ab":
         scratch = tir.decl_buffer((64,), "float16", name="user_l0ab", scope="wmma.matrix_a")
-        original = original.with_body(
-            tir.Allocate(scratch.data, scratch.dtype, [64], tir.const(True, "bool"), original.body)
-        )
+        original = original.with_body(tir.Allocate(scratch.data, scratch.dtype, [64], tir.const(True, "bool"), original.body))
     else:
         original = _rewrite_gemm(
             original,
-            lambda call: tir.AttrStmt(
-                tir.IntImm("int32", 0), "resource_scope", 1, tir.Evaluate(call)
-            ),
+            lambda call: tir.AttrStmt(tir.IntImm("int32", 0), "resource_scope", 1, tir.Evaluate(call)),
         )
     with pytest.raises(tvm.error.TVMError, match=diagnostic):
         _run(original, model="pto", target_kind="llvm")

@@ -159,9 +159,7 @@ def main():
         report["cases"][name] = {}
         for backend in ("legacy", "upstream") if index % 2 == 0 else ("upstream", "legacy"):
             print(f"{name}: {backend}", flush=True)
-            report["cases"][name][backend] = _measure(
-                program, inputs, expected, backend, auto_cv=name == "vector_abs"
-            )
+            report["cases"][name][backend] = _measure(program, inputs, expected, backend, auto_cv=name == "vector_abs")
             options.output.write_text(json.dumps(report, indent=2) + "\n")
 
 

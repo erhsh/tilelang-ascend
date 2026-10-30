@@ -50,9 +50,7 @@ def _copy(
             "handle",
             f"tl::ascend::copy_gm_to_ub<{template}>",
             buffers["source"].access_ptr(source_mask, offset=source_offset, extent=source_extent),
-            buffers["local"].access_ptr(
-                destination_mask, offset=destination_offset, extent=destination_extent
-            ),
+            buffers["local"].access_ptr(destination_mask, offset=destination_offset, extent=destination_extent),
             stride,
             rows,
             columns,
@@ -111,12 +109,8 @@ def _function(
 
 def _run(function: tir.PrimFunc, *, model: str = "ascendc", platform: str = "A3") -> tir.PrimFunc:
     target = tvm.target.Target(f"c -keys=ascend -model={model}")
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}
-    ):
-        return tilelang.transform.AscendInsertSync(target, platform)(
-            tvm.IRModule({"main": function})
-        )["main"]
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}):
+        return tilelang.transform.AscendInsertSync(target, platform)(tvm.IRModule({"main": function}))["main"]
 
 
 def _calls(function: tir.PrimFunc) -> list[tir.Call]:
@@ -134,17 +128,12 @@ def _events(function: tir.PrimFunc) -> list[tir.Call]:
     return [
         call
         for call in _calls(function)
-        if isinstance(call.op, tvm.ir.Op)
-        and call.op.name in {"tl.ascend_auto_set_flag", "tl.ascend_auto_wait_flag"}
+        if isinstance(call.op, tvm.ir.Op) and call.op.name in {"tl.ascend_auto_set_flag", "tl.ascend_auto_wait_flag"}
     ]
 
 
 def _helper_calls(function: tir.PrimFunc) -> list[tir.Call]:
-    return [
-        call
-        for call in _calls(function)
-        if call.op == tvm.ir.Op.get("tir.call_extern") and "copy_gm_to_ub<" in call.args[0].value
-    ]
+    return [call for call in _calls(function) if call.op == tvm.ir.Op.get("tir.call_extern") and "copy_gm_to_ub<" in call.args[0].value]
 
 
 def _assert_hidden_slots_reserved(function: tir.PrimFunc) -> None:
@@ -156,9 +145,7 @@ def _assert_hidden_slots_reserved(function: tir.PrimFunc) -> None:
 
 @pytest.mark.parametrize("platform", ["A2", "A3"])
 @pytest.mark.parametrize("model", ["ascendc", "auto"])
-def test_tail_copy_orders_prior_vector_and_mte3_accesses_through_mte2(
-    platform: str, model: str
-) -> None:
+def test_tail_copy_orders_prior_vector_and_mte3_accesses_through_mte2(platform: str, model: str) -> None:
     buffers = _buffers()
     copy = _copy(buffers)
     original = _function(buffers, [_fill(buffers["local"]), _store(buffers), copy, _store(buffers)])
@@ -169,11 +156,7 @@ def test_tail_copy_orders_prior_vector_and_mte3_accesses_through_mte2(
     assert {"V_MTE3", "MTE3_MTE2", "MTE2_MTE3"} <= directions
     ordered = _calls(result)
     positions = {
-        name: [
-            index
-            for index, call in enumerate(ordered)
-            if call.op == tvm.ir.Op.get("tir.call_extern") and name in call.args[0].value
-        ]
+        name: [index for index, call in enumerate(ordered) if call.op == tvm.ir.Op.get("tir.call_extern") and name in call.args[0].value]
         for name in ("Duplicate", "copy_ub_to_gm", "copy_gm_to_ub")
     }
     handoffs = (
@@ -185,9 +168,7 @@ def test_tail_copy_orders_prior_vector_and_mte3_accesses_through_mte2(
         sets = [
             (index, call)
             for index, call in enumerate(ordered)
-            if isinstance(call.op, tvm.ir.Op)
-            and call.op.name == "tl.ascend_auto_set_flag"
-            and call.args[0].value == event
+            if isinstance(call.op, tvm.ir.Op) and call.op.name == "tl.ascend_auto_set_flag" and call.args[0].value == event
         ]
         assert any(
             producer < set_index < wait_index < consumer
@@ -231,9 +212,7 @@ def test_dynamic_full_or_tail_keeps_one_original_call_and_an_mte2_acquire() -> N
         ("uint32", "uint32_t, 64"),
     ],
 )
-def test_duplicate_supported_types_have_the_same_completion_contract(
-    dtype: str, template: str
-) -> None:
+def test_duplicate_supported_types_have_the_same_completion_contract(dtype: str, template: str) -> None:
     buffers = _buffers(dtype)
     result = _run(_function(buffers, [_copy(buffers, template=template), _store(buffers)]))
     assert len(_helper_calls(result)) == 1
@@ -261,22 +240,16 @@ def test_nominal_pointer_extent_cannot_hide_the_strided_gm_read() -> None:
 @pytest.mark.parametrize("direction", ["MTE2_V", "MTE3_V", "V_MTE2"])
 @pytest.mark.parametrize("position", ["before", "after"])
 @pytest.mark.parametrize("api", ["auto", "manual"])
-def test_explicit_event_zero_conflicts_even_before_the_first_tail_copy(
-    direction: str, position: str, api: str
-) -> None:
+def test_explicit_event_zero_conflicts_even_before_the_first_tail_copy(direction: str, position: str, api: str) -> None:
     buffers = _buffers()
     source, destination = direction.split("_")
     arguments = (
-        [tir.StringImm(direction), 0]
-        if api == "auto"
-        else [tir.StringImm(f"PIPE_{source}"), tir.StringImm(f"PIPE_{destination}"), 0]
+        [tir.StringImm(direction), 0] if api == "auto" else [tir.StringImm(f"PIPE_{source}"), tir.StringImm(f"PIPE_{destination}"), 0]
     )
     manual = [
         tir.Evaluate(tir.Call("handle", tvm.ir.Op.get(name), arguments))
         for name in (
-            ("tl.ascend_auto_set_flag", "tl.ascend_auto_wait_flag")
-            if api == "auto"
-            else ("tl.ascend_set_flag", "tl.ascend_wait_flag")
+            ("tl.ascend_auto_set_flag", "tl.ascend_auto_wait_flag") if api == "auto" else ("tl.ascend_set_flag", "tl.ascend_wait_flag")
         )
     ]
     computation = [_copy(buffers), _store(buffers)]
@@ -292,11 +265,7 @@ def test_other_explicit_slot_is_preserved_and_excluded_from_automatic_allocation
         for name in ("tl.ascend_auto_set_flag", "tl.ascend_auto_wait_flag")
     ]
     result = _run(_function(buffers, manual + [_fill(buffers["local"]), _copy(buffers)]))
-    sets = [
-        event
-        for event in _events(result)
-        if event.op.name == "tl.ascend_auto_set_flag" and event.args[0].value == "V_MTE2"
-    ]
+    sets = [event for event in _events(result) if event.op.name == "tl.ascend_auto_set_flag" and event.args[0].value == "V_MTE2"]
     assert len(sets) >= 2
     assert sum(int(event.args[1]) == 1 for event in sets) == 1
     assert all(int(event.args[1]) != 0 for event in sets)
@@ -341,9 +310,7 @@ def test_symbolic_masks_need_a_proof_of_the_complete_valid_range() -> None:
         (lambda: {"destination_mask": "rw"}, "exact source-read/destination-write"),
     ],
 )
-def test_tail_footprint_and_pointer_contracts_fail_closed(
-    change: Callable[[], dict[str, object]], message: str
-) -> None:
+def test_tail_footprint_and_pointer_contracts_fail_closed(change: Callable[[], dict[str, object]], message: str) -> None:
     buffers = _buffers()
     with pytest.raises(tvm.error.TVMError, match=message):
         _run(_function(buffers, [_copy(buffers, **change())]))
@@ -356,9 +323,7 @@ def test_whole_duplicate_tile_must_fit_even_when_dma_mask_is_small() -> None:
 
 
 @pytest.mark.parametrize("dtype,template", [("int8", "int8_t, 64"), ("uint8", "uint8_t, 64")])
-def test_types_without_the_duplicate_padding_path_are_not_misclassified(
-    dtype: str, template: str
-) -> None:
+def test_types_without_the_duplicate_padding_path_are_not_misclassified(dtype: str, template: str) -> None:
     buffers = _buffers(dtype)
     with pytest.raises(tvm.error.TVMError, match="type supported by Duplicate"):
         _run(_function(buffers, [_copy(buffers, template=template)]))
@@ -412,9 +377,7 @@ def test_template_counts_cannot_overflow_the_native_duplicate_or_dma_abi(templat
 
 def test_vector_padding_value_is_rejected_before_hardware_codegen() -> None:
     buffers = _buffers()
-    with pytest.raises(
-        tvm.error.TVMError, match="padding value must be a captured arithmetic scalar"
-    ):
+    with pytest.raises(tvm.error.TVMError, match="padding value must be a captured arithmetic scalar"):
         _run(
             _function(
                 buffers,

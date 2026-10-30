@@ -155,11 +155,7 @@ def _program(function, k, *, legacy_protocol=False):
                 resource,
             )
         elif isinstance(statement, tir.IfThenElse):
-            branch = (
-                statement.then_case
-                if integer(statement.condition, bindings)
-                else statement.else_case
-            )
+            branch = statement.then_case if integer(statement.condition, bindings) else statement.else_case
             if branch is not None:
                 visit(branch, bindings, resource)
         elif isinstance(statement, tir.For):
@@ -201,9 +197,7 @@ def _program(function, k, *, legacy_protocol=False):
                 emit(
                     "FIX",
                     "store",
-                    reads=tuple(
-                        (byte, ("c", k // 128 - 1)) for byte in span(call.args[1], bindings)
-                    ),
+                    reads=tuple((byte, ("c", k // 128 - 1)) for byte in span(call.args[1], bindings)),
                 )
             else:
                 raise AssertionError(f"unmodelled operation: {operation}")
@@ -268,10 +262,7 @@ def _execute(queues, priority):
 
 
 def _remove_direction(queues, direction):
-    return tuple(
-        tuple(command for command in queue if not command.event or command.event[0] != direction)
-        for queue in queues
-    )
+    return tuple(tuple(command for command in queue if not command.event or command.event[0] != direction) for queue in queues)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -284,12 +275,7 @@ def _requires_proof_service():
 def test_actual_pto_gemm_single_slot_and_full_completion_protocol(pto_flat_gemms, k):
     after = _run(pto_flat_gemms[k], model="pto", target_kind="llvm")
     queues = _program(after, k)
-    hidden = Counter(
-        (command.kind, command.event)
-        for queue in queues
-        for command in queue
-        if command.origin == "pto" and command.event
-    )
+    hidden = Counter((command.kind, command.event) for queue in queues for command in queue if command.origin == "pto" and command.event)
     counts = {
         "MTE2_MTE1": 1,
         "M_MTE1": k // 128,
@@ -298,14 +284,7 @@ def test_actual_pto_gemm_single_slot_and_full_completion_protocol(pto_flat_gemms
         "MTE1_MTE2": 1,
         "M_FIX": 1,
     }
-    assert hidden == Counter(
-        {
-            (kind, (direction, 1)): count
-            for direction, count in counts.items()
-            for kind in ("set", "wait")
-            if count
-        }
-    )
+    assert hidden == Counter({(kind, (direction, 1)): count for direction, count in counts.items() for kind in ("set", "wait") if count})
     assert set(counts) == set(_DIRECTIONS)
     # Repeated complete invocations never inherit helper credits. The model
     # does not grant completion at the lexical helper return.
@@ -362,12 +341,8 @@ def test_original_k256_helper_fails_with_actual_tir_and_inserted_flags(pto_flat_
     assert any("double set: ('MTE1_MTE2', 1)" in error for error in errors), errors
 
 
-@pytest.mark.parametrize(
-    "k,direction", [(128, "MTE2_MTE1"), (128, "MTE1_M"), (128, "M_FIX"), (256, "M_MTE1")]
-)
-def test_async_oracle_catches_deleted_data_or_single_slot_completion_direction(
-    pto_flat_gemms, k, direction
-):
+@pytest.mark.parametrize("k,direction", [(128, "MTE2_MTE1"), (128, "MTE1_M"), (128, "M_FIX"), (256, "M_MTE1")])
+def test_async_oracle_catches_deleted_data_or_single_slot_completion_direction(pto_flat_gemms, k, direction):
     after = _run(pto_flat_gemms[k], model="pto", target_kind="llvm")
     broken = _remove_direction(_program(after, k), direction)
     # Remove the entire direction: the helper and generated handshakes can be

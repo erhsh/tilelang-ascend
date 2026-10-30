@@ -237,9 +237,7 @@ class AutotuneResult:
         function = getattr(kernel, "prim_func", None)
         attributes = getattr(function, "attrs", None)
         contract_configs = getattr(kernel, "pass_configs", None)
-        if (
-            attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes
-        ) or (
+        if (attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes) or (
             contract_configs and contract_configs.get("tl.ascend_sync_backend") == "upstream"
         ):
             from tilelang.jit.ascend_runtime_contract import (
@@ -249,7 +247,10 @@ class AutotuneResult:
 
             try:
                 manifest = build_cached_auto_gm_manifest(
-                    function, kernel.execution_backend, kernel.auto_gm_idx, len(kernel.params),
+                    function,
+                    kernel.execution_backend,
+                    kernel.auto_gm_idx,
+                    len(kernel.params),
                     contract_configs,
                 )
                 with open(os.path.join(cache_path, AUTO_GM_MANIFEST_PATH), "w") as f:
@@ -329,9 +330,9 @@ class AutotuneResult:
 
         runtime_contract_kwargs = {}
         attributes = getattr(func, "attrs", None)
-        if (
-            attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes
-        ) or (pass_configs and pass_configs.get("tl.ascend_sync_backend") == "upstream"):
+        if (attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes) or (
+            pass_configs and pass_configs.get("tl.ascend_sync_backend") == "upstream"
+        ):
             from tilelang.jit.ascend_runtime_contract import (
                 AUTO_GM_MANIFEST_PATH,
                 validate_cached_auto_gm_manifest,

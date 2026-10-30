@@ -250,11 +250,7 @@ class AutoTunerCache:
         attributes = getattr(func, "attrs", None)
         compiled_attributes = getattr(getattr(kernel, "prim_func", None), "attrs", None)
         marked = attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes
-        if (
-            compiled_attributes is not None
-            and "tl.ascend_auto_gm_fresh_contract" in compiled_attributes
-            and not marked
-        ):
+        if compiled_attributes is not None and "tl.ascend_auto_gm_fresh_contract" in compiled_attributes and not marked:
             # This legacy entry point did not prepare the function before its
             # cache key. Never publish a fresh-sensitive binary under that key.
             self.logger.warning("Skipping automatic GM artifact without its prepared cache key")
@@ -301,9 +297,7 @@ class AutoTunerCache:
             self.logger.error(f"Error saving kernel parameters to disk: {e}")
 
         contract_configs = getattr(kernel, "pass_configs", None)
-        if marked or (
-            contract_configs and contract_configs.get("tl.ascend_sync_backend") == "upstream"
-        ):
+        if marked or (contract_configs and contract_configs.get("tl.ascend_sync_backend") == "upstream"):
             from tilelang.jit.ascend_runtime_contract import (
                 AUTO_GM_MANIFEST_PATH,
                 build_cached_auto_gm_manifest,
@@ -311,9 +305,7 @@ class AutoTunerCache:
 
             try:
                 indices = kernel.auto_gm_idx
-                manifest = build_cached_auto_gm_manifest(
-                    func, kernel.execution_backend, indices, len(kernel.params), contract_configs
-                )
+                manifest = build_cached_auto_gm_manifest(func, kernel.execution_backend, indices, len(kernel.params), contract_configs)
                 with open(os.path.join(cache_path, AUTO_GM_IDX_PATH), "w") as f:
                     json.dump(indices, f)
                 with open(os.path.join(cache_path, AUTO_GM_MANIFEST_PATH), "w") as f:
@@ -372,9 +364,9 @@ class AutoTunerCache:
 
         runtime_contract_kwargs = {}
         attributes = getattr(func, "attrs", None)
-        if (
-            attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes
-        ) or (pass_configs and pass_configs.get("tl.ascend_sync_backend") == "upstream"):
+        if (attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes) or (
+            pass_configs and pass_configs.get("tl.ascend_sync_backend") == "upstream"
+        ):
             from tilelang.jit.ascend_runtime_contract import (
                 AUTO_GM_MANIFEST_PATH,
                 validate_cached_auto_gm_manifest,

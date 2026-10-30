@@ -28,9 +28,7 @@ def _requires_proof_service():
         pytest.skip("requires USE_ASCEND_SYNC_Z3=ON")
 
 
-@pytest.mark.parametrize(
-    "kind", ["same_pipe", "static_b2", "static_b3", "dynamic_b2", "dynamic_b3"]
-)
+@pytest.mark.parametrize("kind", ["same_pipe", "static_b2", "static_b3", "dynamic_b2", "dynamic_b3"])
 def test_a3_pto_vector_and_physical_pipeline_protocol(kind):
     if kind == "same_pipe":
         program, lengths = _same_pipe_abs(), (1,)

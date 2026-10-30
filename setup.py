@@ -48,9 +48,7 @@ def load_module_from_path(module_name, path):
 
 
 envs = load_module_from_path("env", os.path.join(ROOT_DIR, PACKAGE_NAME, "env.py"))
-native_runtime = load_module_from_path(
-    "tilelang_native_runtime_packaging", os.path.join(ROOT_DIR, PACKAGE_NAME, "_native_runtime.py")
-)
+native_runtime = load_module_from_path("tilelang_native_runtime_packaging", os.path.join(ROOT_DIR, PACKAGE_NAME, "_native_runtime.py"))
 
 CUDA_HOME = envs.CUDA_HOME
 ROCM_HOME = envs.ROCM_HOME
@@ -638,9 +636,7 @@ class CMakeBuild(build_ext):
         ]
         native_runtime.configure_pypi_runtime([self.build_temp], package_lib_dirs)
         output_dirs = [os.path.join(self.build_temp, "native")]
-        native_runtime.stage_packaged_libraries(
-            [*output_dirs, self.build_temp], package_lib_dirs
-        )
+        native_runtime.stage_packaged_libraries([*output_dirs, self.build_temp], package_lib_dirs)
         native_runtime.copy_native_notices(
             ROOT_DIR,
             [os.path.join(self.build_lib, PACKAGE_NAME), os.path.join(ROOT_DIR, PACKAGE_NAME)],

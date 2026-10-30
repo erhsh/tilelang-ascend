@@ -47,9 +47,7 @@ def _persistent_abs(rows: int | None, *, nested: bool = False) -> tir.PrimFunc:
 
 def _nodes(function: tir.PrimFunc, kind: type) -> list:
     result = []
-    tir.stmt_functor.post_order_visit(
-        function.body, lambda node: result.append(node) if isinstance(node, kind) else None
-    )
+    tir.stmt_functor.post_order_visit(function.body, lambda node: result.append(node) if isinstance(node, kind) else None)
     return result
 
 
@@ -136,9 +134,7 @@ def _executed_indices(function: tir.PrimFunc, worker: int) -> list[int]:
 
     def integer(expression: tir.PrimExpr, values: dict) -> int:
         value = analyzer.simplify(
-            tir.stmt_functor.substitute(
-                expression, {var: tir.const(number, var.dtype) for var, number in values.items()}
-            )
+            tir.stmt_functor.substitute(expression, {var: tir.const(number, var.dtype) for var, number in values.items()})
         )
         assert isinstance(value, tir.IntImm), value
         return int(value)
@@ -164,9 +160,7 @@ def _executed_indices(function: tir.PrimFunc, worker: int) -> list[int]:
                 except LoopBreak:
                     break
         elif isinstance(statement, tir.IfThenElse):
-            branch = (
-                statement.then_case if integer(statement.condition, values) else statement.else_case
-            )
+            branch = statement.then_case if integer(statement.condition, values) else statement.else_case
             if branch is not None:
                 execute(branch, values)
         elif isinstance(statement, tir.BufferStore):
@@ -209,9 +203,7 @@ def test_nested_ordinary_loop_keeps_iteration_order_and_scope() -> None:
 
 
 @pytest.mark.parametrize("domain,wave,divisor", [(3, 10, 2), (11, 10, 2), (3, 2, 2), (5, 4, 3)])
-def test_simplified_divided_worker_guard_preserves_partial_wave_coverage(
-    domain: int, wave: int, divisor: int
-) -> None:
+def test_simplified_divided_worker_guard_preserves_partial_wave_coverage(domain: int, wave: int, divisor: int) -> None:
     original = _canonical(domain, wave, divisor=divisor)
     normalized = _normalize(original)
     coverage = Counter()
@@ -229,9 +221,7 @@ def test_divided_worker_requires_matching_actual_hardware_extent() -> None:
 
 
 @pytest.mark.parametrize("domain,wave,divisor", [(3, 2, 2), (4, 4, 1)])
-def test_equality_guard_requires_proven_equivalence_to_monotone_break(
-    domain: int, wave: int, divisor: int
-) -> None:
+def test_equality_guard_requires_proven_equivalence_to_monotone_break(domain: int, wave: int, divisor: int) -> None:
     original = _canonical(domain, wave, divisor=divisor, mutation="equality")
     normalized = _normalize(original)
     assert not _breaks(normalized)
@@ -278,13 +268,9 @@ def test_body_rebinding_cannot_change_the_original_header_range_certificate() ->
     # Deliberately reuse a Var in two lexical scopes. The private normalizer
     # must reject the false certificate even when called outside the frontend
     # SSA pipeline: the original For runs three times, not the body's two.
-    body = tir.For(
-        loop, 0, count, tir.ForKind.SERIAL, tir.LetStmt(count, 2, tir.SeqStmt([guard, payload]))
-    )
+    body = tir.For(loop, 0, count, tir.ForKind.SERIAL, tir.LetStmt(count, 2, tir.SeqStmt([guard, payload])))
     body = tir.LetStmt(count, 3, body)
-    body = tir.AttrStmt(
-        tir.IterVar(None, worker, tir.IterVar.ThreadIndex, "blockIdx.x"), "thread_extent", 4, body
-    )
+    body = tir.AttrStmt(tir.IterVar(None, worker, tir.IterVar.ThreadIndex, "blockIdx.x"), "thread_extent", 4, body)
     function = tir.PrimFunc([output.data], body, buffer_map={output.data: output})
     assert _executed_indices(function, 0) == [0, 4, 8]
     with pytest.raises(tvm.error.TVMError, match="original trip count must equal"):
@@ -322,9 +308,5 @@ def test_real_persistent_copy_abs_uses_upstream_engine(rows: int | None, nested:
     function = artifact.device_mod.functions_items()[0][1]
     assert "tl.ascend_sync_proof" in function.attrs
     assert not _breaks(function)
-    events = [
-        call.args[0].value
-        for call in _nodes(function, tir.Call)
-        if call.op.name == "tl.ascend_auto_set_flag"
-    ]
+    events = [call.args[0].value for call in _nodes(function, tir.Call) if call.op.name == "tl.ascend_auto_set_flag"]
     assert "MTE2_V" in events and "V_MTE3" in events

@@ -28,11 +28,7 @@ def _copy(name: str, source: tir.Buffer, destination: tir.Buffer) -> tir.Evaluat
     arguments = []
     if "copy_gm_to_ub" in name:
         arguments = [64, 1, 64, tir.const(0, "float32"), 64]
-    return tir.Evaluate(
-        tir.call_extern(
-            "handle", name, source.access_ptr("r"), destination.access_ptr("w"), *arguments
-        )
-    )
+    return tir.Evaluate(tir.call_extern("handle", name, source.access_ptr("r"), destination.access_ptr("w"), *arguments))
 
 
 def _function(
@@ -163,12 +159,8 @@ def _function(
 
 def _run(function: tir.PrimFunc, *, platform: str = "A3") -> tir.PrimFunc:
     target = tvm.target.Target("c -keys=ascend -model=ascendc")
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}
-    ):
-        result = tilelang.transform.AscendInsertSync(target, platform)(
-            tvm.IRModule({"main": function})
-        )
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}):
+        result = tilelang.transform.AscendInsertSync(target, platform)(tvm.IRModule({"main": function}))
     return result["main"]
 
 
@@ -208,10 +200,7 @@ def test_existing_publication_gets_local_completion_fences_without_new_cross_cal
     before = [call for _, call in _commands(original.body)]
     commands = _commands(result.body)
     retained = [
-        call
-        for _, call in commands
-        if _name(call)
-        not in ("tl.ascend_auto_set_flag", "tl.ascend_auto_wait_flag", "tl.ascend_auto_barrier")
+        call for _, call in commands if _name(call) not in ("tl.ascend_auto_set_flag", "tl.ascend_auto_wait_flag", "tl.ascend_auto_barrier")
     ]
     assert len(retained) == len(before)
     assert all(new.same_as(old) for new, old in zip(retained, before))
@@ -221,27 +210,20 @@ def test_existing_publication_gets_local_completion_fences_without_new_cross_cal
     set_index = next(i for i, (_, call) in enumerate(commands) if call.same_as(cross_calls[0][1]))
     wait_index = next(i for i, (_, call) in enumerate(commands) if call.same_as(cross_calls[1][1]))
     assert any(
-        owner == 0 and _name(call) == "tl.ascend_auto_barrier" and call.args[0].value == "PIPE_FIX"
-        for owner, call in commands[:set_index]
+        owner == 0 and _name(call) == "tl.ascend_auto_barrier" and call.args[0].value == "PIPE_FIX" for owner, call in commands[:set_index]
     )
     scalar_sets = [
         i
         for i, (owner, call) in enumerate(commands)
-        if owner == 1
-        and _name(call) == "tl.ascend_auto_set_flag"
-        and call.args[0].value == "S_MTE2"
+        if owner == 1 and _name(call) == "tl.ascend_auto_set_flag" and call.args[0].value == "S_MTE2"
     ]
     scalar_waits = [
         i
         for i, (owner, call) in enumerate(commands)
-        if owner == 1
-        and _name(call) == "tl.ascend_auto_wait_flag"
-        and call.args[0].value == "S_MTE2"
+        if owner == 1 and _name(call) == "tl.ascend_auto_wait_flag" and call.args[0].value == "S_MTE2"
     ]
     reader_index = next(
-        i
-        for i, (_, call) in enumerate(commands)
-        if _name(call) == "tir.call_extern" and "copy_gm_to_ub" in call.args[0].value
+        i for i, (_, call) in enumerate(commands) if _name(call) == "tir.call_extern" and "copy_gm_to_ub" in call.args[0].value
     )
     assert scalar_sets and scalar_waits
     assert wait_index < scalar_sets[0] < scalar_waits[0] < reader_index
@@ -253,8 +235,7 @@ def test_local_event_reservations_are_independent_between_cube_and_vector() -> N
     # handoff after CrossCoreWaitFlag; a global reservation table would fail.
     result = _run(_function(cube_reserve_all_s_mte2=True))
     assert any(
-        owner == 1 and _name(call) == "tl.ascend_auto_set_flag" and call.args[0].value == "S_MTE2"
-        for owner, call in _commands(result.body)
+        owner == 1 and _name(call) == "tl.ascend_auto_set_flag" and call.args[0].value == "S_MTE2" for owner, call in _commands(result.body)
     )
 
 
@@ -279,9 +260,7 @@ def test_local_event_reservations_are_independent_between_cube_and_vector() -> N
         ({"version": 2}, "B1|version|provenance"),
     ],
 )
-def test_unsupported_or_uncovered_cross_protocol_is_rejected(
-    kwargs: dict[str, object], diagnostic: str
-) -> None:
+def test_unsupported_or_uncovered_cross_protocol_is_rejected(kwargs: dict[str, object], diagnostic: str) -> None:
     with pytest.raises(tvm.error.TVMError, match=diagnostic):
         _run(_function(**kwargs))
 
@@ -322,8 +301,6 @@ def test_developer_subcore_coordinate_is_private_to_each_resource() -> None:
         ({"topology_tag": "threadIdx.y", "cv_ratio": "cv_1_2"}, "unsupported thread topology"),
     ],
 )
-def test_ambiguous_or_unproven_developer_topology_is_rejected(
-    kwargs: dict[str, object], diagnostic: str
-) -> None:
+def test_ambiguous_or_unproven_developer_topology_is_rejected(kwargs: dict[str, object], diagnostic: str) -> None:
     with pytest.raises(tvm.error.TVMError, match=diagnostic):
         _run(_function(**kwargs))

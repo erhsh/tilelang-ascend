@@ -27,9 +27,7 @@ def _requires_proof_service():
 
 @pytest.mark.parametrize("rows,tiles", [(9, 3), (9, 5), (10, 5), (17, 3)])
 @pytest.mark.parametrize("memory_planning", [False, True])
-def test_persistent_pipeline_wrap_partial_wave_and_repeated_invocation(
-    rows, tiles, memory_planning
-):
+def test_persistent_pipeline_wrap_partial_wave_and_repeated_invocation(rows, tiles, memory_planning):
     tilelang.disable_cache()
     kernel = tilelang.compile(
         _persistent_pipelined_abs(rows, tiles),

@@ -287,9 +287,7 @@ class KernelCache:
         if (
             compiled_attributes is not None
             and "tl.ascend_auto_gm_fresh_contract" in compiled_attributes
-            and not (
-                attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes
-            )
+            and not (attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes)
         ):
             self.logger.warning("Skipping automatic GM artifact without its prepared cache key")
             return
@@ -344,9 +342,7 @@ class KernelCache:
 
         attributes = getattr(func, "attrs", None)
         contract_configs = getattr(kernel, "pass_configs", None)
-        if (
-            attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes
-        ) or (
+        if (attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes) or (
             contract_configs and contract_configs.get("tl.ascend_sync_backend") == "upstream"
         ):
             from tilelang.jit.ascend_runtime_contract import (
@@ -356,7 +352,10 @@ class KernelCache:
 
             try:
                 manifest = build_cached_auto_gm_manifest(
-                    func, kernel.execution_backend, kernel.auto_gm_idx, len(kernel.params),
+                    func,
+                    kernel.execution_backend,
+                    kernel.auto_gm_idx,
+                    len(kernel.params),
                     contract_configs,
                 )
                 with open(os.path.join(cache_path, AUTO_GM_MANIFEST_PATH), "w") as f:
@@ -435,9 +434,9 @@ class KernelCache:
 
         runtime_contract_kwargs = {}
         attributes = getattr(func, "attrs", None)
-        if (
-            attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes
-        ) or (pass_configs and pass_configs.get("tl.ascend_sync_backend") == "upstream"):
+        if (attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes) or (
+            pass_configs and pass_configs.get("tl.ascend_sync_backend") == "upstream"
+        ):
             from tilelang.jit.ascend_runtime_contract import (
                 AUTO_GM_MANIFEST_PATH,
                 validate_cached_auto_gm_manifest,

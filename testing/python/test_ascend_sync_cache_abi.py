@@ -43,9 +43,7 @@ def _key(kind, config):
     # These methods only calculate keys; exercise them without initializing or
     # mutating their process-wide cache singletons.
     if kind == "kernel":
-        return KernelCache._generate_key(
-            None, _function(), [], [], [], args=(), platform="A3", pass_configs=config
-        )
+        return KernelCache._generate_key(None, _function(), [], [], [], args=(), platform="A3", pass_configs=config)
     if kind == "tuner":
         return AutoTunerCache._generate_key(None, _function(), [], args=(), pass_configs=config)
     return hash(CompileArgs(target="ascendc", platform="A3", pass_configs=config))
@@ -61,9 +59,7 @@ def test_same_native_abi_keeps_keys_stable_and_changed_abi_invalidates(kind, nat
 
 @pytest.mark.parametrize("kind", ["kernel", "tuner", "compile_args"])
 @pytest.mark.parametrize("config", [None, {}, {"tl.ascend_sync_backend": "legacy"}])
-def test_nonupstream_keys_keep_their_old_fields_and_do_not_query_native_abi(
-    kind, config, native_abi
-):
+def test_nonupstream_keys_keep_their_old_fields_and_do_not_query_native_abi(kind, config, native_abi):
     first = _key(kind, config)
     native_abi["version"] = "different-version"
     assert _key(kind, config) == first
@@ -86,9 +82,7 @@ def test_native_abi_result_must_be_a_nonempty_version(version, native_abi):
 
 
 @pytest.mark.parametrize("fresh", [False, True])
-def test_upstream_manifest_binds_the_engine_even_without_a_fresh_allocation_marker(
-    fresh, native_abi
-):
+def test_upstream_manifest_binds_the_engine_even_without_a_fresh_allocation_marker(fresh, native_abi):
     function = _function()
     if fresh:
         function = prepare_auto_gm_contract(function, "cython", "ascendc")
@@ -102,9 +96,7 @@ def test_upstream_manifest_binds_the_engine_even_without_a_fresh_allocation_mark
 
 
 @pytest.mark.parametrize("fresh", [False, True])
-def test_direct_database_reconstruction_rejects_another_engine_before_loading_a_library(
-    fresh, native_abi
-):
+def test_direct_database_reconstruction_rejects_another_engine_before_loading_a_library(fresh, native_abi):
     function = _function()
     if fresh:
         function = prepare_auto_gm_contract(function, "cython", "ascendc")

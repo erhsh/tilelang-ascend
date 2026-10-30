@@ -38,15 +38,11 @@ def _buffers() -> dict[str, tir.Buffer]:
 def _fill(buffer: tir.Buffer, value: tir.PrimExpr | None = None) -> tir.Evaluate:
     if value is None:
         value = tir.FloatImm("float32", 1.0)
-    return tir.Evaluate(
-        tir.call_extern("handle", "AscendC::Duplicate", buffer.access_ptr("w"), value)
-    )
+    return tir.Evaluate(tir.call_extern("handle", "AscendC::Duplicate", buffer.access_ptr("w"), value))
 
 
 def _copy(name: str, source: tir.Buffer, destination: tir.Buffer) -> tir.Evaluate:
-    return tir.Evaluate(
-        tir.call_extern("handle", name, source.access_ptr("r"), destination.access_ptr("w"))
-    )
+    return tir.Evaluate(tir.call_extern("handle", name, source.access_ptr("r"), destination.access_ptr("w")))
 
 
 def _function(
@@ -77,9 +73,7 @@ def _function(
 
 def _run(function: tir.PrimFunc) -> tir.PrimFunc:
     target = tvm.target.Target("c -keys=ascend -model=ascendc")
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}
-    ):
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}):
         module = tilelang.transform.AscendInsertSync(target, "A3")(tvm.IRModule({"main": function}))
     return module["main"]
 
@@ -99,9 +93,7 @@ def _flag_calls(statement: tir.Stmt, kind: str, event: str) -> list[tir.Call]:
     return [
         call
         for call in _nodes(statement, tir.Call)
-        if isinstance(call.op, tvm.ir.Op)
-        and call.op.name == f"tl.ascend_auto_{kind}_flag"
-        and call.args[0].value == event
+        if isinstance(call.op, tvm.ir.Op) and call.op.name == f"tl.ascend_auto_{kind}_flag" and call.args[0].value == event
     ]
 
 
@@ -155,11 +147,7 @@ def test_hardware_scalar_memory_operand_is_captured_once_before_the_operation() 
     assert len(bindings) == 1
     binding = bindings[0]
     assert tvm.ir.structural_equal(binding.value, scalar)
-    calls = [
-        call
-        for call in _nodes(binding.body, tir.Call)
-        if isinstance(call.op, tvm.ir.Op) and call.op.name == "tir.call_extern"
-    ]
+    calls = [call for call in _nodes(binding.body, tir.Call) if isinstance(call.op, tvm.ir.Op) and call.op.name == "tir.call_extern"]
     assert len(calls) == 1
     assert calls[0].args[2].same_as(binding.var)
     assert _flag_calls(result.body, "wait", "V_S")
@@ -332,11 +320,7 @@ def _interpret_scalar_program(function: tir.PrimFunc, parameters: dict | None = 
             for index in range(minimum, minimum + extent):
                 execute(statement.body, {**values, statement.loop_var: index})
         elif isinstance(statement, tir.IfThenElse):
-            selected = (
-                statement.then_case
-                if evaluate(statement.condition, values)
-                else statement.else_case
-            )
+            selected = statement.then_case if evaluate(statement.condition, values) else statement.else_case
             if selected is not None:
                 execute(selected, values)
         elif isinstance(statement, tir.BufferStore):

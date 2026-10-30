@@ -1882,8 +1882,8 @@ public:
       new_buffer_map.Set(key, new_buffer);
     }
     n->buffer_map = new_buffer_map;
-    if (auto rings = func->GetAttr<PhysicalRingProvenance>(
-            kPhysicalRingProvenance)) {
+    if (auto rings =
+            func->GetAttr<PhysicalRingProvenance>(kPhysicalRingProvenance)) {
       PhysicalRingProvenance remapped;
       for (const auto &[logical_id, old_record] : rings.value()) {
         ValidatePhysicalRingRecord(old_record);
@@ -1987,8 +1987,8 @@ Pass AscendStorageRewrite(bool is_npu = false) {
     n->body = plan_rewriter.Rewrite(std::move(n->body), true, enable_reuse,
                                     reuse_require_exact_matched_dtype,
                                     std::move(local_var_init_map));
-    if (auto rings = f->GetAttr<PhysicalRingProvenance>(
-            kPhysicalRingProvenance)) {
+    if (auto rings =
+            f->GetAttr<PhysicalRingProvenance>(kPhysicalRingProvenance)) {
       f = WithAttr(std::move(f), kPhysicalRingProvenance,
                    plan_rewriter.RemapPhysicalRings(rings.value()));
     }

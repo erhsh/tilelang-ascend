@@ -36,15 +36,11 @@ def _buffers() -> dict[str, tir.Buffer]:
 
 
 def _copy(name: str, source: tir.Buffer, destination: tir.Buffer) -> tir.Evaluate:
-    return tir.Evaluate(
-        tir.call_extern("handle", name, source.access_ptr("r"), destination.access_ptr("w"))
-    )
+    return tir.Evaluate(tir.call_extern("handle", name, source.access_ptr("r"), destination.access_ptr("w")))
 
 
 def _fill(destination: tir.Buffer) -> tir.Evaluate:
-    return tir.Evaluate(
-        tir.call_extern("handle", "AscendC::Duplicate", destination.access_ptr("w"))
-    )
+    return tir.Evaluate(tir.call_extern("handle", "AscendC::Duplicate", destination.access_ptr("w")))
 
 
 def _function(
@@ -74,9 +70,7 @@ def _function(
 
 def _run(function: tir.PrimFunc) -> tir.PrimFunc:
     target = tvm.target.Target("c -keys=ascend -model=ascendc")
-    with tvm.transform.PassContext(
-        config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}
-    ):
+    with tvm.transform.PassContext(config={"tl.ascend_auto_sync": True, "tl.ascend_auto_sync_vs": True}):
         module = tilelang.transform.AscendInsertSync(target, "A3")(tvm.IRModule({"main": function}))
     return module["main"]
 
@@ -101,11 +95,7 @@ def _execution_trace(function: tir.PrimFunc, values: dict[tir.Var, int]) -> list
             for index in range(minimum, minimum + integer(statement.extent, bindings)):
                 visit(statement.body, {**bindings, statement.loop_var: index})
         elif isinstance(statement, tir.IfThenElse):
-            branch = (
-                statement.then_case
-                if integer(statement.condition, bindings)
-                else statement.else_case
-            )
+            branch = statement.then_case if integer(statement.condition, bindings) else statement.else_case
             if branch is not None:
                 visit(branch, bindings)
         elif isinstance(statement, tir.LetStmt):
@@ -182,8 +172,7 @@ def _assert_complete_and_balanced(function: tir.PrimFunc, trace: list[tir.Call])
             for previous, previous_mask in accesses[key]:
                 if mask & 2 or previous_mask & 2:
                     assert previous in completed[pipe], (
-                        f"{helper} command {current} lacks completion of conflicting "
-                        f"command {previous} on {key}"
+                        f"{helper} command {current} lacks completion of conflicting command {previous} on {key}"
                     )
             accesses[key].append((current, mask))
         issued[pipe].add(current)
@@ -208,9 +197,7 @@ def _assert_no_proxy_indices(function: tir.PrimFunc, expected_for_count: int) ->
 
 @pytest.mark.parametrize("physical_alias", [False, True])
 @pytest.mark.parametrize("condition_value", [False, True])
-def test_optional_producer_has_a_complete_handshake_on_both_paths(
-    physical_alias: bool, condition_value: bool
-) -> None:
+def test_optional_producer_has_a_complete_handshake_on_both_paths(physical_alias: bool, condition_value: bool) -> None:
     buffers = _buffers()
     condition = tir.Var("condition", "bool")
     destination = buffers["b"] if physical_alias else buffers["a"]
@@ -237,9 +224,7 @@ def test_alternating_optional_producer_preserves_completion_and_event_balance(
     index = tir.Var("i", "int32")
     body = tir.SeqStmt(
         [
-            tir.IfThenElse(
-                index % 2 == 0, _copy("copy_gm_to_ub", buffers["input"], buffers["a"]), None
-            ),
+            tir.IfThenElse(index % 2 == 0, _copy("copy_gm_to_ub", buffers["input"], buffers["a"]), None),
             _copy("copy_ub_to_gm", buffers["a"], buffers["output"]),
         ]
     )
@@ -269,9 +254,7 @@ def test_else_branch_carries_are_ordered_across_different_iterations(trip_count:
     assert _assert_complete_and_balanced(result, trace) == trip_count
 
 
-@pytest.mark.parametrize(
-    "outer,inner", [(False, False), (False, True), (True, False), (True, True)]
-)
+@pytest.mark.parametrize("outer,inner", [(False, False), (False, True), (True, False), (True, True)])
 def test_nested_else_decisions_preserve_completion_on_every_path(outer: bool, inner: bool) -> None:
     buffers = _buffers()
     first = tir.Var("first", "bool")
@@ -324,9 +307,7 @@ def test_each_else_arm_keeps_its_own_nested_loop_protocol(then_count: int, else_
     )
     result = _run(_function(buffers, [loop], ()))
     _assert_no_proxy_indices(result, expected_for_count=3)
-    assert _assert_complete_and_balanced(result, _execution_trace(result, {})) == (
-        4 * then_count + 2 * else_count
-    )
+    assert _assert_complete_and_balanced(result, _execution_trace(result, {})) == (4 * then_count + 2 * else_count)
 
 
 def test_many_else_boundaries_fail_closed_when_flag_reuse_is_not_proven() -> None:
@@ -371,11 +352,7 @@ def test_else_protocols_reuse_events_across_complete_outer_iterations(
     trace = _execution_trace(result, {condition: condition_value})
     assert _assert_complete_and_balanced(result, trace) == 18
     event = "MTE2_MTE3" if condition_value else "V_MTE3"
-    sets = [
-        int(call.args[1])
-        for call in trace
-        if call.op.name == "tl.ascend_auto_set_flag" and call.args[0].value == event
-    ]
+    sets = [int(call.args[1]) for call in trace if call.op.name == "tl.ascend_auto_set_flag" and call.args[0].value == event]
     assert len(sets) >= 9
     assert len(set(sets)) < len(sets), "the bounded pool must reuse completed event lifetimes"
 

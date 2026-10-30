@@ -22,9 +22,7 @@ _SPEC.loader.exec_module(runtime)
 
 def _manifest(directory, entries):
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / runtime.NATIVE_RUNTIME_MANIFEST).write_text(
-        "".join(f"{entry}\n" for entry in entries)
-    )
+    (directory / runtime.NATIVE_RUNTIME_MANIFEST).write_text("".join(f"{entry}\n" for entry in entries))
 
 
 def _marker(directory, enabled):
@@ -204,19 +202,10 @@ def test_real_elf_copy_and_cross_soname_runtime_resolution(native_build, tmp_pat
     runtime.configure_pypi_runtime([native_build], [package])
     runtime.stage_packaged_libraries([native_build], [package])
     for name in runtime.NATIVE_LIBRARIES:
-        needed = subprocess.check_output(
-            ["patchelf", "--print-needed", str(package / name)], text=True
-        )
+        needed = subprocess.check_output(["patchelf", "--print-needed", str(package / name)], text=True)
         assert "libz3" not in needed
-        assert (
-            subprocess.check_output(
-                ["patchelf", "--print-rpath", str(package / name)], text=True
-            ).strip()
-            == "$ORIGIN"
-        )
-    assert before == {
-        p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in native_build.glob("*.so")
-    }
+        assert subprocess.check_output(["patchelf", "--print-rpath", str(package / name)], text=True).strip() == "$ORIGIN"
+    assert before == {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in native_build.glob("*.so")}
     assert not list(package.glob("libz3.so*"))
 
     # An independently installed runtime provider has a different SONAME.
