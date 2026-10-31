@@ -24,6 +24,7 @@
 
 #include "../common/attr.h"
 #include "../common/pipeline_ring_provenance.h"
+#include "legacy_helper_type.h"
 
 namespace tvm::tl::ascend_sync {
 
@@ -103,7 +104,7 @@ DataType DuplicateType(const std::string &type) {
       {"bfloat16_t", DataType::BFloat(16)}, {"int16_t", DataType::Int(16)},
       {"uint16_t", DataType::UInt(16)},     {"int32_t", DataType::Int(32)},
       {"uint32_t", DataType::UInt(32)}};
-  auto found = types.find(type);
+  auto found = types.find(CanonicalHelperElementType(type));
   ICHECK(found != types.end())
       << kError << "tail padding requires a type supported by Duplicate";
   return found->second;

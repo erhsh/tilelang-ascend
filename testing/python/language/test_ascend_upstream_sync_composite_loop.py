@@ -20,9 +20,10 @@ from test_ascend_upstream_sync_pipeline import _assert_balanced_events
 tir = tvm.tir
 
 
-def _ordinary_k_gemm(trip_count: int):
+def _ordinary_k_gemm(trip_count: int, with_barriers: bool = False):
     # Follow examples/gemm/example_gemm.py and _gemm_v0_kernel in the GEMM
-    # language suite. Omit their explicit barriers so this tests inserted sync.
+    # language suite. The default isolates inserted sync; the barrier variant
+    # also covers the original examples' manual synchronization unchanged.
     width = 16
     k_l1 = 64
     full_k = trip_count * k_l1
@@ -41,7 +42,11 @@ def _ordinary_k_gemm(trip_count: int):
                 for k in T.serial(trip_count):
                     T.copy(A[0, k * k_l1], a_l1)
                     T.copy(B[k * k_l1, 0], b_l1)
+                    if with_barriers:
+                        T.barrier_all()
                     T.gemm_v0(a_l1, b_l1, c_l0, init=(k == 0), kL0Size=k_l1)
+                    if with_barriers:
+                        T.barrier_all()
                 T.copy(c_l0, C[0, 0])
 
     return main
@@ -119,6 +124,11 @@ class _CompletionOracle:
 
     def barrier(self, call):
         pipe = call.args[0].value.removeprefix("PIPE_")
+        if pipe == "ALL":
+            completed = [max(clock[index] for clock in self.clocks.values()) for index in range(len(self._PIPES))]
+            for pipeline in self._PIPES:
+                self._step(pipeline, completed)
+            return
         assert pipe in self._PIPES
         self._step(pipe)
 
@@ -210,7 +220,7 @@ def _execute_k_protocol(function):
                 kind = "set" if operation.endswith("set_flag") else "wait"
                 events.append((kind, call.args[0].value, event_id))
                 completion_oracle.flag(kind, call.args[0].value, event_id)
-            elif operation == "tl.ascend_auto_barrier":
+            elif operation in ("tl.ascend_auto_barrier", "tl.ascend_pipe_barrier"):
                 completion_oracle.barrier(call)
             else:
                 assert operation in (
@@ -293,6 +303,67 @@ def test_ordinary_k_loop_preserves_calculation_and_balances_real_protocol(ordina
         }
         assert clear_conditions == [1] + [0] * (trip_count - 1)
         _assert_balanced_events(events, tokens)
+
+
+@pytest.mark.parametrize("trip_count", [1, 2, 3])
+def test_k_loop_preserves_explicit_barriers_and_protocol(trip_count):
+    if not tvm.get_global_func("tl.ascend_sync.Z3ProofServiceAvailable")():
+        pytest.skip("requires USE_ASCEND_SYNC_Z3=ON")
+    original = _pre_sync(_ordinary_k_gemm(max(2, trip_count), with_barriers=True))[0]
+    if trip_count == 1:
+        original = _rewrite_loop(original, lambda loop: tir.For(loop.loop_var, loop.min, 1, loop.kind, loop.body))
+    result = _run(original, target_kind="llvm")
+
+    def original_calls(function):
+        loop = _nodes(function.body, tir.For)[0]
+        return [
+            node.value
+            for node in _nodes(loop.body, tir.Evaluate)
+            if isinstance(node.value, tir.Call)
+            and _operation(node.value) in ("copy_gm_to_l1", "tl.ascend_gemm_v0", "tl.ascend_pipe_barrier")
+        ]
+
+    before, after = original_calls(original), original_calls(result)
+    assert [_operation(call) for call in before] == [
+        "copy_gm_to_l1",
+        "copy_gm_to_l1",
+        "tl.ascend_pipe_barrier",
+        "tl.ascend_gemm_v0",
+        "tl.ascend_pipe_barrier",
+    ]
+    assert len(after) == len(before)
+    for old, new in zip(before, after):
+        tvm.ir.assert_structural_equal(old, new)
+    tokens = set()
+    for _ in range(3):
+        events, calculations, clear_conditions = _execute_k_protocol(result)
+        assert calculations == {"copy_gm_to_l1": 2 * trip_count, "tl.ascend_gemm_v0": trip_count, "copy_l0c_to_gm": 1}
+        assert clear_conditions == [1] + [0] * (trip_count - 1)
+        _assert_balanced_events(events, tokens)
+
+
+@pytest.mark.parametrize("change", ["unknown_pipe", "nonliteral", "extra_argument", "fake_extern", "bad_auto_prefix"])
+def test_k_loop_rejects_unvalidated_barriers(ordinary_k_loops, change):
+    def rewrite(loop):
+        operation = tvm.ir.Op.get("tl.ascend_pipe_barrier")
+        arguments = [tir.StringImm("ALL")]
+        if change == "unknown_pipe":
+            arguments = [tir.StringImm("V")]
+        elif change == "nonliteral":
+            arguments = [tir.IntImm("int32", 0)]
+        elif change == "extra_argument":
+            arguments.append(tir.IntImm("int32", 0))
+        elif change == "fake_extern":
+            operation = tvm.ir.Op.get("tir.call_extern")
+            arguments = [tir.StringImm("tl.ascend_pipe_barrier"), *arguments]
+        elif change == "bad_auto_prefix":
+            operation = tvm.ir.Op.get("tl.ascend_auto_barrier")
+        barrier = tir.Evaluate(tir.Call("handle", operation, arguments))
+        body = tir.SeqStmt([barrier, loop.body])
+        return tir.For(loop.loop_var, loop.min, loop.extent, loop.kind, body)
+
+    with pytest.raises(tvm.error.TVMError, match="(?i)(barrier|external For)"):
+        _run(_rewrite_loop(ordinary_k_loops[2], rewrite))
 
 
 @pytest.mark.parametrize("clear", [True, False])

@@ -79,6 +79,40 @@ class _ManifestCacheChecks:
             self._load(pass_configs={"tl.ascend_sync_backend": "upstream"})
         self.jit_kernel.from_database.assert_not_called()
 
+    def test_legacy_ascend_writer_and_loader_bind_the_shared_native_abi(self):
+        version = ["legacy-policy-v1"]
+        with mock.patch.object(self.modules["tvm"], "get_global_func", create=True, return_value=lambda: version[0]):
+            for target in ("ascendc", "pto"):
+                for configs in (None, {"tl.ascend_sync_backend": "legacy"}):
+                    with self.subTest(target=target, configs=configs):
+                        version[0] = "legacy-policy-v1"
+                        self.jit_kernel.from_database.reset_mock()
+                        kernel = self._compiled_kernel()
+                        kernel.target = target
+                        kernel.pass_configs = configs
+                        self._save(kernel)
+                        manifest = json.loads((self.entry / self.contract.AUTO_GM_MANIFEST_PATH).read_text())
+                        self.assertEqual(manifest["schema"], 2)
+                        self.assertEqual(manifest["sync_engine_abi"], "legacy-policy-v1")
+                        self.assertIs(self._load(target=target, pass_configs=configs), self.kernel)
+                        version[0] = "legacy-policy-v2"
+                        self.assertIsNone(self._load(target=target, pass_configs=configs))
+                        self.assertEqual(self.jit_kernel.from_database.call_count, 1)
+
+    def test_unmarked_legacy_ascend_artifact_requires_an_engine_manifest(self):
+        self.func.attrs = {}
+        self._write_indices([])
+        (self.entry / self.contract.AUTO_GM_MANIFEST_PATH).unlink()
+        self.assertIsNone(self._load(execution_backend="ctypes"))
+        self.jit_kernel.from_database.assert_not_called()
+
+    def test_old_legacy_schema_one_is_a_cache_miss(self):
+        old = self.contract.build_cached_auto_gm_manifest(self.func, "cython", [], 1)
+        self.assertEqual(old["schema"], 1)
+        (self.entry / self.contract.AUTO_GM_MANIFEST_PATH).write_text(json.dumps(old))
+        self.assertIsNone(self._load())
+        self.jit_kernel.from_database.assert_not_called()
+
     def _compiled_kernel(self):
         library = Path(self.tmp.name) / "compiled_source.so"
         library.write_bytes(b"new compiled library")
@@ -90,12 +124,13 @@ class _ManifestCacheChecks:
             get_kernel_source=lambda: source,
             prim_func=self.func,
             execution_backend="cython",
+            target="auto",
             params=[1, 2, 3, 4],
             auto_gm_idx=[3],
         )
 
     def _write_manifest(self, indices, param_count=1, **changes):
-        manifest = self.contract.build_cached_auto_gm_manifest(self.func, "cython", indices, param_count)
+        manifest = self.contract.build_cached_auto_gm_manifest(self.func, "cython", indices, param_count, target="auto")
         manifest.update(changes)
         (self.entry / self.contract.AUTO_GM_MANIFEST_PATH).write_text(json.dumps(manifest))
 
@@ -131,7 +166,7 @@ class _ManifestCacheChecks:
         self.jit_kernel.from_database.assert_not_called()
 
     def test_unknown_or_boolean_manifest_schema_is_a_miss(self):
-        for schema in (2, True):
+        for schema in (1, True):
             with self.subTest(schema=schema):
                 self._write_manifest([], schema=schema)
                 self.assertIsNone(self._load())
@@ -164,7 +199,7 @@ class _ManifestCacheChecks:
         self._save(kernel)
 
         manifest = json.loads(manifest_path.read_text())
-        expected = self.contract.build_cached_auto_gm_manifest(self.func, "cython", [3], 4)
+        expected = self.contract.build_cached_auto_gm_manifest(self.func, "cython", [3], 4, target="auto")
         self.assertEqual(manifest, expected)
         self.assertEqual(json.loads((self.entry / "auto_gm_idx.pkl").read_text()), [3])
         self.assertEqual((self.entry / "kernel_lib.so").read_bytes(), b"new compiled library")
@@ -191,7 +226,7 @@ class TestAscendRuntimeContractCache(_KeyedContractWriterChecks, _ManifestCacheC
         self.modules["tvm.tir"].StringImm = _StringImm
         # The recovery fixture deliberately makes tilelang.jit a non-package.
         # Register only this real helper explicitly, preserving that isolation.
-        self.saved[CONTRACT_MODULE] = sys.modules.get(CONTRACT_MODULE)
+        self.saved.setdefault(CONTRACT_MODULE, sys.modules.get(CONTRACT_MODULE))
         self.contract = _load_standalone(CONTRACT_PATH, CONTRACT_MODULE)
         kernel_cache = _load_standalone(KERNEL_CACHE_PATH, "ascend_contract_cache_under_test")
         kernel_cache.KernelCache._instance = None
@@ -271,21 +306,18 @@ class TestAscendRuntimeContractCache(_KeyedContractWriterChecks, _ManifestCacheC
         self.jit_kernel.from_database.assert_called_once()
         self.assertEqual(self.jit_kernel.from_database.call_args.kwargs["auto_gm_idx"], [0])
 
-    def test_unmarked_legacy_cache_loads_without_contract_helper(self):
+    def test_unmarked_nonascend_cache_loads_without_manifest(self):
         (self.entry / "auto_gm_idx.pkl").unlink()
         self.func = SimpleNamespace(attrs={})
-        # An unmarked legacy artifact must not require the new optional module.
-        with mock.patch.dict(sys.modules, {CONTRACT_MODULE: None}):
-            self.assertIs(self._load(execution_backend="ctypes"), self.kernel)
+        self.assertIs(self._load(target="cuda", execution_backend="ctypes"), self.kernel)
         self.jit_kernel.from_database.assert_called_once()
         kwargs = self.jit_kernel.from_database.call_args.kwargs
         self.assertEqual(kwargs["auto_gm_idx"], [])
         self.assertEqual(kwargs["execution_backend"], "ctypes")
 
-    def test_legacy_cache_without_function_loads_without_contract_helper(self):
+    def test_nonascend_cache_without_function_loads_without_manifest(self):
         self.func = None
-        with mock.patch.dict(sys.modules, {CONTRACT_MODULE: None}):
-            self.assertIs(self._load(), self.kernel)
+        self.assertIs(self._load(target="cuda"), self.kernel)
         self.jit_kernel.from_database.assert_called_once()
 
 
@@ -293,7 +325,7 @@ class _AdditionalContractLoaderMixin(_ManifestCacheChecks, KernelCacheRecoveryMi
     def setUp(self):
         super().setUp()
         self.modules["tvm.tir"].StringImm = _StringImm
-        self.saved[CONTRACT_MODULE] = sys.modules.get(CONTRACT_MODULE)
+        self.saved.setdefault(CONTRACT_MODULE, sys.modules.get(CONTRACT_MODULE))
         self.contract = _load_standalone(CONTRACT_PATH, CONTRACT_MODULE)
         self.func = SimpleNamespace(
             params=["A", "B", "C"],
@@ -371,21 +403,19 @@ class TestAscendAutotuneResultContractCache(_AdditionalContractLoaderMixin, unit
         self.assertIsNone(self._load())
         self.jit_kernel.from_database.assert_not_called()
 
-    def test_unmarked_legacy_cache_loads_without_metadata_or_contract_helper(self):
+    def test_unmarked_nonascend_cache_loads_without_metadata(self):
         (self.entry / "auto_gm_idx.pkl").unlink()
         self.func = SimpleNamespace(attrs={})
-        with mock.patch.dict(sys.modules, {CONTRACT_MODULE: None}):
-            self.assertIs(self._load(execution_backend="ctypes"), self.kernel)
+        self.assertIs(self._load(target="cuda", execution_backend="ctypes"), self.kernel)
         self.jit_kernel.from_database.assert_called_once()
         kwargs = self.jit_kernel.from_database.call_args.kwargs
         self.assertEqual(kwargs["auto_gm_idx"], [])
         self.assertEqual(kwargs["execution_backend"], "ctypes")
 
-    def test_unmarked_legacy_cache_keeps_parse_failure_fallback(self):
+    def test_unmarked_nonascend_cache_keeps_parse_failure_fallback(self):
         (self.entry / "auto_gm_idx.pkl").write_text("{not valid JSON")
         self.func = SimpleNamespace(attrs={})
-        with mock.patch.dict(sys.modules, {CONTRACT_MODULE: None}):
-            self.assertIs(self._load(), self.kernel)
+        self.assertIs(self._load(target="cuda"), self.kernel)
         self.jit_kernel.from_database.assert_called_once()
         self.assertEqual(self.jit_kernel.from_database.call_args.kwargs["auto_gm_idx"], [])
 
@@ -446,18 +476,16 @@ class TestAscendLegacyTunerContractCache(_KeyedContractWriterChecks, _Additional
         self.assertIsNone(self._load())
         self.jit_kernel.from_database.assert_not_called()
 
-    def test_unmarked_legacy_cache_loads_without_contract_helper(self):
+    def test_unmarked_nonascend_cache_loads_without_manifest(self):
         (self.entry / "auto_gm_idx.pkl").unlink()
         self.func = SimpleNamespace(attrs={})
-        with mock.patch.dict(sys.modules, {CONTRACT_MODULE: None}):
-            self.assertIs(self._load(execution_backend="ctypes"), self.kernel)
+        self.assertIs(self._load(target="cuda", execution_backend="ctypes"), self.kernel)
         self.jit_kernel.from_database.assert_called_once()
         kwargs = self.jit_kernel.from_database.call_args.kwargs
         self.assertNotIn("auto_gm_idx", kwargs)
         self.assertEqual(kwargs["execution_backend"], "ctypes")
 
-    def test_legacy_cache_without_function_loads_without_contract_helper(self):
+    def test_nonascend_cache_without_function_loads_without_manifest(self):
         self.func = None
-        with mock.patch.dict(sys.modules, {CONTRACT_MODULE: None}):
-            self.assertIs(self._load(), self.kernel)
+        self.assertIs(self._load(target="cuda"), self.kernel)
         self.jit_kernel.from_database.assert_called_once()

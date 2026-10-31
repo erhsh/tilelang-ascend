@@ -49,6 +49,23 @@ kernel = tilelang.compile(
 ordinary/VS 配置含义保持：VS-only 覆盖 V→V 和 S↔(V/MTE2/MTE3)，不会顺带启用所有
 Vector/DMA 同步。一般 Developer 自动同步应同时开启 ordinary 与 VS。
 
+### v18 适配修正
+
+- 同一 helper 类型解析现在将 emitter 的 `int` 归一化为 `int32_t`，保留原 dtype
+  白名单和 access_ptr 类型校验；覆盖真实 DSL 的 int32 tail-copy 和 int8 GEMM。
+- 普通 GEMM K-loop 将已校验的 Cube 管线屏障与计算叶分开统计，保留原屏障和顺序，
+  继续要求两次完整 A/B 刷新、一个 GEMM 及正确的 clear 条件。
+- AscendC transpose 根据 helper 实际 dtype/shape 选择 S 或 V 管线；标量 fallback
+  仍在 AIV 执行，PTO 的 TTRANS 保持 V。快照和流水分析只解析操作效果，同步消费者
+  另传逻辑形状，不能以默认 V 管线替代缺失的形状信息。
+- 共享同步语义变化也影响 legacy，因此实际 Ascend target 的三种编译缓存 key 和
+  schema2 manifest 均绑定原生同步 ABI。旧 Ascend schema1 或缺失 manifest 触发
+  cache miss，显式数据库恢复会在加载动态库前拒绝；CUDA/HIP/普通 LLVM 不查询该 ABI。
+
+针对性回归见 `test_ascend_upstream_sync_transpose.py`、现有 GEMM K-loop、tail-copy
+和缓存套件，以及语言 transpose 测试中的 `test_transpose_sync_matches_helper_pipeline`。
+这些修正不扩大下面尚未审计的流水、跨核或动态手动事件契约。
+
 ## 当前支持与拒绝边界
 
 已验证范围：
@@ -100,10 +117,12 @@ Vector/DMA 同步。一般 Developer 自动同步应同时开启 ordinary 与 VS
   自动分配索引。原函数 3 参数、lowered artifact 4 参数且 workspace 索引为 `[3]`
   是合法情况；缺失或不匹配的表不变成 `[]`。旧独立 AutoTunerCache 若未在 key 前准备
   契约，保守跳过该 fresh-sensitive artifact 的磁盘发布，保留当前内存 adapter。
-  engine cache ABI 加固已在 v4 原生构建验收：仅 upstream key
+  初始 engine cache ABI 加固已在 v4 原生构建验收：当时仅 upstream key
   查询 `tl.ascend_sync.EngineCacheABI`，将权威 native 版本纳入 KernelCache、Tuner 和
   CompileArgs key；upstream manifest 升为 schema2 并绑定同一 ABI，直接 database
-  重建也核对。legacy/nonupstream key 不查该 FFI，原 fresh manifest schema1 保留。
+  重建也核对。v18 将该保护扩至实际 Ascend target 的 legacy key 和 schema2 manifest；
+  仅非 Ascend target 不查询该 FFI。省略 target 的底层 helper 保留原 schema1 兼容入口，
+  实际编译缓存和 database 路径必须传递 target。
   每次依赖分析、importer、policy 或物化语义改变都必须 bump native engine 版本；
   包版本或 git HEAD 不覆盖同 HEAD 的工作树重建，原函数源码 hash 也不能替代该版本。
   helper 协议变更同样须 bump。另已审计活动 Cython/ctypes 链：新 adapter 每次实际
@@ -145,7 +164,7 @@ Vector/DMA 同步。一般 Developer 自动同步应同时开启 ordinary 与 VS
 
 `validation/` 仅保留三份文件：
 
-- [测试清单](validation/test-suites.json)：主机、设备和独立 legacy VS suite 的精确文件集合。
+- [测试清单](validation/test-suites.json)：主机、设备和独立 legacy VS suite 的精确 pytest 选择集。
 - [性能原始数据](validation/performance.json)：最新保留的 v8 四用例测量，包含环境、
   样本、同步调用数量和内存信息。
 - [验收摘要](validation/summary.json)：汇总最近记录的 Z3 默认 ON 检查点和独立 legacy VS
@@ -187,12 +206,16 @@ PY
 `host` 包含原主机范围及 PyPI Z3 运行时测试；codegen 矩阵和真实缓存重建需要
 Bisheng/CANN，但不启动 NPU。`device` 需要 A3 NPU，迁移用例显式关闭 Bisheng 自动补同步。
 `legacy_vs` 不启动 NPU，不使用 marker 过滤，也不包含在主机计数内。
-测试文件合并后，`host` 清单为 30 个文件；helper admission 用例并入 tail-copy 套件，
+测试文件合并并增加 transpose 管线回归后，`host` 清单为 31 个文件；helper admission 用例并入 tail-copy 套件，
 有效的旧打包校验并入 PyPI Z3 套件。摘要保留原验收计数，不将文件组织调整当作重新验收。
+
+设备选择集包含 12 个原设备测试文件和一个 transpose 管线回归函数选择器，后者覆盖
+legacy/upstream 两后端的实际 helper 路径。
 
 ON 验证应先确认 `tl.ascend_sync.Z3ProofServiceAvailable` 返回真，避免将大量 skip
 当作迁移覆盖通过。OFF 构建复用同一清单，验证不可用诊断及能力门禁；设备组合中的独立
-wave-seal 原语不依赖证明服务，其余迁移用例应跳过。主机、设备和版本矩阵的计数不能叠加。
+wave-seal 原语和 legacy transpose 不依赖证明服务，其余 upstream 迁移用例应跳过。
+主机、设备和版本矩阵的计数不能叠加。
 
 真实缓存重建可单独执行：
 
@@ -229,5 +252,5 @@ Z3 正反查询、引擎 ABI 及许可证。历史 compiler 安装通过不代�
    更新测试清单与验收摘要，绑定实际受测版本；不用历史或分项计数替代当前验收。
 5. 按 S4 验收声明支持的 target/codegen 与性能回归后，才进入 S5：构建依赖与默认切换、
    两个旧 API alias 的统一语义/幂等测试、删除旧算法及过渡分派。默认目前不变。
-   届时还必须将 native ABI salt 从“显式 upstream 配置”改为“实际生效的 Ascend 后端”，
-   避免省略配置的新默认路径复用旧缓存；不能影响无关 target 的 key。
+   保持 v18 已覆盖实际 Ascend target 的 native ABI 保护；默认行为改变也必须更新 ABI，
+   避免省略配置的新默认路径复用旧缓存，不能影响无关 target 的 key。

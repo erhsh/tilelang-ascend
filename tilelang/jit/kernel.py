@@ -144,7 +144,7 @@ class JITKernel:
         """
         from tilelang.jit.ascend_runtime_contract import validate_cached_auto_gm_manifest
 
-        validate_cached_auto_gm_manifest(func, execution_backend, auto_gm_idx, len(params), auto_gm_manifest, pass_configs)
+        validate_cached_auto_gm_manifest(func, execution_backend, auto_gm_idx, len(params), auto_gm_manifest, pass_configs, target)
         instance = cls(
             func=func,
             out_idx=out_idx,

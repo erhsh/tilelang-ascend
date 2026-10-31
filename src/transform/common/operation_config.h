@@ -567,5 +567,72 @@ inline OperationConfig ResolveOperationConfig(const tvm::tir::CallNode *call) {
   return ResolveOperationConfig(call, op_node->name, 0);
 }
 
+// Shape-independent clients above only inspect operands and memory effects.
+// Synchronization clients must use this context-aware resolver because a
+// semantic intrinsic's default pipeline need not match its selected helper.
+inline OperationConfig ResolveOperationConfigWithPipeline(
+    const tvm::tir::CallNode *call, const std::string &name,
+    size_t argument_offset,
+    const Map<tir::Var, Array<PrimExpr>> &logic_buffer_shapes,
+    bool pto_transpose) {
+  OperationConfig config = ResolveOperationConfig(call, name, argument_offset);
+  if (name == "tl.ascend_transpose") {
+    // The execution resource is AIV even when the helper falls back to scalar
+    // GetValue/SetValue. PIPE_S alone does not identify an execution resource.
+    config.copy_resource_scope = 1;
+    if (pto_transpose) {
+      // PTO lowers this intrinsic to TTRANS, not the AscendC helper below.
+      return config;
+    }
+    ICHECK_EQ(argument_offset, 0U)
+        << "Transpose call_extern operand ABI is not audited";
+    ICHECK_EQ(call->args.size(), 2U) << "Malformed transpose operand arity";
+    const auto *source = call->args[1].as<tir::CallNode>();
+    ICHECK(source != nullptr &&
+           source->op.same_as(tir::builtin::tvm_access_ptr()) &&
+           source->args.size() == 5U)
+        << "Malformed transpose source access_ptr";
+    const auto *data = source->args[1].as<tir::VarNode>();
+    ICHECK(data != nullptr) << "Malformed transpose source storage";
+    const auto shape = logic_buffer_shapes.Get(GetRef<tir::Var>(data));
+    ICHECK(shape.defined() && shape.value().size() >= 2U)
+        << "Transpose synchronization requires its logical source shape";
+    const auto *rows = shape.value()[0].as<IntImmNode>();
+    const auto *columns = shape.value()[1].as<IntImmNode>();
+    const DataType dtype = source->args[0].dtype();
+    const bool integer = (dtype.is_int() || dtype.is_uint()) &&
+                         (dtype.bits() == 8 || dtype.bits() == 16 ||
+                          dtype.bits() == 32 || dtype.bits() == 64);
+    // The emitter spells other floating types as float, losing their width.
+    // Do not infer the helper branch from a dtype it cannot preserve.
+    ICHECK(dtype.is_scalar() &&
+           (integer || dtype == DataType::Float(16) ||
+            dtype == DataType::Float(32) || dtype == DataType::BFloat(16)))
+        << "Transpose synchronization requires an audited element type";
+    ICHECK(rows != nullptr && columns != nullptr && rows->value > 0 &&
+           columns->value > 0)
+        << "Transpose synchronization requires a static positive helper shape";
+    const int bytes = dtype.bytes();
+    // Keep this predicate identical to tl::ascend::transpose in common.h.
+    // B32 dimensions such as 8 and 24 are DMA-aligned but use the scalar path.
+    const bool vector_helper = (bytes == 2 || bytes == 4) &&
+                               !dtype.is_bfloat16() && rows->value % 16 == 0 &&
+                               columns->value % 16 == 0;
+    config.default_pipeline = vector_helper ? "PIPE_V" : "PIPE_S";
+    return config;
+  }
+  return config;
+}
+
+inline OperationConfig ResolveOperationConfigWithPipeline(
+    const tvm::tir::CallNode *call,
+    const Map<tir::Var, Array<PrimExpr>> &logic_buffer_shapes,
+    bool pto_transpose) {
+  const auto *op_node = call->op.as<tvm::OpNode>();
+  ICHECK(op_node);
+  return ResolveOperationConfigWithPipeline(call, op_node->name, 0,
+                                            logic_buffer_shapes, pto_transpose);
+}
+
 } // namespace tl
 } // namespace tvm

@@ -24,10 +24,12 @@
 #include <utility>
 
 #include "../../op/builtin.h"
+#include "../common/attr.h"
 #include "../common/operation_config.h"
 #include "../common/pipeline_ring_provenance.h"
 #include "legacy_composite.h"
 #include "legacy_cross_core.h"
+#include "legacy_helper_type.h"
 #include "legacy_persistent_pipeline.h"
 #include "legacy_pipeline_partition.h"
 #include "legacy_snapshot.h"
@@ -328,9 +330,13 @@ public:
   LeafEffects(TaskNode *task, const PhysicalStorageResolver *storage,
               const PhysicalRingClockMap &clocks,
               const LegacyCompositePlan &composites,
-              LegacyTailCopyPlan *tail_copies)
+              LegacyTailCopyPlan *tail_copies,
+              const Map<Var, Array<PrimExpr>> &logic_buffer_shapes,
+              bool pto_transpose)
       : task_(task), storage_(storage), clocks_(clocks),
-        composites_(composites), tail_copies_(tail_copies) {}
+        composites_(composites), tail_copies_(tail_copies),
+        logic_buffer_shapes_(logic_buffer_shapes),
+        pto_transpose_(pto_transpose) {}
 
   void Analyze(const Stmt &statement) {
     task_->SetPipeMask(PipeMask(ResourcePipe::kScalar));
@@ -402,7 +408,8 @@ private:
           {"uint8_t", DataType::UInt(8)},       {"int16_t", DataType::Int(16)},
           {"uint16_t", DataType::UInt(16)},     {"int32_t", DataType::Int(32)},
           {"uint32_t", DataType::UInt(32)}};
-      const auto element = element_types.find(shape.element_type);
+      const auto element =
+          element_types.find(CanonicalHelperElementType(shape.element_type));
       ICHECK(element != element_types.end() && element->second == dtype)
           << reject << "; template dtype disagrees with the physical ring";
       const int64_t bytes = dtype.bytes();
@@ -525,7 +532,8 @@ private:
           << name;
       return false;
     }
-    OperationConfig config = ResolveOperationConfig(call, name, offset);
+    OperationConfig config = ResolveOperationConfigWithPipeline(
+        call, name, offset, logic_buffer_shapes_, pto_transpose_);
     std::optional<LegacyTailCopyEffect> tail_copy;
     if (helper == "copy_gm_to_ub") {
       tail_copy =
@@ -629,6 +637,8 @@ private:
   const PhysicalRingClockMap &clocks_;
   const LegacyCompositePlan &composites_;
   LegacyTailCopyPlan *tail_copies_;
+  const Map<Var, Array<PrimExpr>> &logic_buffer_shapes_;
+  bool pto_transpose_;
   CoreMask inferred_resource_{kCoreUnassigned};
 };
 
@@ -643,7 +653,11 @@ public:
       : result_(result), target_(target), platform_(platform),
         ordinary_sync_(ordinary_sync), composites_(composites),
         tail_copies_(tail_copies), pipeline_case_(pipeline_case),
-        persistent_(persistent) {}
+        persistent_(persistent),
+        logic_buffer_shapes_(
+            result->original_function
+                ->GetAttr<Map<Var, Array<PrimExpr>>>(kLogicBufferShapes)
+                .value_or(Map<Var, Array<PrimExpr>>())) {}
 
   void Run() {
     CheckVersions();
@@ -916,7 +930,9 @@ private:
         task->outer_ctx = context;
         task->SetGuards(CloneGuards(guards));
         LeafEffects effects(task.get(), result_->physical_storage.get(), clocks,
-                            composites_, tail_copies_);
+                            composites_, tail_copies_, logic_buffer_shapes_,
+                            target_->GetAttr<String>("model").value_or("") ==
+                                "pto");
         effects.Analyze(task->stmt);
         task->SetWriteVars({binding->var});
         task_owners_[task.get()] =
@@ -1093,7 +1109,9 @@ private:
     task->outer_ctx = std::move(context);
     task->SetGuards(CloneGuards(guards));
     LeafEffects effects(task.get(), result_->physical_storage.get(), clocks,
-                        composites_, tail_copies_);
+                        composites_, tail_copies_, logic_buffer_shapes_,
+                        target_->GetAttr<String>("model").value_or("") ==
+                            "pto");
     effects.Analyze(statement);
     task_owners_[task.get()] =
         SelectResource(explicit_resource, effects.InferredResource());
@@ -1110,6 +1128,7 @@ private:
   LegacyTailCopyPlan *tail_copies_;
   const LegacyPipelineCase *pipeline_case_;
   const LegacyPersistentPipelineImport *persistent_;
+  Map<Var, Array<PrimExpr>> logic_buffer_shapes_;
   std::unordered_map<TaskNode *, CoreMask> task_owners_;
   CoreMask selected_resources_{kCoreUnassigned};
   size_t occurrence_{0};

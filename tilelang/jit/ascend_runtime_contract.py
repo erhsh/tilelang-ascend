@@ -22,26 +22,43 @@ AUTO_GM_FRESH_CONTRACT_VERSION = "cython-auto-gm-v1"
 AUTO_GM_MANIFEST_PATH = "ascend_auto_gm_contract.json"
 
 
-def sync_engine_cache_abi(pass_configs: dict[str, Any] | None = None) -> str | None:
-    """Return the loaded engine's stable ABI only for the upstream backend.
+def sync_engine_cache_abi(
+    pass_configs: dict[str, Any] | None = None,
+    target: str | Target | None = None,
+) -> str | None:
+    """Return the loaded synchronization ABI for an actual Ascend target.
 
     The native version is authoritative: package/HEAD versions do not change
     after an uncommitted compiler rebuild. Every semantic engine, importer or
-    policy change must bump that version before reusing compilation caches.
+    shared operation-policy change must bump it before reusing cached code.
+    Callers without a target retain the historical explicit-upstream behavior;
+    all compiler cache and database paths provide their actual target.
     """
-    if not pass_configs or pass_configs.get("tl.ascend_sync_backend") != "upstream":
+    if target is None:
+        enabled = bool(pass_configs and pass_configs.get("tl.ascend_sync_backend") == "upstream")
+    elif isinstance(target, str):
+        # In this compiler, auto selects AscendC. Host-side Target objects use
+        # kind=llvm with model=ascendc/pto, so do not gate on kind alone.
+        enabled = target in ("auto", "ascendc", "pto")
+        if not enabled and "-model" in target:
+            from tvm.target import Target
+
+            enabled = getattr(Target(target), "model", None) in ("auto", "ascendc", "pto")
+    else:
+        enabled = getattr(target, "model", None) in ("auto", "ascendc", "pto")
+    if not enabled:
         return None
     from tilelang import tvm
 
     query = tvm.get_global_func("tl.ascend_sync.EngineCacheABI", allow_missing=True)
     if query is None:
         raise RuntimeError(
-            "The upstream Ascend synchronization cache ABI is unavailable; "
+            "The Ascend synchronization cache ABI is unavailable; "
             "rebuild the native TileLang libraries before compiling or loading a kernel"
         )
     version = query()
     if not isinstance(version, str) or not version:
-        raise RuntimeError("Invalid upstream Ascend synchronization cache ABI; rebuild TileLang")
+        raise RuntimeError("Invalid Ascend synchronization cache ABI; rebuild TileLang")
     return version
 
 
@@ -139,6 +156,7 @@ def build_cached_auto_gm_manifest(
     auto_gm_idx: Any,
     param_count: int,
     pass_configs: dict[str, Any] | None = None,
+    target: str | Target | None = None,
 ) -> dict[str, Any] | None:
     """Bind workspace metadata to the marked source and lowered signature.
 
@@ -146,7 +164,7 @@ def build_cached_auto_gm_manifest(
     prevents metadata from an incomplete or different cached compilation from
     silently changing the allocator contract during reconstruction.
     """
-    abi = sync_engine_cache_abi(pass_configs)
+    abi = sync_engine_cache_abi(pass_configs, target)
     fresh = requires_fresh_auto_gm(func)
     if not fresh and abi is None:
         return None
@@ -171,6 +189,7 @@ def validate_cached_auto_gm_manifest(
     param_count: int,
     manifest: Any,
     pass_configs: dict[str, Any] | None = None,
+    target: str | Target | None = None,
 ) -> None:
     """Require the complete persisted allocation promise for marked artifacts.
 
@@ -179,7 +198,7 @@ def validate_cached_auto_gm_manifest(
     Every index table is validated before equality, since Python considers
     boolean values equal to some integer indices.
     """
-    abi = sync_engine_cache_abi(pass_configs)
+    abi = sync_engine_cache_abi(pass_configs, target)
     fresh = requires_fresh_auto_gm(func)
     if not fresh and abi is None:
         return

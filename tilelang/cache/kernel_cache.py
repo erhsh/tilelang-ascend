@@ -116,10 +116,10 @@ class KernelCache:
             "pass_configs": pass_configs,
             "compile_flags": compile_flags,
         }
-        if pass_configs and pass_configs.get("tl.ascend_sync_backend") == "upstream":
-            from tilelang.jit.ascend_runtime_contract import sync_engine_cache_abi
+        from tilelang.jit.ascend_runtime_contract import sync_engine_cache_abi
 
-            key_data["ascend_sync_engine_abi"] = sync_engine_cache_abi(pass_configs)
+        if abi := sync_engine_cache_abi(pass_configs, target):
+            key_data["ascend_sync_engine_abi"] = abi
         key_string = json.dumps(key_data, sort_keys=True)  # Sort keys to ensure consistency
         return sha256(key_string.encode()).hexdigest()  # Use SHA256 to generate hash key
 
@@ -348,8 +348,11 @@ class KernelCache:
 
         attributes = getattr(func, "attrs", None)
         contract_configs = getattr(kernel, "pass_configs", None)
+        from tilelang.jit.ascend_runtime_contract import sync_engine_cache_abi
+
+        contract_target = getattr(kernel, "target", None)
         if (attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes) or (
-            contract_configs and contract_configs.get("tl.ascend_sync_backend") == "upstream"
+            sync_engine_cache_abi(contract_configs, contract_target) is not None
         ):
             from tilelang.jit.ascend_runtime_contract import (
                 AUTO_GM_MANIFEST_PATH,
@@ -363,6 +366,7 @@ class KernelCache:
                     kernel.auto_gm_idx,
                     len(kernel.params),
                     contract_configs,
+                    contract_target,
                 )
                 with open(os.path.join(cache_path, AUTO_GM_MANIFEST_PATH), "w") as f:
                     json.dump(manifest, f)
@@ -440,8 +444,10 @@ class KernelCache:
 
         runtime_contract_kwargs = {}
         attributes = getattr(func, "attrs", None)
+        from tilelang.jit.ascend_runtime_contract import sync_engine_cache_abi
+
         if (attributes is not None and "tl.ascend_auto_gm_fresh_contract" in attributes) or (
-            pass_configs and pass_configs.get("tl.ascend_sync_backend") == "upstream"
+            sync_engine_cache_abi(pass_configs, target) is not None
         ):
             from tilelang.jit.ascend_runtime_contract import (
                 AUTO_GM_MANIFEST_PATH,
@@ -458,6 +464,7 @@ class KernelCache:
                     len(kernel_params) if kernel_params is not None else 0,
                     manifest,
                     pass_configs,
+                    target,
                 )
                 runtime_contract_kwargs["auto_gm_manifest"] = manifest
             except (OSError, ValueError) as error:

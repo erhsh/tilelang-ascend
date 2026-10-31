@@ -21,6 +21,7 @@
 
 #include "../common/attr.h"
 #include "../common/pipeline_ring_provenance.h"
+#include "legacy_helper_type.h"
 #include "upstream/constraints.h"
 
 namespace tvm::tl::ascend_sync {
@@ -88,7 +89,8 @@ int64_t PositiveInteger(const std::string &text) {
   return static_cast<int64_t>(value);
 }
 
-DataType ElementType(const std::string &token) {
+DataType ElementType(const std::string &spelling) {
+  const std::string token = CanonicalHelperElementType(spelling);
   if (token == "half")
     return DataType::Float(16);
   if (token == "bfloat16_t")
@@ -256,8 +258,30 @@ void ValidateAllocationFootprints(LegacyCompositeOperation &operation,
   }
 }
 
-// Do not flatten or rewrite executable control. This walker only audits the
-// three calculation leaves admitted in the first ordinary K-loop contract.
+bool IsKLoopBarrier(const CallNode *call) {
+  const bool manual = call->op.same_as(Op::Get("tl.ascend_pipe_barrier"));
+  const bool automatic = call->op.same_as(Op::Get("tl.ascend_auto_barrier"));
+  if (!manual && !automatic)
+    return false;
+  const char *diagnostic =
+      "Composite gemm_v0 external For barrier requires one literal Cube "
+      "pipeline";
+  ICHECK_EQ(call->args.size(), 1U) << diagnostic;
+  const auto *literal = call->args[0].as<StringImmNode>();
+  ICHECK(literal != nullptr) << diagnostic;
+  std::string pipe = literal->value;
+  if (automatic) {
+    ICHECK(pipe.rfind("PIPE_", 0) == 0) << diagnostic;
+    pipe.erase(0, 5);
+  }
+  static const std::unordered_set<std::string> cube_pipes{
+      "ALL", "MTE1", "MTE2", "MTE3", "M", "FIX", "S"};
+  ICHECK(cube_pipes.count(pipe)) << diagnostic;
+  return true;
+}
+
+// Do not flatten or rewrite executable control. Existing, validated barriers
+// remain in place, separately from the three calculation leaves we audit.
 void CollectKLoopLeaves(const Stmt &statement, int resource,
                         std::vector<Call> *leaves) {
   const char *diagnostic =
@@ -283,6 +307,8 @@ void CollectKLoopLeaves(const Stmt &statement, int resource,
     ICHECK(resource == -1 || resource == 0) << diagnostic;
     const auto *call = evaluation->value.as<CallNode>();
     ICHECK(call != nullptr) << diagnostic;
+    if (IsKLoopBarrier(call))
+      return;
     leaves->push_back(GetRef<Call>(call));
   } else {
     LOG(FATAL) << diagnostic;

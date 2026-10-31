@@ -50,3 +50,24 @@ def test_dynamic_full_and_tail_copy_preserves_vector_and_mte3_order(dynamic_tail
             expected[:, 0, :] = -7
             expected[:, 1, :count] = source
             torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)
+
+
+def test_real_int32_tail_copy_preserves_values_and_zero_padding():
+    # AscendCopy::Lower emits copy_gm_to_ub<int, ...> for this DSL dtype.
+    # Its template alias must retain the audited int32 Duplicate contract.
+    @T.prim_func
+    def main(A: T.Tensor((33,), "int32"), O: T.Tensor((2, 64), "int32")):
+        with T.Kernel(1, is_npu=True) as (_cid, vid):
+            values = T.alloc_ub((64,), "int32")
+            with T.Scope("V"):
+                T.copy(A[0:64], values)
+                T.copy(values, O[vid, :])
+
+    kernel = _compile_device_kernel(main.with_attr("tir.noalias", True))
+    source = torch.arange(33, dtype=torch.int32) - 17
+    expected = torch.zeros((2, 64), dtype=torch.int32)
+    expected[:, :33] = source
+    for _invocation in range(3):
+        output = torch.full((2, 64), -999, dtype=torch.int32, device="npu")
+        kernel(source.npu(), output)
+        torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)

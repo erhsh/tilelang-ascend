@@ -10,10 +10,12 @@ synchronization output is used.
 
 from collections.abc import Callable
 from math import prod
+from unittest.mock import patch
 
 import pytest
 
 import tilelang
+from tilelang import language as T
 from tilelang import tvm
 
 tir = tvm.tir
@@ -212,6 +214,7 @@ def test_dynamic_full_or_tail_keeps_one_original_call_and_an_mte2_acquire() -> N
         ("int16", "int16_t, 64"),
         ("uint16", "uint16_t, 64"),
         ("int32", "int32_t, 64"),
+        ("int32", "int, 64"),
         ("uint32", "uint32_t, 64"),
     ],
 )
@@ -220,6 +223,37 @@ def test_duplicate_supported_types_have_the_same_completion_contract(dtype: str,
     result = _run(_function(buffers, [_copy(buffers, template=template), _store(buffers)]))
     assert len(_helper_calls(result)) == 1
     assert any(event.args[0].value == "MTE2_MTE3" for event in _events(result))
+
+
+def test_real_int32_copy_lowering_uses_the_upstream_tail_contract() -> None:
+    # Exercise AscendCopy::Lower's actual `int` template spelling, rather than
+    # only constructing an already-lowered `int32_t` helper by hand.
+    @T.prim_func
+    def main(A: T.Tensor((33,), "int32"), O: T.Tensor((2, 64), "int32")):
+        with T.Kernel(1, is_npu=True) as (_cid, vid):
+            values = T.alloc_ub((64,), "int32")
+            with T.Scope("V"):
+                T.copy(A[0:64], values)
+                T.copy(values, O[vid, :])
+
+    configs = {
+        "tl.ascend_sync_backend": "upstream",
+        "tl.ascend_auto_sync": True,
+        "tl.ascend_auto_sync_vs": True,
+        "tl.ascend_memory_planning": False,
+    }
+    # Match existing host lowering fixtures without requiring a device.
+    with (
+        patch("tilelang.utils.target.check_npu_availability", return_value=True),
+        tvm.transform.PassContext(config=configs),
+    ):
+        artifact = tilelang.lower(main, target="ascendc", platform="A3")
+    function = artifact.device_mod.functions_items()[0][1]
+    assert function.attrs.get("tl.ascend_sync_proof") is not None
+    helpers = _helper_calls(function)
+    assert len(helpers) == 1
+    assert "<int," in helpers[0].args[0].value
+    assert "MTE2_MTE3" in {event.args[0].value for event in _events(function)}
 
 
 def test_nominal_pointer_extent_cannot_hide_the_strided_gm_read() -> None:
@@ -309,6 +343,7 @@ def test_symbolic_masks_need_a_proof_of_the_complete_valid_range() -> None:
         (lambda: {"destination_offset": 1}, "misaligned or exceeds"),
         (lambda: {"template": "float, 63"}, "32-byte-aligned row pitch"),
         (lambda: {"template": "half, 64"}, "element types disagree"),
+        (lambda: {"template": "int, 64"}, "element types disagree"),
         (lambda: {"source_mask": "rw"}, "exact source-read/destination-write"),
         (lambda: {"destination_mask": "rw"}, "exact source-read/destination-write"),
     ],

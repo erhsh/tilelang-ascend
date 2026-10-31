@@ -26,9 +26,11 @@ from test_ascend_upstream_sync_cross_core_device import (
 )
 
 
-def test_real_cython_store_disk_hit_and_damaged_metadata_miss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    if not tvm.get_global_func("tl.ascend_sync.Z3ProofServiceAvailable")():
+@pytest.mark.parametrize("backend", ["upstream", "legacy"])
+def test_real_cython_store_disk_hit_and_damaged_metadata_miss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str) -> None:
+    if backend == "upstream" and not tvm.get_global_func("tl.ascend_sync.Z3ProofServiceAvailable")():
         pytest.skip("requires USE_ASCEND_SYNC_Z3=ON and Bisheng compilation")
+    configs = {**_PASS_CONFIGS, "tl.ascend_sync_backend": backend}
     cache = kernel_cache._kernel_cache_instance
     previous_directory = cache.get_cache_dir()
     previous_memory = cache._memory_cache
@@ -47,7 +49,7 @@ def test_real_cython_store_disk_hit_and_damaged_metadata_miss(tmp_path: Path, mo
                 target="ascendc",
                 platform="A3",
                 execution_backend="cython",
-                pass_configs=_PASS_CONFIGS,
+                pass_configs=configs,
                 compile_flags=["--cce-auto-sync=off"],
             )
 
@@ -63,7 +65,7 @@ def test_real_cython_store_disk_hit_and_damaged_metadata_miss(tmp_path: Path, mo
         manifest_path = metadata.parent / AUTO_GM_MANIFEST_PATH
         manifest = json.loads(manifest_path.read_text())
         assert manifest["schema"] == 2
-        assert manifest["sync_engine_abi"] == sync_engine_cache_abi(_PASS_CONFIGS)
+        assert manifest["sync_engine_abi"] == sync_engine_cache_abi(configs, "ascendc")
         assert manifest["param_count"] == 4
         assert manifest["auto_gm_indices"] == [3]
 

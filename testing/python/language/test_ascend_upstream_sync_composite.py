@@ -135,6 +135,30 @@ def test_flat_accumulating_gemm_preserves_c_read_write_mask(flat_gemms):
     assert any(event == "M_MTE1" and event_id not in (0, 1) for _, event, event_id in _events(result))
 
 
+def test_real_int8_gemm_accepts_the_emitted_int_accumulator_alias():
+    if not tvm.get_global_func("tl.ascend_sync.Z3ProofServiceAvailable")():
+        pytest.skip("requires USE_ASCEND_SYNC_Z3=ON")
+    from test_tilelang_ascend_language_gemm_v0_n_tiling import gemm_nt
+
+    original = _pre_sync(gemm_nt(32, 32, 64, "int8", "int32"))[0]
+    call = _gemms(original)[0]
+    assert call.args[0].value.startswith("gemm_v0<int8_t, int,")
+    result = _run(original)
+    assert len(_gemms(result)) == 1
+    tvm.ir.assert_structural_equal(_gemms(result)[0], call)
+    assert any(event == "MTE2_MTE1" for _, event, _ in _events(result))
+    assert any(event == "M_FIX" for _, event, _ in _events(result))
+
+
+def test_int_accumulator_alias_still_requires_matching_pointer_dtype(flat_gemms):
+    original = _rewrite_gemm(
+        flat_gemms[64],
+        lambda call: tir.Evaluate(_changed_call(call, template="gemm_v0<int8_t, int, 16, 16, 64, false, false, 64>")),
+    )
+    with pytest.raises(tvm.error.TVMError, match="pointer dtype disagrees"):
+        _run(original)
+
+
 @pytest.mark.parametrize(
     "event,event_id",
     [
