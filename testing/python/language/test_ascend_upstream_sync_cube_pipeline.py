@@ -562,11 +562,23 @@ def test_static_cube_sip_rejects_inconsistent_ring_facts(cube_pipelines, change:
         _run(malformed, target_kind="llvm")
 
 
-@pytest.mark.parametrize("platform,model", [("A2", "ascendc"), ("A5", "ascendc"), ("A3", "pto")])
-def test_static_cube_sip_requires_its_a3_ascendc_target(cube_pipelines, platform, model) -> None:
+@pytest.mark.parametrize("platform,model", [("A2", "ascendc"), ("A5", "ascendc"), ("A2", "pto"), ("A5", "pto")])
+def test_static_cube_sip_requires_its_a3_target(cube_pipelines, platform, model) -> None:
     before, _ = cube_pipelines[5, False]
     with pytest.raises(tvm.error.TVMError, match="(?i)(AscendC|A3|composite.*target)"):
         _run(before, platform=platform, model=model, target_kind="llvm")
+
+
+def test_static_cube_sip_accepts_certified_a3_pto_target(cube_pipelines) -> None:
+    before, _ = cube_pipelines[5, False]
+    after = _run(before, model="pto", target_kind="llvm")
+    assert after.attrs.get("tl.ascend_sync_proof") is not None
+    _assert_maps_and_clocks_preserved(before, after)
+    original_gemms, synchronized_gemms = _gemms(before), _gemms(after)
+    assert original_gemms and len(original_gemms) == len(synchronized_gemms)
+    for original, synchronized in zip(original_gemms, synchronized_gemms):
+        tvm.ir.assert_structural_equal(original, synchronized)
+    tvm.ir.assert_structural_equal(after, _run(after, model="pto", target_kind="llvm"))
 
 
 @pytest.mark.parametrize("change", ["non_cube", "opaque", "user_l0ab"])

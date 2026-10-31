@@ -235,6 +235,11 @@ class KernelCacheRecoveryMixin:
 class TestKernelCacheRecovery(KernelCacheRecoveryMixin, unittest.TestCase):
     def setUp(self):
         super().setUp()
+        # Cache recovery uses mock functions; allocator contract semantics are
+        # covered with the real helper in test_ascend_runtime_contract_cache.py.
+        contract_module = "tilelang.jit.ascend_runtime_contract"
+        self.saved[contract_module] = sys.modules.get(contract_module)
+        sys.modules[contract_module] = _make_module(contract_module, prepare_auto_gm_contract=lambda func, *_args: func)
         self.kernel_cache = _load_standalone(KERNEL_CACHE_PATH, "kernel_cache_under_test")
         self.kernel_cache.KernelCache._instance = None
         self.cache = self.kernel_cache.KernelCache(cache_dir=self.tmp.name)

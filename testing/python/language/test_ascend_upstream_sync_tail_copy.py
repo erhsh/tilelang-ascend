@@ -9,6 +9,7 @@ synchronization output is used.
 """
 
 from collections.abc import Callable
+from math import prod
 
 import pytest
 
@@ -93,7 +94,7 @@ def _function(
         body = tir.LetStmt(*binding, body)
     body = tir.AttrStmt(tir.IntImm("int32", 0), "resource_scope", 1, body)
     local = buffers["local"]
-    elements = int(local.shape[0])
+    elements = prod(int(extent) for extent in local.shape)
     allocation_bytes = elements * (tvm.DataType(local.dtype).bits // 8)
     body = tir.Allocate(local.data, local.dtype, [elements], tir.const(True, "bool"), body)
     parameters = [buffer for name, buffer in buffers.items() if name != "local"]
@@ -331,11 +332,32 @@ def test_types_without_the_duplicate_padding_path_are_not_misclassified(dtype: s
         _run(_function(buffers, [_copy(buffers, template=template)]))
 
 
-@pytest.mark.parametrize("model,platform", [("pto", "A3"), ("ascendc", "A5")])
+@pytest.mark.parametrize("model,platform", [("pto", "A2"), ("pto", "A5"), ("ascendc", "A5")])
 def test_tail_support_is_not_inferred_for_other_codegen_targets(model: str, platform: str) -> None:
     buffers = _buffers()
     with pytest.raises(tvm.error.TVMError, match="requires AscendC on A2/A3"):
         _run(_function(buffers, [_copy(buffers)]), model=model, platform=platform)
+
+
+def test_pto_tail_copy_requires_authoritative_shape_descriptors() -> None:
+    buffers = _buffers()
+    with pytest.raises(tvm.error.TVMError, match="PTO tail-copy profile: requires final GM/UB physical shape metadata"):
+        _run(_function(buffers, [_copy(buffers)]), model="pto")
+
+
+def test_pto_tail_copy_accepts_complete_a3_descriptors() -> None:
+    buffers = _buffers()
+    buffers["source"] = tir.decl_buffer((4, 64), "float32", name="source")
+    buffers["local"] = tir.decl_buffer((1, 64), "float32", name="local", scope="shared.ub")
+    original = _function(buffers, [_copy(buffers), _store(buffers)]).with_attr(
+        "logic_buffer_shapes",
+        {buffers["source"].data: [4, 64], buffers["local"].data: [1, 64, 1, 64]},
+    )
+    result = _run(original, model="pto")
+    assert result.attrs.get("tl.ascend_sync_proof") is not None
+    assert "MTE2_MTE3" in {event.args[0].value for event in _events(result)}
+    tvm.ir.assert_structural_equal(_helper_calls(original)[0], _helper_calls(result)[0])
+    tvm.ir.assert_structural_equal(result, _run(result, model="pto"))
 
 
 def test_proven_full_masks_keep_the_existing_pto_path() -> None:

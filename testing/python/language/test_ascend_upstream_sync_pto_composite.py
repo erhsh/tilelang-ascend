@@ -1,11 +1,13 @@
 # Copyright (c) Tile-AI Organization.
 # Licensed under the MIT License.
-"""CPU integration tests for the narrow A3 PTO flat gemm_v0 profile.
+"""CPU integration tests for the A3 PTO flat gemm_v0 contract.
 
 These tests transform real lowered GEMM IR without compiling device source or
 executing a kernel. Expected hidden event IDs come from the audited PTO helper
 ABI; the legacy synchronization pass is not used as an oracle.
 """
+
+from itertools import permutations
 
 import pytest
 
@@ -24,7 +26,7 @@ from test_tilelang_ascend_language_gemm_v0_n_tiling import gemm_nt
 
 tir = tvm.tir
 _HIDDEN_DIRECTIONS = ("MTE2_MTE1", "FIX_M", "M_MTE1", "MTE1_M", "MTE1_MTE2", "M_FIX")
-_PROFILE = "PTO flat gemm_v0 profile"
+_PROFILE = "PTO flat gemm_v0 contract"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -49,11 +51,31 @@ def _operation(call: tir.Call) -> str:
 
 def _assert_hidden_ids_are_reserved(function: tir.PrimFunc) -> None:
     generated = _events(function)
-    assert generated
+    assert function.attrs.get("tl.ascend_sync_proof") is not None
     for _, event, event_id in generated:
         assert 0 <= event_id < 8
         if event in _HIDDEN_DIRECTIONS:
             assert event_id != 1, f"generated event collided with the PTO helper: {event}#1"
+
+
+def _assert_helper_protocol(function: tir.PrimFunc, k: int) -> None:
+    from test_ascend_upstream_sync_pto_composite_protocol import _execute, _program
+
+    def without_manual_pair(statement):
+        if (
+            isinstance(statement, tir.Evaluate)
+            and isinstance(statement.value, tir.Call)
+            and _operation(statement.value) in ("tl.ascend_set_flag", "tl.ascend_wait_flag")
+        ):
+            return tir.Evaluate(tir.IntImm("int32", 0))
+        return None
+
+    # Manual pairs are checked separately. Removing them verifies that the
+    # helper establishes completion without borrowing their event credits.
+    body = tir.stmt_functor.ir_transform(function.body, without_manual_pair, None, ["tir.Evaluate"])
+    queues = _program(function.with_body(body), k)
+    for priority in permutations(range(len(queues))):
+        _execute(queues, priority)
 
 
 def _assert_original_computation_and_maps(before: tir.PrimFunc, after: tir.PrimFunc) -> None:
@@ -89,9 +111,9 @@ def test_pto_flat_gemm_preserves_one_calculation_and_routes_acquire_completion(p
     after = _run(before, model="pto", target_kind=target_kind)
     _assert_original_computation_and_maps(before, after)
     _assert_hidden_ids_are_reserved(after)
-    directions = {event for _, event, _ in _events(after)}
-    assert "MTE2_MTE1" in directions, "L1 data must reach the helper's MTE1 acquire"
-    assert "M_FIX" in directions, "FIX must acquire the helper's M completion"
+    # The helper owns its MTE2 acquire and FIX completion handshakes. Verify
+    # the actual asynchronous protocol instead of requiring redundant flags.
+    _assert_helper_protocol(after, k)
     tvm.ir.assert_structural_equal(after, _run(after, model="pto", target_kind=target_kind))
 
 
@@ -123,13 +145,14 @@ def test_nonconflicting_forward_manual_pair_remains_reserved(pto_flat_gemms, pos
     _assert_original_computation_and_maps(original, after)
     _assert_hidden_ids_are_reserved(after)
     ids = [event_id for _, event, event_id in _events(after) if event == "MTE2_MTE1"]
-    assert ids and all(event_id not in (1, 7) for event_id in ids)
+    assert all(event_id not in (1, 7) for event_id in ids)
     manual = [call for call in _nodes(after.body, tir.Call) if _operation(call) in ("tl.ascend_set_flag", "tl.ascend_wait_flag")]
     assert len(manual) == 2
     assert {_operation(call) for call in manual} == {"tl.ascend_set_flag", "tl.ascend_wait_flag"}
     for call in manual:
         assert [argument.value for argument in call.args[:2]] == ["MTE2", "MTE1"]
         assert int(call.args[2]) == 7
+    _assert_helper_protocol(after, 128)
 
 
 def _with_parameter(function: tir.PrimFunc, parameter: tir.Var) -> tir.PrimFunc:
@@ -142,12 +165,43 @@ def _with_parameter(function: tir.PrimFunc, parameter: tir.Var) -> tir.PrimFunc:
     )
 
 
-@pytest.mark.parametrize("change", ["k64", "m32", "kl0_64", "transpose_a", "transpose_b", "clear_false", "clear_dynamic"])
-def test_pto_flat_profile_rejects_unvalidated_shapes_and_helper_modes(pto_flat_gemms, change) -> None:
-    original = pto_flat_gemms[128]
+@pytest.mark.parametrize("change", ["k64", "m32", "kl0_64"])
+def test_pto_flat_contract_accepts_dimension_derived_shapes(pto_flat_gemms, change) -> None:
     if change in ("k64", "m32"):
         m, k = (16, 64) if change == "k64" else (32, 128)
         original = _pre_sync(gemm_nt(m, 16, k, "float16", "float"))[0]
+    else:
+        original = _rewrite_gemm(
+            pto_flat_gemms[128],
+            lambda call: tir.Evaluate(_changed_call(call, template="gemm_v0<half, float, 16, 16, 128, false, false, 64>")),
+        )
+    after = _run(original, model="pto", target_kind="llvm")
+    _assert_original_computation_and_maps(original, after)
+    _assert_hidden_ids_are_reserved(after)
+    tvm.ir.assert_structural_equal(after, _run(after, model="pto", target_kind="llvm"))
+
+
+@pytest.mark.parametrize(
+    "change,diagnostic",
+    [
+        ("m17", "Composite gemm_v0 allocation does not cover its padded physical footprint"),
+        ("n17", "Composite gemm_v0 allocation does not cover its padded physical footprint"),
+        ("k17", _PROFILE + ": requires static 16-aligned"),
+        ("kl0_17", "Composite gemm_v0 kL0Size must be 16-aligned and at most 4095"),
+        ("kl0_4096", "Composite gemm_v0 kL0Size must be 16-aligned and at most 4095"),
+        ("transpose_a", _PROFILE + ": requires FP16-to-FP32 and no transpose"),
+        ("transpose_b", _PROFILE + ": requires FP16-to-FP32 and no transpose"),
+        ("clear_false", _PROFILE + ": operand disagrees with its semantic descriptor"),
+        ("clear_dynamic", _PROFILE + ": operand disagrees with its semantic descriptor"),
+    ],
+)
+def test_pto_flat_profile_rejects_unvalidated_shapes_and_helper_modes(pto_flat_gemms, change, diagnostic) -> None:
+    original = pto_flat_gemms[128]
+    # Padded M/N footprints and kL0Size are rejected by common GEMM ABI
+    # checks before the PTO descriptor audit, so assert their own diagnostics.
+    if change in ("m17", "n17", "k17"):
+        m, n, k = {"m17": (17, 16, 128), "n17": (16, 17, 128), "k17": (16, 16, 17)}[change]
+        original = _pre_sync(gemm_nt(m, n, k, "float16", "float"))[0]
     elif change == "clear_false":
         original = _rewrite_gemm(original, lambda call: tir.Evaluate(_changed_call(call, clear=tir.const(False, "bool"))))
     elif change == "clear_dynamic":
@@ -158,10 +212,10 @@ def test_pto_flat_profile_rejects_unvalidated_shapes_and_helper_modes(pto_flat_g
         )
     else:
         transpose_a, transpose_b = change == "transpose_a", change == "transpose_b"
-        k_l0 = 64 if change == "kl0_64" else 128
+        k_l0 = {"kl0_17": 17, "kl0_4096": 4096}.get(change, 128)
         template = f"gemm_v0<half, float, 16, 16, 128, {str(transpose_a).lower()}, {str(transpose_b).lower()}, {k_l0}>"
         original = _rewrite_gemm(original, lambda call: tir.Evaluate(_changed_call(call, template=template)))
-    with pytest.raises(tvm.error.TVMError, match=_PROFILE):
+    with pytest.raises(tvm.error.TVMError, match=diagnostic):
         _run(original, model="pto", target_kind="llvm")
 
 

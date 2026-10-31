@@ -266,13 +266,22 @@ def test_bare_mma_mixing_requires_an_explicit_scratch_owner_model(flat_gemms):
         _run(original)
 
 
-@pytest.mark.parametrize("platform,model", [("A2", "ascendc"), ("A5", "ascendc"), ("A3", "pto")])
+@pytest.mark.parametrize("platform,model", [("A2", "ascendc"), ("A5", "ascendc"), ("A2", "pto"), ("A5", "pto")])
 def test_composite_target_contract_is_explicit(flat_gemms, platform, model):
     with pytest.raises(
         tvm.error.TVMError,
         match="(?i)(composite.*AscendC|AscendC.*A3|PTO flat gemm_v0 profile)",
     ):
         _run(flat_gemms[64], platform=platform, model=model)
+
+
+def test_composite_accepts_a3_pto_semantic_contract(flat_gemms):
+    original = flat_gemms[64]
+    result = _run(original, model="pto", target_kind="llvm")
+    assert result.attrs.get("tl.ascend_sync_proof") is not None
+    assert len(_gemms(result)) == 1
+    tvm.ir.assert_structural_equal(_gemms(original)[0], _gemms(result)[0])
+    tvm.ir.assert_structural_equal(result, _run(result, model="pto", target_kind="llvm"))
 
 
 @pytest.mark.parametrize(
