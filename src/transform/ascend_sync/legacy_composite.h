@@ -46,7 +46,7 @@ struct LegacyCompositePlan {
   // Device helper protocols differ even though the typed TIR ABI is shared.
   // Keep the audited profile explicit; the adapter's acquire/completion API
   // and the upstream engine remain unchanged.
-  enum class HelperProfile { kAscendC, kPtoA3Flat };
+  enum class HelperProfile { kAscendC, kPtoA3 };
   HelperProfile helper_profile{HelperProfile::kAscendC};
   std::unordered_map<const tir::CallNode *, LegacyCompositeOperation>
       operations;
@@ -62,21 +62,18 @@ struct LegacyCompositePlan {
   const LegacyCompositeOperation *Find(const tir::CallNode *call) const;
 };
 
-// Audit typed gemm_v0 without rewriting or duplicating the calculation. The
-// contract supports flat AscendC/A3 calls, or one static positive serial K loop
-// containing full A/B GM-to-L1 refreshes and one gemm(clear=k==0), or one
-// audited static physical SIP (trip>=3, actual lead1, independent L1 A/B rings
-// B2, aligned fp16 tiles, no transpose/internal K splitting, one final FIX).
-// Shapes are static and user L0A/B storage is excluded. Other nested/dynamic
-// For, If/While, loop-internal FIX, rings and helper-owned manual event
-// collisions are rejected. A gemm's execution
-// owner is Cube; this does not assert support for mixed C/V functions as a
-// whole. Functions without composite helpers return an empty plan unchanged.
-// PTO/A3 derives a flat helper contract from static aligned FP16-to-FP32
-// geometry, actual descriptors, local pool capacities and scoped GM bounds.
-// Internal K chunks share one L0A/B slot and six ID1 event directions. A single
-// full A/B refresh, helper and final FIX is an invocation protocol boundary;
-// outer loops, rings and mixed C/V require separate protocols.
+// Audit typed gemm_v0 effects and the actual backend helper protocol. Static
+// Cube pipelines derive role/stage topology, logical epoch coverage and each
+// operand's physical slot lifecycle from injector provenance. This does not
+// synthesize another schedule or assume a particular lead, period or order
+// count. General outer/dynamic control and mixed C/V remain separate protocols.
+// PTO/A3 uses parameterized aligned FP16-to-FP32 geometry and a conservative
+// MTE2 acquire / FIX completion envelope. AscendC retains its internal N/K
+// ping-pong protocol. Hidden event pools are reserved for each real backend.
+// Canonicalize a pure If/else choice between identical GEMM invocations
+// before snapshot normalization creates independently optional controls.
+tir::PrimFunc NormalizeLegacyCompositeBranches(const tir::PrimFunc &function);
+
 LegacyCompositePlan AnalyzeLegacyComposites(const tir::PrimFunc &function,
                                             const Target &target,
                                             const String &platform);

@@ -1251,7 +1251,8 @@ ImportLegacySync(const PrimFunc &function, const Target &target,
   if (persistent != nullptr)
     normalized.function = function;
   else
-    normalized = NormalizeLegacySnapshots(function);
+    normalized =
+        NormalizeLegacySnapshots(NormalizeLegacyCompositeBranches(function));
   ManualFlagValidator().Run(normalized.function->body);
   ImportedLegacySyncIR imported;
   imported.original_function = std::move(normalized.function);

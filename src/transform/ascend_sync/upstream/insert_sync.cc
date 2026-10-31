@@ -903,8 +903,12 @@ private:
 
     std::vector<SyncPoint> local_sync_points = CollectSyncPoints(nodes, loop);
     int max_distance = loop == nullptr ? 0 : 1;
-    for (const SyncPoint &sync_point : local_sync_points)
+    for (const SyncPoint &sync_point : local_sync_points) {
       max_distance = std::max(max_distance, sync_point.edge.distance);
+      if (sync_point.strengthened_carry)
+        max_distance =
+            std::max(max_distance, sync_point.strengthened_carry->distance);
+    }
 
     AddSamePipeEdges(result.closure, task_site_ids, max_distance, loop);
     OptimizeSyncPoints(local_sync_points, result.closure, max_distance, loop);
@@ -936,7 +940,8 @@ private:
     // Mixed same/cross-iteration reuse is checked only at the collection level
     // where both points still have the same ring context.
     RecordReusablePairs(local_points, local_points, result.closure,
-                        /*allow_cross_iter=*/false, /*allow_mixed_iter=*/true);
+                        /*allow_cross_iter=*/false, /*allow_mixed_iter=*/true,
+                        /*finite_scope=*/loop == nullptr);
     result.visible_sync_points.insert(result.visible_sync_points.end(),
                                       local_points.begin(), local_points.end());
     if (loop != nullptr)
@@ -1334,31 +1339,73 @@ private:
               // The reverse carry keeps its normal seed/drain protocol.
               edge.distance = 0;
             }
-            if (edge.distance == 1 && dep.kind == DependencyKind::kData &&
+            if (edge.distance > 0 && dep.kind == DependencyKind::kData &&
                 loop != nullptr && IsSyncStaticCubePipelineControl(loop) &&
-                info == nullptr && manual_versions == 2 &&
-                counter_info == nullptr && num_versions == 1 &&
+                info == nullptr && manual_versions > edge.distance &&
+                counter_info == nullptr && num_versions == edge.distance &&
                 flag_loop == loop && producer_core == kCoreCube &&
                 consumer_core == kCoreCube && producer_pipe == "MTE2" &&
                 consumer_pipe == "MTE1" && dep.storage.defined() &&
                 GetPtrStorageScope(dep.storage.value()) == "shared.l1" &&
-                loop->GetStage() == 0 && producer->GetStage() == 0 &&
-                consumer->GetStage() == 0 && source.path_end == producer &&
+                !loop->HasConditions() && !producer->HasConditions() &&
+                !consumer->HasConditions() && loop->GetStage() == 0 &&
+                producer->GetStage() == 0 && consumer->GetStage() == 0 &&
+                source.path_end == producer &&
                 destination.path_end == consumer &&
                 source.path_end->GetParent() == loop &&
                 destination.path_end->GetParent() == loop &&
                 source.path_end->GetIndex() <
                     destination.path_end->GetIndex() &&
                 is_one(source.GetGuard()) && is_one(destination.GetGuard())) {
-              // In this certified physical SIP, prefetch(k+1) is issued
-              // before gemm(k). Complete that MTE2 prefetch before the current
-              // MTE1 acquire, rather than seed a carried event then set it
-              // again before its first wait. The fence also completes older
-              // MTE2 loads; the next acquire remains ordered after this one.
-              // Retain the original carry below: ordinary closure saturation
-              // must still prove it. Reverse slot-reuse and C self-carries
-              // keep their original seed/drain protocols and true storage B.
+              // The certified owner establishes prefetch(k+D) before gemm(k)
+              // and a true ring B >= D+1, so the future prefetch cannot
+              // overwrite gemm(k)'s slot. Complete that prefetch before the
+              // current MTE1 acquire: MTE2 issue order also completes the
+              // older load required by gemm(k). This stronger boundary avoids
+              // setting a seeded credit before its first wait. Preserve the
+              // original distance-D demand below and in the closure budget;
+              // ordinary saturation must independently cover it. Reverse
+              // slot-reuse and accumulator carries retain their own protocols.
               edge.distance = 0;
+              // The certified AscendC gemm_v0 also closes the L1 read with
+              // MTE1_MTE2 set/wait after all extracts. Thus the next MTE2
+              // prefetch cannot pass that release before this GEMM consumes
+              // its RAW wait. One binary event is sufficient even when B>D+1;
+              // this relies on the audited helper, not generic pipe FIFO alone.
+              num_versions = 1;
+            }
+            if (edge.distance > 0 && dep.kind == DependencyKind::kData &&
+                loop != nullptr && IsSyncStaticCubePipelineControl(loop) &&
+                info == nullptr && manual_versions > edge.distance &&
+                counter_info == nullptr && num_versions == edge.distance &&
+                flag_loop == loop && producer_core == kCoreCube &&
+                consumer_core == kCoreCube && consumer_pipe == "MTE2" &&
+                ((producer_pipe == "M" &&
+                  SyncBoundaryPipeName(producer, true) == "MTE1") ||
+                 (producer_pipe == "FIX" &&
+                  SyncBoundaryPipeName(producer, true) == "MTE2")) &&
+                dep.storage.defined() &&
+                GetPtrStorageScope(dep.storage.value()) == "shared.l1" &&
+                !loop->HasConditions() && !producer->HasConditions() &&
+                !consumer->HasConditions() && loop->GetStage() == 0 &&
+                producer->GetStage() == 0 && consumer->GetStage() == 0 &&
+                source.path_end == producer &&
+                destination.path_end == consumer &&
+                source.path_end->GetParent() == loop &&
+                destination.path_end->GetParent() == loop &&
+                source.path_end->GetIndex() <
+                    destination.path_end->GetIndex() &&
+                is_one(source.GetGuard()) && is_one(destination.GetGuard())) {
+              // With GEMM before the prefetch, an oversized ring can leave a
+              // carried read->overwrite edge even though its physical endpoints
+              // are forward. Completing this GEMM before the current prefetch
+              // also completes the older GEMM whose slot is being overwritten.
+              // Keep the original carry as a separate closure obligation.
+              edge.distance = 0;
+              // Both audited helpers enter through MTE2_MTE1 set/wait. The next
+              // GEMM therefore cannot complete before this MTE2 overwrite wait
+              // is consumed, so the forward handshake needs one binary event.
+              num_versions = 1;
             }
             if (counter_info != nullptr) {
               PrimExpr iteration = BufferLoad(counter_info->counter,
@@ -1579,7 +1626,7 @@ private:
 
   bool CanReuse(const VisibleSyncPoint &lhs, const VisibleSyncPoint &rhs,
                 const DepClosure &closure, bool allow_cross_iter,
-                bool allow_mixed_iter) const {
+                bool allow_mixed_iter, bool finite_scope) const {
     const SyncPoint &lhs_sync = sync_points_[lhs.sync_point_id];
     const SyncPoint &rhs_sync = sync_points_[rhs.sync_point_id];
     if (!site_registry_.UsesFlag(lhs_sync) ||
@@ -1640,10 +1687,18 @@ private:
       bool current_lhs_before;
       bool current_rhs_before;
       if (!lhs_cross_iter) {
-        current_lhs_before = closure.HasEdge(lhs_edge.dst, rhs_edge.src, 0) &&
-                             closure.HasEdge(rhs_edge.dst, lhs_edge.src, 1);
-        current_rhs_before = closure.HasEdge(rhs_edge.dst, lhs_edge.src, 0) &&
-                             closure.HasEdge(lhs_edge.dst, rhs_edge.src, 1);
+        // Root-local handshakes execute once. Once the first wait precedes
+        // the next set, their binary event lifetimes do not overlap; there
+        // is no next iteration requiring the reverse distance-one path.
+        // Keep recurring and projected child protocols on the cyclic proof.
+        bool finite = finite_scope && lhs_sync.flag_loop == nullptr &&
+                      rhs_sync.flag_loop == nullptr;
+        current_lhs_before =
+            closure.HasEdge(lhs_edge.dst, rhs_edge.src, 0) &&
+            (finite || closure.HasEdge(rhs_edge.dst, lhs_edge.src, 1));
+        current_rhs_before =
+            closure.HasEdge(rhs_edge.dst, lhs_edge.src, 0) &&
+            (finite || closure.HasEdge(lhs_edge.dst, rhs_edge.src, 1));
       } else {
         if (!allow_cross_iter)
           return false;
@@ -1695,13 +1750,14 @@ private:
   void RecordReusablePairs(const std::vector<VisibleSyncPoint> &lhs_points,
                            const std::vector<VisibleSyncPoint> &rhs_points,
                            const DepClosure &closure, bool allow_cross_iter,
-                           bool allow_mixed_iter) {
+                           bool allow_mixed_iter, bool finite_scope = false) {
     for (const VisibleSyncPoint &lhs_visible : lhs_points) {
       for (const VisibleSyncPoint &rhs_visible : rhs_points) {
         size_t lhs = lhs_visible.sync_point_id;
         size_t rhs = rhs_visible.sync_point_id;
-        if (lhs == rhs || !CanReuse(lhs_visible, rhs_visible, closure,
-                                    allow_cross_iter, allow_mixed_iter)) {
+        if (lhs == rhs ||
+            !CanReuse(lhs_visible, rhs_visible, closure, allow_cross_iter,
+                      allow_mixed_iter, finite_scope)) {
           continue;
         }
         reusable_pairs_.emplace(std::min(lhs, rhs), std::max(lhs, rhs));
