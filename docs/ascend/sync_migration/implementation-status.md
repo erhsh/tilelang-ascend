@@ -66,6 +66,20 @@ Vector/DMA 同步。一般 Developer 自动同步应同时开启 ordinary 与 VS
 和缓存套件，以及语言 transpose 测试中的 `test_transpose_sync_matches_helper_pipeline`。
 这些修正不扩大下面尚未审计的流水、跨核或动态手动事件契约。
 
+### v19 空尾块与间接地址
+
+- A2/A3 AscendC 的 typed GM→UB tail helper 接受零行或零列。空块仍填充整个 UB
+  tile，并在隐藏的 V→MTE2 完成边界之后返回，不发出 GM DMA；适配层将其 GM 读范围
+  规范为零长度，仍无条件验证整个 UB allocation、对齐及隐藏事件预留。
+- 非空路径仍须证明完整的 strided GM 访问范围，负 mask、超界 mask 和非空越界访问
+  继续拒绝。PTO 的独立 helper 尚未审计空块，仍要求正 mask。
+- 已配置硬件操作的 `access_ptr` offset/extent 中，显式标量 BufferLoad 在原语句
+  边界捕获为 Let。对索引内存的读取参与依赖分析，导出保留先定义标量寄存器、再由 DMA
+  使用的顺序；后续覆盖索引不会改变已捕获的地址。不将快照等同于未来的内存重读。
+  opaque/read-state intrinsic、ring provenance 和 tail/composite 边界证明保留原有约束。
+- shared helper 及同步语义变化由 native ABI v19 隔离旧缓存。针对性回归位于现有
+  tail-copy、snapshot 与 device 套件。
+
 ## 当前支持与拒绝边界
 
 已验证范围：
@@ -154,7 +168,7 @@ Vector/DMA 同步。一般 Developer 自动同步应同时开启 ordinary 与 VS
   嵌套 For 的结果当作嵌套 ring/owner 生命周期的证明。
 - 反向 manual wait、跨控制流借用 token 或未平衡事件；仅预留 ID 不能证明无死锁。
 - 未建模的操作和动态 manual ID；不能靠扩大 barrier 或取模掩盖未知协议。
-- 未证明合法范围、零 mask、未支持类型或 footprint 的 tail copy，以及 tail 与
+- 未证明合法范围、未支持类型或 footprint 的 tail copy、PTO 零 mask，以及 tail 与
   ring/mixed C/V 的组合。full-copy 既有路径与 tail 首片的 target 支持范围分别处理。
 
 原 Z3 翻译保留数学整数索引模型，不宣称完整机器整数回绕语义。

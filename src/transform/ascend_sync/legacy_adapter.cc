@@ -585,8 +585,13 @@ private:
       if ((mask->value & 2) || access == "write")
         task_->AddWriteRegion(region);
       pointer_arguments.insert(position);
-      for (size_t argument : {2U, 3U})
+      for (size_t argument : {2U, 3U}) {
         RequirePure(pointer->args[argument], "access_ptr offset/extent");
+        // Keep captured pointer fields in the task's scalar input metadata,
+        // just like explicit hardware scalar operands. Their register uses
+        // remain after the original Let definitions during export.
+        VisitExpr(pointer->args[argument]);
+      }
     }
     for (size_t i = offset; i < call->args.size(); ++i) {
       if (pointer_arguments.count(i))

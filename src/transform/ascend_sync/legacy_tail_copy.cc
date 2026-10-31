@@ -401,13 +401,17 @@ LegacyTailCopyPlan::AuditCall(const CallNode *call, size_t offset,
       << kError << "tail DMA requires a complete 32-byte-aligned row pitch";
   const PrimExpr stride = Int64(call->args[offset + 2], "GM row stride");
   ICHECK(analyzer.CanProve(
-      rows >= I64(1) && rows <= I64(shape.rows) && columns >= I64(1) &&
+      rows >= I64(0) && rows <= I64(shape.rows) && columns >= I64(0) &&
       columns <= I64(shape.columns) && stride >= columns &&
       stride <= I64(std::numeric_limits<uint32_t>::max()) &&
       (stride - columns) * I64(bytes) <=
           I64(std::numeric_limits<uint32_t>::max())))
       << kError
-      << "cannot prove positive bounded masks and nonwrapping DMA stride";
+      << "cannot prove nonnegative bounded masks and nonwrapping DMA stride";
+  const PrimExpr nonempty = rows > I64(0) && columns > I64(0);
+  if (state_->IsPto())
+    ICHECK(analyzer.CanProve(nonempty))
+        << "PTO tail-copy profile: requires positive masks";
   if (call->args.size() > offset + 5) {
     const PrimExpr &pad = call->args[offset + 5];
     const DataType pad_type = pad.dtype();
@@ -440,14 +444,14 @@ LegacyTailCopyPlan::AuditCall(const CallNode *call, size_t offset,
   const PrimExpr source_offset = Int64(source->args[2], "GM pointer offset");
   const PrimExpr destination_offset =
       Int64(destination->args[2], "UB pointer offset");
-  const PrimExpr source_span = (rows - I64(1)) * stride + columns;
+  const PrimExpr dma_span = (rows - I64(1)) * stride + columns;
   const PrimExpr source_capacity = BufferElements(source_buffer, &analyzer);
   if (state_->IsPto())
     AuditPtoDescriptor(state_->function, call, offset, shape, source,
                        destination, rows, columns, stride, &analyzer);
   ICHECK(analyzer.CanProve(
-      source_offset >= I64(0) && source_span <= source_capacity &&
-      source_offset <= source_capacity - source_span &&
+      (!nonempty || (source_offset >= I64(0) && dma_span <= source_capacity &&
+                     source_offset <= source_capacity - dma_span)) &&
       Int64(source->args[3], "GM pointer extent") >= I64(0) &&
       Int64(destination->args[3], "UB pointer extent") >= I64(0)))
       << kError << "cannot prove the complete strided GM read is in bounds";
@@ -481,9 +485,15 @@ LegacyTailCopyPlan::AuditCall(const CallNode *call, size_t offset,
   BufferRegion source_region = storage.AccessPtrRegion(source, {}, context);
   BufferRegion destination_region =
       storage.AccessPtrRegion(destination, {}, context);
-  source_region =
-      BufferRegion(source_region->buffer,
-                   {Range::FromMinExtent(source_offset, source_span)});
+  // Empty AscendC tiles still Duplicate the whole UB tile and complete on
+  // MTE2, but the helper returns before touching GM. Normalize both bounds
+  // of their empty read so an inactive slice cannot manufacture an address.
+  const PrimExpr source_begin =
+      analyzer.Simplify(Select(nonempty, source_offset, I64(0)));
+  const PrimExpr source_span =
+      analyzer.Simplify(Select(nonempty, dma_span, I64(0)));
+  source_region = BufferRegion(
+      source_region->buffer, {Range::FromMinExtent(source_begin, source_span)});
   destination_region =
       BufferRegion(destination_region->buffer,
                    {Range::FromMinExtent(destination_offset, I64(elements))});

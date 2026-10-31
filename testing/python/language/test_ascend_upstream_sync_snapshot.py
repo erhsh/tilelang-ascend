@@ -154,6 +154,101 @@ def test_hardware_scalar_memory_operand_is_captured_once_before_the_operation() 
     assert len(_nodes(result.body, tir.BufferLoad)) == 1
 
 
+def _indirect_copy(buffers: dict[str, tir.Buffer], expression: tir.PrimExpr, field: int, direction: str) -> tir.Evaluate:
+    pointer_buffer = buffers["input"] if direction == "MTE2" else buffers["output"]
+    pointer = pointer_buffer.access_ptr("r" if direction == "MTE2" else "w")
+    arguments = list(pointer.args)
+    arguments[field] = expression
+    pointer = tir.Call(pointer.dtype, pointer.op, arguments)
+    local = buffers["a"].access_ptr("w" if direction == "MTE2" else "r")
+    operands = (pointer, local) if direction == "MTE2" else (local, pointer)
+    helper = "copy_gm_to_ub" if direction == "MTE2" else "copy_ub_to_gm"
+    return tir.Evaluate(tir.call_extern("handle", helper, *operands))
+
+
+@pytest.mark.parametrize("field", [2, 3], ids=["offset", "extent"])
+@pytest.mark.parametrize("direction", ["MTE2", "MTE3"])
+def test_pointer_memory_operand_is_read_once_before_dma(field: int, direction: str) -> None:
+    buffers = _buffers()
+    expression = tir.Cast("int32", tir.BufferLoad(buffers["control"], [0])) * 8
+    result = _run(_function(buffers, [_fill(buffers["control"]), _indirect_copy(buffers, expression, field, direction)]))
+    bindings = _nodes(result.body, tir.LetStmt)
+    assert len(bindings) == 1
+    binding = bindings[0]
+    tvm.ir.assert_structural_equal(binding.value, expression)
+    assert len(_nodes(result.body, tir.BufferLoad)) == 1
+    helper = next(call for call in _nodes(binding.body, tir.Call) if call.op == tvm.ir.Op.get("tir.call_extern"))
+    pointer = helper.args[1 if direction == "MTE2" else 2]
+    assert pointer.args[field].same_as(binding.var)
+    order = _evaluation_order(result.body)
+    binding_index = next(i for i, item in enumerate(order) if item.same_as(binding.var))
+    helper_index = next(i for i, item in enumerate(order) if item.same_as(helper))
+    assert any(
+        next(i for i, item in enumerate(order) if item.same_as(wait)) < binding_index for wait in _flag_calls(result.body, "wait", "V_S")
+    )
+    # The DMA consumes a scalar register defined by the preceding Let. This
+    # def-use requires no S->DMA memory-completion event; V->S protects the
+    # actual UB read, and export must keep the definition before its use.
+    assert binding_index < helper_index
+    tvm.ir.assert_structural_equal(result, _run(result))
+
+
+def test_equal_pointer_memory_reads_after_an_index_update_get_distinct_snapshots() -> None:
+    buffers = _buffers()
+    expression = tir.Cast("int32", tir.BufferLoad(buffers["control"], [0])) * 8
+    copy = _indirect_copy(buffers, expression, 2, "MTE2")
+    result = _run(_function(buffers, [_fill(buffers["control"]), copy, _fill(buffers["control"], tir.FloatImm("float32", 2.0)), copy]))
+    bindings = _nodes(result.body, tir.LetStmt)
+    assert len(bindings) == 2
+    assert not bindings[0].var.same_as(bindings[1].var)
+    assert all(tvm.ir.structural_equal(binding.value, expression) for binding in bindings)
+    # post_order_visit deduplicates shared expression objects. Count each
+    # lexical binding's read instead: the same expression executes twice.
+    assert sum(len(_nodes(tir.Evaluate(binding.value), tir.BufferLoad)) for binding in bindings) == 2
+    assert _flag_calls(result.body, "wait", "S_V")
+
+
+def test_pointer_fields_and_hardware_scalar_keep_their_original_operand_order() -> None:
+    buffers = _buffers()
+    reads = [tir.BufferLoad(buffers["control"], [index]) for index in range(3)]
+    pointer = buffers["b"].access_ptr("w")
+    fields = list(pointer.args)
+    fields[2] = tir.Cast("int32", reads[0])
+    fields[3] = tir.Cast("int32", reads[1])
+    pointer = tir.Call(pointer.dtype, pointer.op, fields)
+    operation = tir.Evaluate(tir.call_extern("handle", "AscendC::Duplicate", pointer, reads[2]))
+    result = _run(_function(buffers, [_fill(buffers["control"]), operation]))
+    bindings = {binding.var: binding.value for binding in _nodes(result.body, tir.LetStmt)}
+    ordered_values = [bindings[node] for node in _evaluation_order(result.body) if isinstance(node, tir.Var) and node in bindings]
+    assert len(ordered_values) == 3
+    for actual, expected in zip(ordered_values, [fields[2], fields[3], reads[2]], strict=True):
+        tvm.ir.assert_structural_equal(actual, expected)
+    assert len(_nodes(result.body, tir.BufferLoad)) == 3
+
+
+@pytest.mark.parametrize("expression", [tir.call_extern("int32", "unknown_index"), tir.call_intrin("int32", "tir.tvm_thread_context", 0)])
+def test_opaque_or_implicit_state_pointer_operands_remain_rejected(expression: tir.PrimExpr) -> None:
+    buffers = _buffers()
+    with pytest.raises(tvm.error.TVMError, match="snapshot.*opaque|snapshot.*unmodelled"):
+        _run(_function(buffers, [_indirect_copy(buffers, expression, 2, "MTE2")]))
+
+
+def test_vector_pointer_memory_operand_is_not_captured_as_a_scalar() -> None:
+    buffers = _buffers()
+    expression = tir.Broadcast(tir.Cast("int32", tir.BufferLoad(buffers["control"], [0])), 2)
+    with pytest.raises(tvm.error.TVMError, match="snapshot requires a scalar"):
+        _run(_function(buffers, [_indirect_copy(buffers, expression, 2, "MTE2")]))
+
+
+def test_pure_pointer_fields_keep_the_original_helper_call() -> None:
+    buffers = _buffers()
+    original = _indirect_copy(buffers, tir.IntImm("int32", 8), 2, "MTE2")
+    result = _run(_function(buffers, [original]))
+    assert not _nodes(result.body, tir.LetStmt)
+    helper = next(call for call in _nodes(result.body, tir.Call) if call.op == tvm.ir.Op.get("tir.call_extern"))
+    tvm.ir.assert_structural_equal(helper, original.value)
+
+
 def test_mutable_if_condition_is_one_runtime_snapshot_with_pure_guards() -> None:
     buffers = _buffers()
     predicate = tir.BufferLoad(buffers["control"], [0]) > 0

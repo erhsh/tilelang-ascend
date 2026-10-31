@@ -52,6 +52,57 @@ def test_dynamic_full_and_tail_copy_preserves_vector_and_mte3_order(dynamic_tail
             torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)
 
 
+def test_dynamic_empty_columns_keep_nonzero_padding_and_completion():
+    @T.prim_func
+    def main(A: T.Tensor((64,), "float32"), Count: T.Tensor((1,), "int32"), O: T.Tensor((2, 2, 64), "float32")):
+        with T.Kernel(1, is_npu=True) as (_cid, vid):
+            values = T.alloc_ub((64,), "float32")
+            with T.Scope("V"):
+                count = Count[0]
+                if count >= 0 and count <= 64:
+                    T.tile.fill(values, -7)
+                    T.copy(values, O[vid, 0, :])
+                    T.copy(A[0:count], values, pad_value=5)
+                    T.copy(values, O[vid, 1, :])
+
+    kernel = _compile_device_kernel(main.with_attr("tir.noalias", True))
+    source = torch.arange(64, dtype=torch.float32) + 17
+    for count in (64, 0, 33, 1, 0, 32, 63, 64, 7):
+        expected = torch.full((2, 2, 64), 5.0, dtype=torch.float32)
+        expected[:, 0, :] = -7
+        expected[:, 1, :count] = source[:count]
+        for _invocation in range(3):
+            output = torch.full(expected.shape, -999.0, dtype=torch.float32, device="npu")
+            kernel(source.npu(), torch.tensor([count], dtype=torch.int32, device="npu"), output)
+            torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)
+
+
+def test_empty_vector_subtile_preserves_padding_and_prior_mte3_reads():
+    @T.prim_func
+    def main(A: T.Tensor((34, 8), "float32"), O: T.Tensor((2, 2, 2, 16, 8), "float32")):
+        with T.Kernel(2, is_npu=True) as (cid, vid):
+            values = T.alloc_ub((16, 8), "float32")
+            with T.Scope("V"):
+                T.tile.fill(values, -7)
+                T.copy(values, O[cid, vid, 0, :, :])
+                T.copy(A[cid * 32 + vid * 16, 0], values, pad_value=5)
+                T.copy(values, O[cid, vid, 1, :, :])
+
+    kernel = _compile_device_kernel(main.with_attr("tir.noalias", True))
+    source = torch.arange(34 * 8, dtype=torch.float32).reshape(34, 8)
+    expected = torch.full((2, 2, 2, 16, 8), 5, dtype=torch.float32)
+    expected[:, :, 0, :, :] = -7
+    for cid in range(2):
+        for vid in range(2):
+            start = cid * 32 + vid * 16
+            count = max(0, min(16, 34 - start))
+            expected[cid, vid, 1, :count, :] = source[start : start + count, :]
+    for _invocation in range(3):
+        output = torch.full(expected.shape, -999.0, dtype=torch.float32, device="npu")
+        kernel(source.npu(), output)
+        torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)
+
+
 def test_real_int32_tail_copy_preserves_values_and_zero_padding():
     # AscendCopy::Lower emits copy_gm_to_ub<int, ...> for this DSL dtype.
     # Its template alias must retain the audited int32 Duplicate contract.

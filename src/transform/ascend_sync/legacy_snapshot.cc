@@ -168,8 +168,28 @@ private:
     Array<PrimExpr> arguments = call->args;
     std::vector<std::pair<Var, PrimExpr>> bindings;
     for (size_t i = offset; i < arguments.size(); ++i) {
-      if (buffer_arguments.count(i) ||
-          SideEffect(arguments[i]) <= CallEffectKind::kPure)
+      if (buffer_arguments.count(i)) {
+        const auto *pointer = arguments[i].as<CallNode>();
+        if (pointer == nullptr ||
+            !pointer->op.same_as(builtin::tvm_access_ptr()) ||
+            pointer->args.size() != 5)
+          continue; // The importer diagnoses malformed pointer ABIs.
+        Array<PrimExpr> fields = pointer->args;
+        for (size_t field : {2U, 3U}) {
+          if (SideEffect(fields[field]) <= CallEffectKind::kPure)
+            continue;
+          Var snapshot = SnapshotVar(fields[field], "access_ptr offset/extent");
+          bindings.emplace_back(snapshot, fields[field]);
+          fields.Set(field, snapshot);
+        }
+        if (!fields.same_as(pointer->args)) {
+          Call rewritten = GetRef<Call>(pointer);
+          rewritten.CopyOnWrite()->args = std::move(fields);
+          arguments.Set(i, std::move(rewritten));
+        }
+        continue;
+      }
+      if (SideEffect(arguments[i]) <= CallEffectKind::kPure)
         continue;
       Var snapshot = SnapshotVar(arguments[i], "hardware scalar operand");
       bindings.emplace_back(snapshot, arguments[i]);

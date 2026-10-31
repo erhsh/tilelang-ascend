@@ -211,6 +211,28 @@ def test_upstream_sync_mutable_hardware_operand_is_captured_before_overwrite() -
     torch.testing.assert_close(output.cpu(), (source * 2).expand(2, -1), rtol=0, atol=0)
 
 
+def test_upstream_sync_indirect_dma_address_is_captured_before_index_overwrite() -> None:
+    @T.prim_func
+    def main(A: T.Tensor((3, _WIDTH), "float32"), O: T.Tensor((2, 3, _WIDTH), "float32")):
+        with T.Kernel(1, is_npu=True) as (_cid, vid):
+            values = T.alloc_ub((_WIDTH,), "float32")
+            index = T.alloc_ub((_WIDTH,), "int32")
+            with T.Scope("V"):
+                for row in T.serial(3):
+                    T.tile.fill(index, 2 - row)
+                    T.copy(A[row, 0], values)
+                    T.copy(values, O[vid, index[0], 0])
+                    T.tile.fill(index, 17)
+
+    kernel = _compile_device_kernel(main.with_attr("tir.noalias", True))
+    source = torch.arange(3 * _WIDTH, dtype=torch.float32).reshape(3, _WIDTH) - 32
+    expected = source.flip(0).expand(2, -1, -1)
+    for _invocation in range(3):
+        output = torch.full(expected.shape, -999.0, dtype=torch.float32, device="npu")
+        kernel(source.npu(), output)
+        torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)
+
+
 @pytest.fixture(scope="module")
 def optional_load_kernel() -> Any:
     n = T.symbolic("n")

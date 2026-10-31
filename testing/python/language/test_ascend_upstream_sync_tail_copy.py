@@ -198,7 +198,7 @@ def test_dynamic_full_or_tail_keeps_one_original_call_and_an_mte2_acquire() -> N
         buffers,
         [_fill(buffers["local"]), copy, _store(buffers)],
         scalars=(columns,),
-        guard=tir.And(columns >= 1, columns <= 64),
+        guard=tir.And(columns >= 0, columns <= 64),
     )
     result = _run(original)
     assert len(_helper_calls(result)) == 1
@@ -308,18 +308,62 @@ def test_other_explicit_slot_is_preserved_and_excluded_from_automatic_allocation
     assert all(int(event.args[1]) != 0 for event in sets)
 
 
-@pytest.mark.parametrize("columns", [0, -1, 65, tir.IntImm("uint32", 2**32 - 1)])
+@pytest.mark.parametrize("columns", [-1, 65, tir.IntImm("uint32", 2**32 - 1)])
 def test_out_of_range_masks_are_rejected(columns: int | tir.PrimExpr) -> None:
     buffers = _buffers()
     with pytest.raises(tvm.error.TVMError, match="bounded masks"):
         _run(_function(buffers, [_copy(buffers, columns)]))
 
 
-@pytest.mark.parametrize("rows", [0, -1, 2])
+@pytest.mark.parametrize("rows", [-1, 2])
 def test_invalid_row_masks_are_rejected(rows: int) -> None:
     buffers = _buffers()
     with pytest.raises(tvm.error.TVMError, match="bounded masks"):
         _run(_function(buffers, [_copy(buffers, rows=rows)]))
+
+
+@pytest.mark.parametrize("rows,columns", [(0, 64), (1, 0), (0, 0)])
+def test_empty_copy_keeps_whole_tile_padding_and_completion(rows: int, columns: int) -> None:
+    buffers = _buffers()
+    # Empty copies must not dereference a pointer beyond the GM allocation.
+    copy = _copy(buffers, columns, rows=rows, source_offset=320)
+    result = _run(_function(buffers, [_fill(buffers["local"]), _store(buffers), copy, _store(buffers)]))
+    directions = {event.args[0].value for event in _events(result)}
+    assert {"MTE3_MTE2", "MTE2_MTE3"} <= directions
+    tvm.ir.assert_structural_equal(_helper_calls(result)[0], copy.value)
+    _assert_hidden_slots_reserved(result)
+
+
+def test_symbolic_empty_or_nonempty_copy_still_requires_in_bounds_nonempty_reads() -> None:
+    columns = tir.Var("columns", "int32")
+    buffers = _buffers()
+    original = _function(
+        buffers,
+        [_copy(buffers, columns, source_offset=250)],
+        scalars=(columns,),
+        guard=tir.And(columns >= 0, columns <= 64),
+    )
+    with pytest.raises(tvm.error.TVMError, match="strided GM read is in bounds"):
+        _run(original)
+
+
+def test_empty_copy_still_requires_the_whole_ub_allocation_and_hidden_event_slots() -> None:
+    buffers = _buffers()
+    with pytest.raises(tvm.error.TVMError, match="whole padded UB tile"):
+        _run(_function(buffers, [_copy(buffers, 0)], size=128))
+    manual = [
+        tir.Evaluate(tir.Call("handle", tvm.ir.Op.get(name), [tir.StringImm("V_MTE2"), 0]))
+        for name in ("tl.ascend_auto_set_flag", "tl.ascend_auto_wait_flag")
+    ]
+    with pytest.raises(tvm.error.TVMError, match="explicit event conflicts with hidden"):
+        _run(_function(buffers, manual + [_copy(buffers, 0)]))
+
+
+@pytest.mark.parametrize("rows,columns", [(0, 64), (1, 0)])
+def test_pto_empty_copy_requires_a_separately_audited_helper(rows: int, columns: int) -> None:
+    buffers = _buffers()
+    with pytest.raises(tvm.error.TVMError, match="PTO tail-copy profile: requires positive masks"):
+        _run(_function(buffers, [_copy(buffers, columns, rows=rows)]), model="pto")
 
 
 @pytest.mark.parametrize("stride", [32, -1, 2**32, 2**32 - 1])
@@ -558,10 +602,9 @@ def test_tail_copy_uses_the_audited_helper_contract(row_mask: int, column_mask: 
 
 
 @pytest.mark.parametrize("row_mask,column_mask", [(0, 32), (2, 0)])
-def test_zero_mask_copy_is_rejected(row_mask: int, column_mask: int) -> None:
+def test_zero_mask_copy_uses_the_padding_completion_contract(row_mask: int, column_mask: int) -> None:
     original = _admission_function("copy_gm_to_ub<float, 32, 2>", (32, row_mask, column_mask, 0), metadata=(2, 32))
-    with pytest.raises(tvm.error.TVMError, match="GM-to-UB tail-copy contract"):
-        _run_admission(original)
+    _assert_admitted(original)
 
 
 def test_symbolic_full_masks_are_proven_in_their_actual_guard_context() -> None:
