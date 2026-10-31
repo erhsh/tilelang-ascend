@@ -516,19 +516,17 @@ inline OperationConfig ResolveOperationConfig(const tvm::tir::CallNode *call,
       config.buffer_accesses.emplace_back(2, "read");
     } else {
       const DataType dtype = call->args[argument_offset + 2].dtype();
-      ICHECK(dtype.is_scalar() &&
-             (dtype.is_int() || dtype.is_uint() || dtype.is_float() ||
-              dtype.is_bfloat16()))
+      ICHECK(dtype.is_scalar() && (dtype.is_int() || dtype.is_uint() ||
+                                   dtype.is_float() || dtype.is_bfloat16()))
           << "Malformed scalar value in " << name;
     }
     require_integer(arity - 1);
     if (scalar_compare) {
       const auto *mode =
           call->args[argument_offset + arity - 2].as<tvm::tir::StringImmNode>();
-      ICHECK(mode != nullptr &&
-             (mode->value == "EQ" || mode->value == "NE" ||
-              mode->value == "GT" || mode->value == "GE" ||
-              mode->value == "LT" || mode->value == "LE"))
+      ICHECK(mode != nullptr && (mode->value == "EQ" || mode->value == "NE" ||
+                                 mode->value == "GT" || mode->value == "GE" ||
+                                 mode->value == "LT" || mode->value == "LE"))
           << "Malformed scalar comparison mode in " << name;
     }
     return config;

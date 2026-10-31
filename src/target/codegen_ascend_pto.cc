@@ -39,7 +39,7 @@ using BufferInfo = CodeGenTileLangAscendPto::BufferInfo;
 namespace {
 
 PrimExpr FindPtoAllocationAddress(const Map<tir::Var, PrimExpr> &addresses,
-                                 const tir::Var &buffer) {
+                                  const tir::Var &buffer) {
   if (auto address = addresses.Get(buffer))
     return address.value();
   // Older IR may retain a distinct Var in the allocation map. Preserve its

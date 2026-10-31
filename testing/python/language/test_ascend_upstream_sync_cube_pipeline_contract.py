@@ -69,12 +69,8 @@ def _capture(
         pytest.skip("Upstream synchronization requires Z3 ON")
     original = ast.parse(_EXAMPLE.read_text())
     # Exclude example main, argument parsing, cache clearing, and all tensor allocation.
-    nodes = [
-        n for n in original.body if isinstance(n, (ast.Import, ast.ImportFrom, ast.FunctionDef))
-    ]
-    module = _ScheduleVariant(stages, barriers, output_dtype).visit(
-        ast.Module(body=nodes, type_ignores=[])
-    )
+    nodes = [n for n in original.body if isinstance(n, (ast.Import, ast.ImportFrom, ast.FunctionDef))]
+    module = _ScheduleVariant(stages, barriers, output_dtype).visit(ast.Module(body=nodes, type_ignores=[]))
     source = ast.unparse(ast.fix_missing_locations(module))
     filename = directory / f"factory_{target}_{stages}_{barriers}_{output_dtype}.py"
     filename.write_text(source)
@@ -117,9 +113,7 @@ def _trace(function: tir.PrimFunc) -> list:
     records = []
 
     def number(expr, env):
-        value = tir.stmt_functor.substitute(
-            expr, {v: tir.const(x, v.dtype) for v, x in env.items()}
-        )
+        value = tir.stmt_functor.substitute(expr, {v: tir.const(x, v.dtype) for v, x in env.items()})
         result = analyzer.simplify(value)
         assert isinstance(result, tir.IntImm), str(result)
         return int(result)
@@ -144,9 +138,7 @@ def _trace(function: tir.PrimFunc) -> list:
                 walk(child, env)
         elif isinstance(stmt, tir.AttrStmt):
             if stmt.attr_key == "thread_extent":
-                for index in (
-                    range(number(stmt.value, env)) if stmt.node.thread_tag == "blockIdx.x" else (0,)
-                ):
+                for index in range(number(stmt.value, env)) if stmt.node.thread_tag == "blockIdx.x" else (0,):
                     walk(stmt.body, {**env, stmt.node.var: index})
             else:
                 walk(stmt.body, env)
@@ -162,16 +154,9 @@ def _trace(function: tir.PrimFunc) -> list:
             branch = stmt.then_case if number(stmt.condition, env) else stmt.else_case
             if branch is not None:
                 walk(branch, env)
-        elif (
-            isinstance(stmt, tir.Evaluate)
-            and isinstance(stmt.value, tir.Call)
-            and _name(stmt.value) in _OPS
-        ):
+        elif isinstance(stmt, tir.Evaluate) and isinstance(stmt.value, tir.Call) and _name(stmt.value) in _OPS:
             name = _name(stmt.value)
-            args = [
-                argument(a, env, name == "gemm_v0" and j == 3)
-                for j, a in enumerate(stmt.value.args)
-            ]
+            args = [argument(a, env, name == "gemm_v0" and j == 3) for j, a in enumerate(stmt.value.args)]
             records.append((name, args))
 
     walk(function.body, {})
@@ -181,9 +166,7 @@ def _trace(function: tir.PrimFunc) -> list:
 def _run(function: tir.PrimFunc, target: str) -> tir.PrimFunc:
     device = tvm.target.Target({"kind": "llvm", "model": target})
     with tvm.transform.PassContext(opt_level=3, config=_CONFIG):
-        return tilelang.transform.AscendInsertSync(device, "A3")(tvm.IRModule({"main": function}))[
-            "main"
-        ]
+        return tilelang.transform.AscendInsertSync(device, "A3")(tvm.IRModule({"main": function}))["main"]
 
 
 def _accept(function: tir.PrimFunc, target: str) -> tir.PrimFunc:
@@ -193,11 +176,7 @@ def _accept(function: tir.PrimFunc, target: str) -> tir.PrimFunc:
     assert _trace(function) == _trace(result)
 
     def check(node):
-        if (
-            isinstance(node, tir.Call)
-            and _name(node) == "gemm_v0"
-            and not isinstance(node.args[4], tir.IntImm)
-        ):
+        if isinstance(node, tir.Call) and _name(node) == "gemm_v0" and not isinstance(node.args[4], tir.IntImm):
             assert int(node.args[3].args[4]) == 3
 
     tir.stmt_functor.post_order_visit(result.body, check)
@@ -249,9 +228,7 @@ def test_pipeline_rejects_non_equivalent_gemm_branches(tmp_path, target, defect)
         else:
             args[4] = tir.call_extern("bool", "opaque_clear")
         changed += 1
-        return tir.IfThenElse(
-            node.condition, node.then_case, tir.Evaluate(tir.Call(call.dtype, call.op, args))
-        )
+        return tir.IfThenElse(node.condition, node.then_case, tir.Evaluate(tir.Call(call.dtype, call.op, args)))
 
     body = tir.stmt_functor.ir_transform(function.body, None, post, ["tir.IfThenElse"])
     assert changed > 0
@@ -271,20 +248,14 @@ def test_pipeline_rejects_forged_ring_stride(tmp_path, target):
         _run(function.with_attr("tl.ascend_physical_ring_provenance", rings), target)
 
 
-def _gm_input_shape(
-    function: tir.PrimFunc, rows: int, columns: int, update_logic: bool
-) -> tir.PrimFunc:
+def _gm_input_shape(function: tir.PrimFunc, rows: int, columns: int, update_logic: bool) -> tir.PrimFunc:
     parameter = function.params[0]
     old = function.buffer_map[parameter]
     buffers = dict(function.buffer_map.items())
     buffers[parameter] = tir.decl_buffer((rows, columns), old.dtype, data=old.data, name=old.name)
 
     def post(node):
-        if (
-            isinstance(node, tir.Call)
-            and _name(node) == "copy_gm_to_l1"
-            and node.args[1].args[1].same_as(old.data)
-        ):
+        if isinstance(node, tir.Call) and _name(node) == "copy_gm_to_l1" and node.args[1].args[1].same_as(old.data):
             args = list(node.args)
             args[3] = _i(columns)
             return tir.Call(node.dtype, node.op, args)
@@ -348,11 +319,7 @@ def test_pipeline_rejects_corrupted_dataflow_certificate(tmp_path, target, defec
             if isinstance(node, tir.AttrStmt) and node.attr_key == "tl.ascend_physical_ring_clock":
                 changed = True
                 return tir.AttrStmt(node.node, node.attr_key, node.value + _i(1), node.body)
-        elif (
-            isinstance(node, tir.Evaluate)
-            and isinstance(node.value, tir.Call)
-            and _name(node.value) == "copy_gm_to_l1"
-        ):
+        elif isinstance(node, tir.Evaluate) and isinstance(node.value, tir.Call) and _name(node.value) == "copy_gm_to_l1":
             changed = True
             if defect == "dropped_refresh":
                 return tir.Evaluate(_i(0))

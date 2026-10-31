@@ -217,10 +217,10 @@ PrimExpr BufferElements(const Buffer &buffer, ProofAnalyzer *analyzer) {
 // template dimensions. Admit only the dense FP32/zero-pad descriptor for which
 // both describe the same complete UB tile and the same GM row stride.
 void AuditPtoDescriptor(const PrimFunc &function, const CallNode *call,
-                         size_t offset, const Shape &shape,
-                         const CallNode *source, const CallNode *destination,
-                         const PrimExpr &rows, const PrimExpr &columns,
-                         const PrimExpr &stride, ProofAnalyzer *analyzer) {
+                        size_t offset, const Shape &shape,
+                        const CallNode *source, const CallNode *destination,
+                        const PrimExpr &rows, const PrimExpr &columns,
+                        const PrimExpr &stride, ProofAnalyzer *analyzer) {
   const char *reject = "PTO tail-copy profile: ";
   ICHECK(shape.element_type == "float") << reject << "requires FP32";
   ICHECK(call->args.size() > offset + 5)
@@ -257,12 +257,13 @@ void AuditPtoDescriptor(const PrimFunc &function, const CallNode *call,
          valid_rows == physical_rows && valid_columns == physical_columns &&
          physical_rows <=
              std::numeric_limits<int32_t>::max() / physical_columns)
-      << reject << "UB physical/template dimensions must match without padding "
-                    "or retyped views";
-  ICHECK(analyzer->CanProve(
-      Int64(destination->args[2], "PTO UB offset") == I64(0) &&
-      Int64(destination->args[3], "PTO UB extent") ==
-          I64(physical_rows * physical_columns)))
+      << reject
+      << "UB physical/template dimensions must match without padding "
+         "or retyped views";
+  ICHECK(analyzer->CanProve(Int64(destination->args[2], "PTO UB offset") ==
+                                I64(0) &&
+                            Int64(destination->args[3], "PTO UB extent") ==
+                                I64(physical_rows * physical_columns)))
       << reject << "requires a complete nonsliced UB root view";
   size_t allocations = 0;
   PostOrderVisit(function->body, [&](const ObjectRef &node) {
@@ -299,10 +300,10 @@ void AuditPtoDescriptor(const PrimFunc &function, const CallNode *call,
   }
   // ComputeStrides does not merge dimensions when srcN equals the final
   // dimension; its stride[3] is then exactly that dimension, stride[4] is 1.
-  ICHECK(analyzer->CanProve(stride == I64(dimension(gm.back())) &&
-                            rows <= I64(std::numeric_limits<int32_t>::max()) &&
-                            columns <=
-                                I64(std::numeric_limits<int32_t>::max())))
+  ICHECK(
+      analyzer->CanProve(stride == I64(dimension(gm.back())) &&
+                         rows <= I64(std::numeric_limits<int32_t>::max()) &&
+                         columns <= I64(std::numeric_limits<int32_t>::max())))
       << reject << "GM stride/masks must match the dense int32 descriptor";
 }
 
@@ -486,13 +487,12 @@ LegacyTailCopyPlan::AuditCall(const CallNode *call, size_t offset,
       BufferRegion(destination_region->buffer,
                    {Range::FromMinExtent(destination_offset, I64(elements))});
   state_->has_tail = true;
-  state_->reservations = state_->IsPto()
-                             ? std::map<std::string, std::set<int>>{
-                                   {"MTE2_V", {0}}, {"V_MTE2", {0}},
-                                   {"V_MTE3", {0}}}
-                             : std::map<std::string, std::set<int>>{
-                                   {"MTE2_V", {0}}, {"MTE3_V", {0}},
-                                   {"V_MTE2", {0}}};
+  state_->reservations =
+      state_->IsPto() ? std::map<std::string, std::set<int>>{{"MTE2_V", {0}},
+                                                             {"V_MTE2", {0}},
+                                                             {"V_MTE3", {0}}}
+                      : std::map<std::string, std::set<int>>{
+                            {"MTE2_V", {0}}, {"MTE3_V", {0}}, {"V_MTE2", {0}}};
   return LegacyTailCopyEffect{std::move(source_region),
                               std::move(destination_region)};
 }
