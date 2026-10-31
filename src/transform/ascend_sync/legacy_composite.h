@@ -72,10 +72,11 @@ struct LegacyCompositePlan {
 // collisions are rejected. A gemm's execution
 // owner is Cube; this does not assert support for mixed C/V functions as a
 // whole. Functions without composite helpers return an empty plan unchanged.
-// PTO/A3 has a separate flat profile: one FP16->FP32 M=N=16, K=128/256,
-// kL0Size=128, clear=true, n_actual=N, no transpose/base-pointer B1 call,
-// complete A/B GM refreshes and final FIX. Its hidden single L0 slot and six
-// event directions use ID1; AscendC's ping-pong reservations are not reused.
+// PTO/A3 derives a flat helper contract from static aligned FP16-to-FP32
+// geometry, actual descriptors, local pool capacities and scoped GM bounds.
+// Internal K chunks share one L0A/B slot and six ID1 event directions. A single
+// full A/B refresh, helper and final FIX is an invocation protocol boundary;
+// outer loops, rings and mixed C/V require separate protocols.
 LegacyCompositePlan AnalyzeLegacyComposites(const tir::PrimFunc &function,
                                             const Target &target,
                                             const String &platform);

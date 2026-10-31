@@ -17,6 +17,7 @@
 #include <charconv>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -78,6 +79,19 @@ void RequirePure(const PrimExpr &expression, const char *where) {
       << "Upstream Ascend sync legacy adapter requires a pure " << where
       << "; mutable reads and opaque calls cannot be re-evaluated as guards: "
       << expression;
+}
+
+std::optional<PrimExpr> LegacyAssumption(const Stmt &statement) {
+  const auto *evaluation = statement.as<EvaluateNode>();
+  const auto *call = evaluation ? evaluation->value.as<CallNode>() : nullptr;
+  const auto *op = call ? call->op.as<OpNode>() : nullptr;
+  if (!op || op->name != "tir.assume")
+    return std::nullopt;
+  ICHECK_EQ(call->args.size(), 1U) << "Malformed tir.assume predicate";
+  RequirePure(call->args[0], "tir.assume predicate");
+  ICHECK(call->args[0].dtype().is_scalar() && call->args[0].dtype().is_bool())
+      << "tir.assume requires a pure scalar boolean predicate";
+  return call->args[0];
 }
 
 std::string OperationName(const CallNode *call, size_t *argument_offset) {
@@ -961,9 +975,15 @@ private:
     if (root_chain)
       result_->export_state->root_scope_occurrence = occurrence;
     if (const auto *sequence = statement.as<SeqStmtNode>()) {
-      for (const Stmt &child : sequence->seq)
+      for (const Stmt &child : sequence->seq) {
         Import(child, siblings, parent, context, guards, explicit_resource,
                false, clocks);
+        // Import still counts the original assumption's occurrence so export
+        // anchors stay aligned. Its fact applies only to later siblings in
+        // this lexical sequence, not to an earlier or enclosing statement.
+        if (auto predicate = LegacyAssumption(child))
+          context.AddConstr(predicate.value(), true);
+      }
       return;
     }
     if (const auto *branch = statement.as<IfThenElseNode>()) {
@@ -1060,6 +1080,8 @@ private:
       return;
     }
     if (const auto *evaluate = statement.as<EvaluateNode>()) {
+      if (LegacyAssumption(statement))
+        return; // Compile-time information; preserve its original AST shell.
       if (evaluate->value.as<IntImmNode>())
         return;
     }

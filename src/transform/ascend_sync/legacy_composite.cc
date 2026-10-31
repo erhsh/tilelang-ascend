@@ -17,6 +17,7 @@
 #include <limits>
 #include <utility>
 
+#include "../common/attr.h"
 #include "../common/pipeline_ring_provenance.h"
 #include "upstream/constraints.h"
 
@@ -334,119 +335,451 @@ void ValidateKLoopCopy(const Call &copy, const Call &gemm_pointer,
   }
 }
 
-constexpr const char *kPtoProfile = "PTO flat gemm_v0 profile";
+constexpr const char *kPtoProfile = "PTO flat gemm_v0 contract";
 
-void CollectPtoFlatLeaves(const Stmt &statement, std::vector<Call> *leaves) {
-  if (const auto *sequence = statement.as<SeqStmtNode>()) {
-    for (const Stmt &child : sequence->seq)
-      CollectPtoFlatLeaves(child, leaves);
-  } else if (const auto *attribute = statement.as<AttrStmtNode>()) {
-    ICHECK(SideEffect(attribute->value) <= CallEffectKind::kPure)
-        << kPtoProfile << " requires pure lexical metadata";
-    if (attribute->attr_key == "resource_scope") {
-      const auto *scope = attribute->value.as<IntImmNode>();
-      ICHECK(scope != nullptr && scope->value == 0)
-          << kPtoProfile << " requires Cube-only execution";
-    }
-    CollectPtoFlatLeaves(attribute->body, leaves);
-  } else if (const auto *binding = statement.as<LetStmtNode>()) {
-    ICHECK(SideEffect(binding->value) <= CallEffectKind::kPure)
-        << kPtoProfile << " cannot import mutable scalar definitions";
-    CollectPtoFlatLeaves(binding->body, leaves);
-  } else if (const auto *allocation = statement.as<AllocateNode>()) {
-    CollectPtoFlatLeaves(allocation->body, leaves);
-  } else if (const auto *declaration = statement.as<DeclBufferNode>()) {
-    CollectPtoFlatLeaves(declaration->body, leaves);
-  } else if (const auto *evaluate = statement.as<EvaluateNode>()) {
-    if (evaluate->value.as<IntImmNode>())
-      return;
-    const auto *call = evaluate->value.as<CallNode>();
-    ICHECK(call != nullptr) << kPtoProfile << " requires canonical call leaves";
-    const std::string name = OperationName(call);
-    if (name == "set_flag" || name == "wait_flag" || name == "auto_set_flag" ||
-        name == "auto_wait_flag")
-      return; // Independently balanced and checked against hidden reservations.
-    ICHECK(name == "copy_gm_to_l1" || name == "gemm_v0" ||
-           name == "copy_l0c_to_gm")
-        << kPtoProfile
-        << " rejects extra compute, mixed C/V and unknown helpers";
-    leaves->push_back(GetRef<Call>(call));
-  } else {
-    LOG(FATAL) << kPtoProfile
-               << " requires flat execution without For/If/rings";
-  }
+int64_t PtoProduct(int64_t a, int64_t b) {
+  ICHECK(a > 0 && b > 0 && a <= std::numeric_limits<int64_t>::max() / b)
+      << kPtoProfile << ": physical footprint overflows int64";
+  return a * b;
 }
+
+void PtoConstant(const PrimExpr &value, int64_t expected) {
+  const auto *literal = value.as<IntImmNode>();
+  ICHECK(literal && literal->value == expected)
+      << kPtoProfile << ": operand disagrees with its semantic descriptor";
+}
+
+void PtoPure(const PrimExpr &value) {
+  ICHECK(value.defined() && SideEffect(value) <= CallEffectKind::kPure)
+      << kPtoProfile << ": mutable or opaque expressions are unsupported";
+}
+
+PrimExpr PtoInteger(const PrimExpr &value, ProofAnalyzer *analyzer) {
+  PtoPure(value);
+  const DataType dtype = value.dtype();
+  ICHECK(dtype.is_scalar() && !dtype.is_bool() &&
+         ((dtype.is_int() && dtype.bits() <= 64) ||
+          (dtype.is_uint() && dtype.bits() <= 32)))
+      << kPtoProfile << ": requires a value-preserving scalar index";
+  ICHECK(!ContainsUnsignedWrappingArithmetic(value))
+      << kPtoProfile << ": wrapping unsigned index arithmetic is unsupported";
+  // Prove intermediate signed arithmetic representable before using
+  // mathematical address bounds. This prevents overflow/cancellation from
+  // manufacturing a seemingly in-range final pointer.
+  PostOrderVisit(value, [&](const ObjectRef &node) {
+    const auto *expression = node.as<PrimExprNode>();
+    if (!expression || expression->dtype.is_bool() ||
+        (!expression->dtype.is_int() && !expression->dtype.is_uint()))
+      return;
+    PrimExpr divisor;
+    if (const auto *operation = node.as<FloorDivNode>())
+      divisor = operation->b;
+    else if (const auto *operation = node.as<DivNode>())
+      divisor = operation->b;
+    else if (const auto *operation = node.as<FloorModNode>())
+      divisor = operation->b;
+    else if (const auto *operation = node.as<ModNode>())
+      divisor = operation->b;
+    if (divisor.defined())
+      ICHECK(analyzer->CanProve(divisor != make_zero(divisor.dtype())))
+          << kPtoProfile << ": index division requires a nonzero divisor";
+    const int bits = expression->dtype.bits();
+    const bool unsigned_type = expression->dtype.is_uint();
+    ICHECK_LE(bits, unsigned_type ? 32 : 64) << kPtoProfile;
+    const int64_t minimum =
+        unsigned_type ? 0
+                      : (bits == 64 ? std::numeric_limits<int64_t>::min()
+                                    : -(int64_t(1) << (bits - 1)));
+    const int64_t maximum =
+        unsigned_type ? (int64_t(1) << bits) - 1
+                      : (bits == 64 ? std::numeric_limits<int64_t>::max()
+                                    : (int64_t(1) << (bits - 1)) - 1);
+    if (const auto *conversion = node.as<CastNode>()) {
+      const DataType source_type = conversion->value.dtype();
+      ICHECK(source_type.is_scalar() &&
+             ((source_type.is_int() && source_type.bits() <= 64) ||
+              (source_type.is_uint() && source_type.bits() <= 32)))
+          << kPtoProfile << ": index casts require integer source values";
+      const PrimExpr source = cast(DataType::Int(64), conversion->value);
+      ICHECK(analyzer->CanProve(source >= IntImm(DataType::Int(64), minimum) &&
+                                source <= IntImm(DataType::Int(64), maximum)))
+          << kPtoProfile << ": lossy index casts are unsupported";
+    }
+    const PrimExpr wide = cast(DataType::Int(64), GetRef<PrimExpr>(expression));
+    ICHECK(analyzer->CanProve(wide >= IntImm(DataType::Int(64), minimum) &&
+                              wide <= IntImm(DataType::Int(64), maximum)))
+        << kPtoProfile << ": cannot prove nonwrapping signed index arithmetic";
+  });
+  return cast(DataType::Int(64), value);
+}
+
+void PtoPredicate(const PrimExpr &predicate, const ConstrSet &context) {
+  PtoPure(predicate);
+  ICHECK(predicate.dtype().is_scalar() && predicate.dtype().is_bool())
+      << kPtoProfile << ": assumptions require a pure scalar boolean predicate";
+  ProofAnalyzer analyzer;
+  context.Populate(analyzer);
+  PostOrderVisit(predicate, [&](const ObjectRef &node) {
+    const auto *expression = node.as<PrimExprNode>();
+    if (expression && !expression->dtype.is_bool() &&
+        (expression->dtype.is_int() || expression->dtype.is_uint()))
+      PtoInteger(GetRef<PrimExpr>(expression), &analyzer);
+  });
+}
+
+// Geometry of the actual local helper, independently of any example shape.
+// For aligned FP16 tiles, codegen's round16(M/N) and round32B(K) are
+// identities.
+struct PtoGemmDescriptor {
+  int64_t m, n, k, k_l0, chunks, tail, max_chunk;
+  std::array<int64_t, 3> rows, columns, bytes;
+  int64_t l0a_bytes, l0b_bytes;
+
+  explicit PtoGemmDescriptor(const LegacyCompositeOperation &operation)
+      : m(operation.m), n(operation.n), k(operation.k), k_l0(operation.k_l0) {
+    const auto arguments = TemplateArguments(operation.call.get());
+    PtoConstant(operation.call->args[4], 1);
+    ICHECK(arguments[0] == "half" && arguments[1] == "float" &&
+           arguments[5] == "false" && arguments[6] == "false")
+        << kPtoProfile
+        << ": requires FP16-to-FP32, clear=true and no transpose";
+    ICHECK(m > 0 && n > 0 && k > 0 && k_l0 > 0 && m % 16 == 0 && n % 16 == 0 &&
+           k % 16 == 0 && k_l0 % 16 == 0)
+        << kPtoProfile
+        << ": requires static 16-aligned physical/valid dimensions";
+    chunks = 1 + (k - 1) / k_l0;
+    tail = k - (chunks - 1) * k_l0;
+    max_chunk = std::min(k, k_l0);
+    // MMAD dimensions are 12-bit; the total K belongs to L1 and is not the
+    // K dimension of an individual MMAD instruction.
+    // k_l0 has its own public API limit, even when the total K is smaller.
+    ICHECK_LE(k_l0, 4095)
+        << kPtoProfile << ": kL0Size exceeds the public API limit";
+    ICHECK(m <= 4095 && n <= 4095 && max_chunk <= 4095 && tail > 0 &&
+           tail % 16 == 0 && k <= 16384)
+        << kPtoProfile << ": MMAD/TLOAD dimensions exceed native field limits";
+    rows = {m, k, m};
+    columns = {k, n, n};
+    bytes = {PtoProduct(PtoProduct(m, k), 2), PtoProduct(PtoProduct(k, n), 2),
+             PtoProduct(PtoProduct(m, n), 4)};
+    // Each runtime K step uses ONE L0A/B slot at address zero. The final
+    // step uses tail, not k_l0, and k_l0 may be greater than the entire K.
+    l0a_bytes = PtoProduct(PtoProduct(m, max_chunk), 2);
+    l0b_bytes = PtoProduct(PtoProduct(max_chunk, n), 2);
+    ICHECK(l0a_bytes <= 65536 && l0b_bytes <= 65536 && bytes[2] <= 131072 &&
+           bytes[0] <= 524032 && bytes[1] <= 524032)
+        << kPtoProfile << ": helper footprint exceeds L0A/L0B/L0C/L1 capacity";
+  }
+};
+
+struct PtoFlatLeaf {
+  Call call;
+  ConstrSet context;
+};
+
+// Preserve lexical proof scopes. In particular an assumption in one sibling
+// scope must never justify a different sibling's GM address.
+class PtoFlatLeaves {
+public:
+  std::vector<PtoFlatLeaf> Run(const Stmt &body) {
+    Walk(body, {}, -1);
+    return std::move(leaves_);
+  }
+
+private:
+  bool Assume(const Stmt &statement, ConstrSet *context) {
+    const auto *evaluation = statement.as<EvaluateNode>();
+    const auto *call = evaluation ? evaluation->value.as<CallNode>() : nullptr;
+    const auto *op = call ? call->op.as<OpNode>() : nullptr;
+    if (!op || op->name != "tir.assume")
+      return false;
+    ICHECK_EQ(call->args.size(), 1U) << kPtoProfile;
+    PtoPredicate(call->args[0], *context);
+    context->AddConstr(call->args[0], true);
+    return true;
+  }
+
+  void Walk(const Stmt &statement, ConstrSet context, int resource) {
+    if (const auto *sequence = statement.as<SeqStmtNode>()) {
+      for (const Stmt &child : sequence->seq)
+        if (!Assume(child, &context))
+          Walk(child, context, resource);
+    } else if (const auto *attribute = statement.as<AttrStmtNode>()) {
+      PtoPure(attribute->value);
+      if (attribute->node.as<PrimExprNode>())
+        PtoPure(Downcast<PrimExpr>(attribute->node));
+      if (attribute->attr_key == "resource_scope") {
+        PtoConstant(attribute->value, 0);
+        resource = 0;
+      } else if (attribute->attr_key == "thread_extent" ||
+                 attribute->attr_key == "virtual_thread") {
+        const auto *iteration = attribute->node.as<IterVarNode>();
+        ICHECK(iteration && attribute->value.dtype().is_scalar() &&
+               attribute->value.dtype().is_int())
+            << kPtoProfile << ": malformed thread domain";
+        context.AddConstr(
+            iteration->var,
+            Range::FromMinExtent(make_zero(attribute->value.dtype()),
+                                 attribute->value));
+        context.AddConstr(attribute->value > 0);
+      } else if (attribute->attr_key == "tl.assume" ||
+                 attribute->attr_key == "tilelang_assume") {
+        ICHECK(attribute->node.as<PrimExprNode>()) << kPtoProfile;
+        const PrimExpr predicate = Downcast<PrimExpr>(attribute->node);
+        PtoPredicate(predicate, context);
+        context.AddConstr(predicate, true);
+      }
+      Walk(attribute->body, std::move(context), resource);
+    } else if (const auto *binding = statement.as<LetStmtNode>()) {
+      PtoPure(binding->value);
+      if ((binding->value.dtype().is_int() ||
+           binding->value.dtype().is_uint()) &&
+          !binding->value.dtype().is_bool()) {
+        ProofAnalyzer analyzer;
+        context.Populate(analyzer);
+        PtoInteger(binding->value, &analyzer);
+      }
+      context.AddConstr(binding->var, binding->value);
+      Walk(binding->body, std::move(context), resource);
+    } else if (const auto *allocation = statement.as<AllocateNode>()) {
+      ICHECK(is_one(allocation->condition))
+          << kPtoProfile << ": predicated allocations are unsupported";
+      Walk(allocation->body, std::move(context), resource);
+    } else if (const auto *declaration = statement.as<DeclBufferNode>()) {
+      Walk(declaration->body, std::move(context), resource);
+    } else if (const auto *evaluation = statement.as<EvaluateNode>()) {
+      if (evaluation->value.as<IntImmNode>() || Assume(statement, &context))
+        return;
+      const auto *call = evaluation->value.as<CallNode>();
+      ICHECK(call && (resource == -1 || resource == 0))
+          << kPtoProfile << ": requires Cube call leaves";
+      const std::string name = OperationName(call);
+      if (name == "set_flag" || name == "wait_flag" ||
+          name == "auto_set_flag" || name == "auto_wait_flag")
+        return; // Validated independently against the helper reservations.
+      ICHECK(name == "copy_gm_to_l1" || name == "gemm_v0" ||
+             name == "copy_l0c_to_gm")
+          << kPtoProfile
+          << ": extra compute or mixed C/V needs a separate protocol";
+      leaves_.push_back({GetRef<Call>(call), std::move(context)});
+    } else {
+      LOG(FATAL) << kPtoProfile
+                 << ": For/If/rings require a separate invocation protocol";
+    }
+  }
+  std::vector<PtoFlatLeaf> leaves_;
+};
+
+class PtoGemmAudit {
+public:
+  PtoGemmAudit(const PrimFunc &function,
+               const LegacyCompositeOperation &operation)
+      : function_(function), operation_(operation), geometry_(operation) {}
+
+  void Run() {
+    const auto shapes =
+        function_->GetAttr<Map<Var, Array<PrimExpr>>>(kLogicBufferShapes);
+    const auto addresses =
+        function_->GetAttr<Map<Var, PrimExpr>>("address_map");
+    const auto sizes = function_->GetAttr<Map<Var, PrimExpr>>("size_map");
+    ICHECK(shapes.defined() && addresses.defined() && sizes.defined())
+        << kPtoProfile
+        << ": requires authoritative descriptors and allocation maps";
+    shapes_ = shapes.value();
+    std::array<int64_t, 3> bases, spans;
+    std::array<Var, 3> roots;
+    for (size_t index = 0; index < 3; ++index) {
+      const Call &pointer = operation_.buffers[index].access_ptr;
+      roots[index] = Downcast<Var>(pointer->args[1]);
+      const DataType dtype = DataType::Float(index == 2 ? 32 : 16);
+      Descriptor(roots[index], geometry_.rows[index], geometry_.columns[index],
+                 true);
+      // A full root view is required. Subviews need their own fractal offset
+      // contract rather than relying on logical access_ptr extents.
+      PtoConstant(pointer->args[2], 0);
+      PtoConstant(pointer->args[3],
+                  PtoProduct(geometry_.rows[index], geometry_.columns[index]));
+      size_t allocations = 0;
+      int64_t allocation_bytes = 0;
+      PostOrderVisit(function_->body, [&](const ObjectRef &node) {
+        const auto *allocation = node.as<AllocateNode>();
+        if (!allocation || !allocation->buffer_var.same_as(roots[index]))
+          return;
+        ++allocations;
+        ICHECK(allocation->dtype == dtype && is_one(allocation->condition))
+            << kPtoProfile
+            << ": actual allocation dtype/condition disagrees with descriptor";
+        allocation_bytes = dtype.bytes();
+        for (const PrimExpr &extent : allocation->extents)
+          allocation_bytes = PtoProduct(allocation_bytes, Positive(extent));
+      });
+      ICHECK_EQ(allocations, 1U)
+          << kPtoProfile << ": requires unique allocation roots";
+      const auto address = addresses.value().Get(roots[index]);
+      const auto size = sizes.value().Get(roots[index]);
+      ICHECK(address.defined() && size.defined()) << kPtoProfile;
+      bases[index] = Nonnegative(address.value());
+      spans[index] = Positive(size.value());
+      const int64_t capacity = index == 2 ? 131072 : 524032;
+      ICHECK(allocation_bytes >= geometry_.bytes[index] &&
+             spans[index] >= allocation_bytes && bases[index] % 32 == 0 &&
+             spans[index] <= capacity &&
+             bases[index] <= capacity - spans[index])
+          << kPtoProfile
+          << ": actual allocation footprint exceeds its physical pool";
+    }
+    ICHECK(!roots[0].same_as(roots[1]) &&
+           (bases[0] + spans[0] <= bases[1] || bases[1] + spans[1] <= bases[0]))
+        << kPtoProfile << ": A/B L1 allocations overlap";
+    const auto leaves = PtoFlatLeaves().Run(function_->body);
+    ICHECK(leaves.size() == 4U && leaves[2].call.same_as(operation_.call) &&
+           OperationName(leaves[3].call.get()) == "copy_l0c_to_gm")
+        << kPtoProfile
+        << ": requires two full GM refreshes, one helper and one final FIX";
+    for (size_t index = 0; index < 2; ++index) {
+      const Call &copy = leaves[index].call;
+      ValidateKLoopCopy(copy, operation_.buffers[index].access_ptr, "half",
+                        geometry_.rows[index], geometry_.columns[index]);
+      GM(leaves[index], copy->args[1], DataType::Float(16),
+         geometry_.rows[index], geometry_.columns[index], 1, true);
+    }
+    Fix(leaves[3]);
+  }
+
+private:
+  static int64_t Nonnegative(const PrimExpr &value) {
+    const auto *literal = value.as<IntImmNode>();
+    ICHECK(literal && literal->value >= 0)
+        << kPtoProfile << ": requires static nonnegative metadata";
+    return literal->value;
+  }
+  static int64_t Positive(const PrimExpr &value) {
+    const int64_t result = Nonnegative(value);
+    ICHECK_GT(result, 0) << kPtoProfile;
+    return result;
+  }
+  void Descriptor(const Var &data, int64_t rows, int64_t columns,
+                  bool local) const {
+    const auto shape = shapes_.Get(data);
+    ICHECK(shape.defined() &&
+           (local ? shape.value().size() == 4U : shape.value().size() == 2U))
+        << kPtoProfile << ": missing physical/valid descriptor metadata";
+    for (size_t axis = 0; axis < shape.value().size(); ++axis)
+      PtoConstant(shape.value()[axis], axis % 2 == 0 ? rows : columns);
+  }
+  void GM(const PtoFlatLeaf &leaf, const PrimExpr &argument, DataType dtype,
+          int64_t rows, int64_t columns, int mask, bool input) const {
+    const auto *pointer = argument.as<CallNode>();
+    ICHECK(pointer && pointer->op.same_as(builtin::tvm_access_ptr()) &&
+           pointer->args.size() == 5U)
+        << kPtoProfile << ": malformed GM access pointer";
+    const auto *annotation = pointer->args[0].as<CallNode>();
+    ICHECK(annotation &&
+           annotation->op.same_as(Op::Get("tir.type_annotation")) &&
+           annotation->dtype == dtype)
+        << kPtoProfile << ": GM pointer dtype disagrees with copy semantics";
+    PtoConstant(pointer->args[3], PtoProduct(rows, columns));
+    PtoConstant(pointer->args[4], mask);
+    const Var data = Downcast<Var>(pointer->args[1]);
+    Optional<Buffer> parameter;
+    for (const auto &[key, buffer] : function_->buffer_map) {
+      if (!buffer->data.same_as(data))
+        continue;
+      ICHECK(!parameter.defined())
+          << kPtoProfile << ": ambiguous GM parameter root";
+      parameter = buffer;
+    }
+    ICHECK(parameter.defined() && parameter.value()->dtype == dtype &&
+           parameter.value()->shape.size() == 2U &&
+           parameter.value()->strides.empty() &&
+           is_zero(parameter.value()->elem_offset) &&
+           (parameter.value().scope().empty() ||
+            parameter.value().scope() == "global"))
+        << kPtoProfile
+        << ": requires dense GM parameters without retyped views";
+    const int64_t global_rows = Positive(parameter.value()->shape[0]);
+    const int64_t global_columns = Positive(parameter.value()->shape[1]);
+    const int64_t capacity = PtoProduct(global_rows, global_columns);
+    // ComputeStrides emits int32 template arguments, including full tensor
+    // products. Larger descriptors require a codegen ABI change, not a shape
+    // list.
+    ICHECK_LE(capacity, std::numeric_limits<int32_t>::max()) << kPtoProfile;
+    Descriptor(data, global_rows, global_columns, false);
+    ICHECK(global_columns >= columns &&
+           global_columns <=
+               (input ? 65535 : std::numeric_limits<int32_t>::max()))
+        << kPtoProfile << ": GM stride exceeds native DMA field limits";
+    ProofAnalyzer analyzer;
+    leaf.context.Populate(analyzer);
+    const PrimExpr offset = PtoInteger(pointer->args[2], &analyzer);
+    const PrimExpr stride = PtoInteger(leaf.call->args[3], &analyzer);
+    const PrimExpr width = IntImm(DataType::Int(64), global_columns);
+    // With srcN equal to the saved final GM dimension, ComputeStrides does
+    // not merge dimensions, so stride[3] is exactly this dense row pitch.
+    ICHECK(analyzer.CanProve(stride == width))
+        << kPtoProfile << ": copy stride disagrees with the codegen descriptor";
+    const int64_t span = PtoProduct(rows - 1, global_columns);
+    ICHECK_LE(span, std::numeric_limits<int64_t>::max() - columns)
+        << kPtoProfile;
+    const int64_t actual_span = span + columns;
+    ICHECK(actual_span <= capacity &&
+           analyzer.CanProve(
+               offset >= 0 &&
+               offset <= IntImm(DataType::Int(64), capacity - actual_span) &&
+             floormod(offset, width) <= width - IntImm(DataType::Int(64), columns)))
+        << kPtoProfile
+        << ": complete strided GM rectangle exceeds its parameter";
+  }
+  void Fix(const PtoFlatLeaf &leaf) const {
+    const Call &call = leaf.call;
+    ICHECK(call->op.same_as(builtin::call_extern()) && call->args.size() == 10U)
+        << kPtoProfile << ": requires canonical final FIX operands";
+    std::string symbol = Downcast<StringImm>(call->args[0])->value;
+    symbol.erase(
+        std::remove_if(symbol.begin(), symbol.end(),
+                       [](unsigned char c) { return std::isspace(c); }),
+        symbol.end());
+    ICHECK_EQ(symbol,
+              "tl::ascend::copy_l0c_to_gm<float,half,layout::RowMajor," +
+                  std::to_string(geometry_.m) + "," +
+                  std::to_string(geometry_.n) + ",0>")
+        << kPtoProfile
+        << ": requires FP32-to-FP16 row-major FIX without extra modes";
+    const auto *source = call->args[1].as<CallNode>();
+    ICHECK(source && source->op.same_as(builtin::tvm_access_ptr()) &&
+           source->args.size() == 5U &&
+           source->args[1].same_as(operation_.buffers[2].access_ptr->args[1]))
+        << kPtoProfile << ": final FIX must consume the audited accumulator";
+    const auto *annotation = source->args[0].as<CallNode>();
+    ICHECK(annotation &&
+           annotation->op.same_as(Op::Get("tir.type_annotation")) &&
+           annotation->dtype == DataType::Float(32))
+        << kPtoProfile;
+    PtoConstant(source->args[2], 0);
+    PtoConstant(source->args[3], PtoProduct(geometry_.m, geometry_.n));
+    PtoConstant(source->args[4], 1);
+    PtoConstant(call->args[4], geometry_.m);
+    PtoConstant(call->args[5], geometry_.n);
+    PtoConstant(call->args[6], geometry_.m);
+    PtoConstant(call->args[7], geometry_.n);
+    PtoConstant(call->args[8], 0);
+    PtoConstant(call->args[9], 0);
+    GM(leaf, call->args[2], DataType::Float(16), geometry_.m, geometry_.n, 2,
+       false);
+  }
+
+  PrimFunc function_;
+  const LegacyCompositeOperation &operation_;
+  PtoGemmDescriptor geometry_;
+  Map<Var, Array<PrimExpr>> shapes_;
+};
 
 void ValidatePtoFlat(const PrimFunc &function,
                      const LegacyCompositePlan &plan) {
   ICHECK_EQ(plan.operations.size(), 1U)
-      << kPtoProfile << " requires one helper";
-  const LegacyCompositeOperation &operation = plan.operations.begin()->second;
-  const Call &gemm = operation.call;
-  const auto arguments = TemplateArguments(gemm.get());
-  const auto *clear = gemm->args[4].as<IntImmNode>();
-  ICHECK(operation.m == 16 && operation.n == 16 &&
-         (operation.k == 128 || operation.k == 256) && operation.k_l0 == 128 &&
-         arguments[0] == "half" && arguments[1] == "float" &&
-         arguments[5] == "false" && arguments[6] == "false" &&
-         clear != nullptr && clear->value == 1)
       << kPtoProfile
-      << " requires FP16->FP32 M=N=16, K=128/256, kL0Size=128, "
-         "clear=true and no transpose";
-  // PTO codegen rounds M/N to 16 and K to a 32-byte column. In this profile
-  // these are identities. Both TEXTRACT destinations use address 0; the real
-  // per-step L0A/B spans are 16*128*2 = 4096 bytes, one slot in each 64KiB
-  // hardware pool. There is no N tiling or AscendC two-slot scratch contract.
-  const auto shapes =
-      function->GetAttr<Map<Var, Array<PrimExpr>>>("buffer_shapess");
-  ICHECK(shapes.defined()) << kPtoProfile
-                           << " requires final descriptor shapes";
-  const int64_t rows[] = {16, operation.k, 16};
-  const int64_t columns[] = {operation.k, 16, 16};
-  for (size_t index = 0; index < 3; ++index) {
-    const Var data =
-        Downcast<Var>(operation.buffers[index].access_ptr->args[1]);
-    const auto shape = shapes.value().Get(data);
-    ICHECK(shape.defined() &&
-           (shape.value().size() == 2U || shape.value().size() == 4U))
-        << kPtoProfile << " requires canonical complete descriptor shapes";
-    for (size_t axis = 0; axis < shape.value().size(); ++axis) {
-      const auto *dimension = shape.value()[axis].as<IntImmNode>();
-      ICHECK(dimension != nullptr &&
-             dimension->value == (axis % 2 == 0 ? rows[index] : columns[index]))
-          << kPtoProfile
-          << " descriptor shape disagrees with actual helper footprint";
-    }
-  }
-  std::vector<Call> leaves;
-  CollectPtoFlatLeaves(function->body, &leaves);
-  ICHECK(leaves.size() == 4U && leaves[2].same_as(gemm) &&
-         OperationName(leaves[3].get()) == "copy_l0c_to_gm")
-      << kPtoProfile << " requires A/B full GM-to-L1, one gemm and final FIX";
-  ValidateKLoopCopy(leaves[0], operation.buffers[0].access_ptr, "half", 16,
-                    operation.k);
-  ValidateKLoopCopy(leaves[1], operation.buffers[1].access_ptr, "half",
-                    operation.k, 16);
-  ICHECK_GE(leaves[3]->args.size(), 6U)
-      << kPtoProfile << " requires canonical final FIX operands";
-  const auto *source = leaves[3]->args[1].as<CallNode>();
-  ICHECK(source != nullptr && source->op.same_as(builtin::tvm_access_ptr()) &&
-         source->args.size() == 5U &&
-         source->args[1].same_as(operation.buffers[2].access_ptr->args[1]))
-      << kPtoProfile << " final FIX must consume the audited accumulator";
-  const auto *annotation = source->args[0].as<CallNode>();
-  ICHECK(annotation != nullptr && annotation->dtype == DataType::Float(32))
-      << kPtoProfile << " final FIX requires an FP32 accumulator";
-  for (const auto &[value, expected] :
-       {std::pair<PrimExpr, int64_t>{source->args[2], 0},
-        {source->args[3], 256},
-        {leaves[3]->args[4], 16},
-        {leaves[3]->args[5], 16}}) {
-    const auto *constant = value.as<IntImmNode>();
-    ICHECK(constant != nullptr && constant->value == expected)
-        << kPtoProfile
-        << " final FIX footprint must be the full base accumulator";
-  }
+      << ": multiple helper invocations need a separate protocol";
+  PtoGemmAudit(function, plan.operations.begin()->second).Run();
 }
 
 // This is a certificate/admission audit of materialized legacy SIP, not a
