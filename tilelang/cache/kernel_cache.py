@@ -170,6 +170,12 @@ class KernelCache:
                 compile_flags=compile_flags,
             )
 
+        from tilelang.jit.ascend_runtime_contract import prepare_auto_gm_contract
+
+        # Direct cached() calls need the same allocator contract as compile().
+        # Prepare it before hashing so cache lookup and publication agree.
+        func = prepare_auto_gm_contract(func, execution_backend, target)
+
         key = self._generate_key(
             func=func,
             out_idx=out_idx,
