@@ -22,10 +22,13 @@ struct LegacyTailCopyEffect {
   tir::BufferRegion destination_write;
 };
 
-// Audits the existing AscendC GM-to-UB helper without rewriting its invocation.
+// Audits the existing GM-to-UB helpers without rewriting their invocations.
 // Both runtime paths have an MTE2 acquire/completion boundary: on the padded
 // path MTE2_V#0 places Duplicate after acquire, and V_MTE2#0 places its writes
 // before DMA/completion. Explicit events must not use those helper-owned IDs.
+// The bounded PTO profile instead executes TLOAD before TFILLPAD_INPLACE;
+// MTE2_V#0 orders the fill after the DMA, and V_MTE2#0 feeds completion back
+// to MTE2. It additionally reserves V_MTE3#0, rather than MTE3_V#0.
 class LegacyTailCopyPlan {
 public:
   LegacyTailCopyPlan(const tir::PrimFunc &function, const Target &target,

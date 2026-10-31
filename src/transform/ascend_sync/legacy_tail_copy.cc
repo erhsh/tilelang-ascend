@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "../common/attr.h"
 #include "../common/pipeline_ring_provenance.h"
 
 namespace tvm::tl::ascend_sync {
@@ -212,6 +213,99 @@ PrimExpr BufferElements(const Buffer &buffer, ProofAnalyzer *analyzer) {
   return elements;
 }
 
+// PTO GMCopyCall uses saved physical descriptors, not the AscendC helper's
+// template dimensions. Admit only the dense FP32/zero-pad descriptor for which
+// both describe the same complete UB tile and the same GM row stride.
+void AuditPtoDescriptor(const PrimFunc &function, const CallNode *call,
+                         size_t offset, const Shape &shape,
+                         const CallNode *source, const CallNode *destination,
+                         const PrimExpr &rows, const PrimExpr &columns,
+                         const PrimExpr &stride, ProofAnalyzer *analyzer) {
+  const char *reject = "PTO tail-copy profile: ";
+  ICHECK(shape.element_type == "float") << reject << "requires FP32";
+  ICHECK(call->args.size() > offset + 5)
+      << reject << "requires an explicit literal zero padding value";
+  const PrimExpr &pad = call->args[offset + 5];
+  const auto *integer_pad = pad.as<IntImmNode>();
+  const auto *float_pad = pad.as<FloatImmNode>();
+  ICHECK((integer_pad && integer_pad->value == 0) ||
+         (float_pad && float_pad->value == 0.0))
+      << reject << "requires an explicit literal zero padding value";
+  const auto shapes =
+      function->GetAttr<Map<Var, Array<PrimExpr>>>(kLogicBufferShapes);
+  const Var source_data = Downcast<Var>(source->args[1]);
+  const Var destination_data = Downcast<Var>(destination->args[1]);
+  ICHECK(shapes.defined() && shapes.value().count(source_data) &&
+         shapes.value().count(destination_data))
+      << reject << "requires final GM/UB physical shape metadata";
+  const auto &ub = shapes.value().at(destination_data);
+  ICHECK(ub.size() == 2 || ub.size() == 4)
+      << reject << "requires a dense two-dimensional UB descriptor";
+  auto dimension = [&](const PrimExpr &value) {
+    const auto *constant = value.as<IntImmNode>();
+    ICHECK(constant && constant->value > 0 &&
+           constant->value <= std::numeric_limits<int32_t>::max())
+        << reject << "requires static positive int32 descriptor dimensions";
+    return constant->value;
+  };
+  const int64_t physical_rows = dimension(ub[0]);
+  const int64_t physical_columns = dimension(ub[1]);
+  const int64_t valid_rows = ub.size() == 4 ? dimension(ub[2]) : physical_rows;
+  const int64_t valid_columns =
+      ub.size() == 4 ? dimension(ub[3]) : physical_columns;
+  ICHECK(physical_rows == shape.rows && physical_columns == shape.columns &&
+         valid_rows == physical_rows && valid_columns == physical_columns &&
+         physical_rows <=
+             std::numeric_limits<int32_t>::max() / physical_columns)
+      << reject << "UB physical/template dimensions must match without padding "
+                    "or retyped views";
+  ICHECK(analyzer->CanProve(
+      Int64(destination->args[2], "PTO UB offset") == I64(0) &&
+      Int64(destination->args[3], "PTO UB extent") ==
+          I64(physical_rows * physical_columns)))
+      << reject << "requires a complete nonsliced UB root view";
+  size_t allocations = 0;
+  PostOrderVisit(function->body, [&](const ObjectRef &node) {
+    const auto *allocation = node.as<AllocateNode>();
+    if (allocation && allocation->buffer_var.same_as(destination_data)) {
+      ++allocations;
+      // Codegen records the Allocate dtype separately from logical views and
+      // disables padding on retyped pointers. Check that actual dtype too.
+      ICHECK(allocation->dtype == DataType::Float(32))
+          << reject << "requires an FP32 UB allocation without retyped views";
+    }
+  });
+  ICHECK_EQ(allocations, 1U)
+      << reject << "requires one explicit UB allocation root";
+  size_t parameters = 0;
+  for (const auto &[parameter, buffer] : function->buffer_map) {
+    if (buffer->data.same_as(source_data)) {
+      ++parameters;
+      ICHECK(buffer->dtype == DataType::Float(32))
+          << reject << "requires an FP32 GM parameter without retyped views";
+    }
+  }
+  ICHECK_EQ(parameters, 1U)
+      << reject << "requires one explicit GM parameter root";
+  const auto &gm = shapes.value().at(source_data);
+  ICHECK(gm.size() >= 2 && gm.size() <= 4)
+      << reject << "requires static dense GM shape metadata";
+  int64_t suffix = 1;
+  for (size_t index = gm.size(); index != 0; --index) {
+    const int64_t extent = dimension(gm[index - 1]);
+    ICHECK(suffix <= std::numeric_limits<int32_t>::max() / extent)
+        << reject << "GM descriptor strides exceed int32";
+    suffix *= extent;
+  }
+  // ComputeStrides does not merge dimensions when srcN equals the final
+  // dimension; its stride[3] is then exactly that dimension, stride[4] is 1.
+  ICHECK(analyzer->CanProve(stride == I64(dimension(gm.back())) &&
+                            rows <= I64(std::numeric_limits<int32_t>::max()) &&
+                            columns <=
+                                I64(std::numeric_limits<int32_t>::max())))
+      << reject << "GM stride/masks must match the dense int32 descriptor";
+}
+
 } // namespace
 
 struct LegacyTailCopyPlan::State {
@@ -223,13 +317,19 @@ struct LegacyTailCopyPlan::State {
   std::vector<ManualEvent> manual_events;
   std::map<std::string, std::set<int>> reservations;
 
+  bool IsPto() const {
+    return target.defined() &&
+           target->GetAttr<String>("model").value_or(String()) == "pto";
+  }
+
   void RequireSupportedFunction() const {
     const String model =
         target.defined() ? target->GetAttr<String>("model").value_or(String())
                          : String();
-    ICHECK((platform == "A2" || platform == "A3") &&
-           (model == "ascendc" || model == "auto"))
-        << kError << "requires AscendC on A2/A3";
+    ICHECK(((platform == "A2" || platform == "A3") &&
+            (model == "ascendc" || model == "auto")) ||
+           (platform == "A3" && IsPto()))
+        << kError << "requires AscendC on A2/A3 or the bounded PTO A3 profile";
     ICHECK(!has_pipeline)
         << kError << "software pipelines require a later tail-ring contract";
     for (const char *key : {"buffer_versions", "tl.buffer_versions_map"}) {
@@ -340,6 +440,9 @@ LegacyTailCopyPlan::AuditCall(const CallNode *call, size_t offset,
       Int64(destination->args[2], "UB pointer offset");
   const PrimExpr source_span = (rows - I64(1)) * stride + columns;
   const PrimExpr source_capacity = BufferElements(source_buffer, &analyzer);
+  if (state_->IsPto())
+    AuditPtoDescriptor(state_->function, call, offset, shape, source,
+                       destination, rows, columns, stride, &analyzer);
   ICHECK(analyzer.CanProve(
       source_offset >= I64(0) && source_span <= source_capacity &&
       source_offset <= source_capacity - source_span &&
@@ -361,6 +464,9 @@ LegacyTailCopyPlan::AuditCall(const CallNode *call, size_t offset,
          address->value <= std::numeric_limits<int64_t>::max() - size->value)
       << kError << "requires a static nonnegative UB allocation span";
   const int64_t tile_bytes = elements * bytes;
+  if (state_->IsPto())
+    ICHECK(address->value <= std::numeric_limits<int32_t>::max() - tile_bytes)
+        << "PTO tail-copy profile: UB address/span exceeds int32";
   ICHECK(tile_bytes <= size->value &&
          analyzer.CanProve(
              destination_offset >= I64(0) &&
@@ -380,7 +486,13 @@ LegacyTailCopyPlan::AuditCall(const CallNode *call, size_t offset,
       BufferRegion(destination_region->buffer,
                    {Range::FromMinExtent(destination_offset, I64(elements))});
   state_->has_tail = true;
-  state_->reservations = {{"MTE2_V", {0}}, {"MTE3_V", {0}}, {"V_MTE2", {0}}};
+  state_->reservations = state_->IsPto()
+                             ? std::map<std::string, std::set<int>>{
+                                   {"MTE2_V", {0}}, {"V_MTE2", {0}},
+                                   {"V_MTE3", {0}}}
+                             : std::map<std::string, std::set<int>>{
+                                   {"MTE2_V", {0}}, {"MTE3_V", {0}},
+                                   {"V_MTE2", {0}}};
   return LegacyTailCopyEffect{std::move(source_region),
                               std::move(destination_region)};
 }
