@@ -461,15 +461,81 @@ GetWorkspaceOpConfigs() {
   return ops;
 }
 
-inline OperationConfig ResolveOperationConfig(const tvm::tir::CallNode *call) {
-  const auto *op_node = call->op.as<tvm::OpNode>();
-  ICHECK(op_node);
-  const auto config_it = GetOperationConfig().find(op_node->name);
+inline OperationConfig ResolveOperationConfig(const tvm::tir::CallNode *call,
+                                              const std::string &name,
+                                              size_t argument_offset) {
+  const bool scalar_binary =
+      name == "tl.ascend_adds" || name == "tl.ascend_muls" ||
+      name == "tl.ascend_subs" || name == "tl.ascend_divs" ||
+      name == "tl.ascend_maxs" || name == "tl.ascend_mins";
+  const bool scalar_compare = name == "tl.ascend_compare_scalar";
+  const bool external_scalar =
+      name == "AscendC::Adds" || name == "AscendC::Muls" ||
+      name == "AscendC::Subs" || name == "AscendC::Divs" ||
+      name == "AscendC::Maxs" || name == "AscendC::Mins" ||
+      name == "AscendC::CompareScalar";
+  ICHECK(!external_scalar)
+      << "Scalar call_extern operand ABI is not audited for " << name;
+  const auto config_it = GetOperationConfig().find(name);
   ICHECK(config_it != GetOperationConfig().end())
-      << "Missing operation configuration for " << op_node->name;
+      << "Missing operation configuration for " << name;
 
   OperationConfig config = config_it->second;
-  if (!GetWorkspaceOpConfigs().count(op_node)) {
+  if (scalar_binary || scalar_compare) {
+    ICHECK_EQ(argument_offset, 0U)
+        << "Scalar call_extern operand ABI is not audited for " << name;
+    // The public scalar intrinsics have two ABIs: a scalar value, or a
+    // buffer pointer followed by its scalar index. Do not discard that read
+    // when fixing the immediate-value form's overly broad catalog entry.
+    const size_t scalar_arity = scalar_compare ? 5U : 4U;
+    ICHECK_GE(call->args.size(), argument_offset);
+    const size_t arity = call->args.size() - argument_offset;
+    ICHECK(arity == scalar_arity || arity == scalar_arity + 1)
+        << "Malformed scalar operand arity in " << name;
+    const bool buffer_scalar = arity == scalar_arity + 1;
+    auto require_pointer = [&](size_t index) {
+      const auto *pointer =
+          call->args[argument_offset + index].as<tvm::tir::CallNode>();
+      ICHECK(pointer != nullptr &&
+             pointer->op.same_as(tvm::tir::builtin::tvm_access_ptr()) &&
+             pointer->args.size() == 5U)
+          << "Malformed buffer operand " << index << " in " << name;
+    };
+    auto require_integer = [&](size_t index) {
+      const DataType dtype = call->args[argument_offset + index].dtype();
+      ICHECK(dtype.is_scalar() && !dtype.is_bool() &&
+             (dtype.is_int() || dtype.is_uint()))
+          << "Malformed scalar index/count in " << name;
+    };
+    require_pointer(0);
+    require_pointer(1);
+    config.buffer_accesses = {{0, "write"}, {1, "read"}};
+    if (buffer_scalar) {
+      require_pointer(2);
+      require_integer(3);
+      config.buffer_accesses.emplace_back(2, "read");
+    } else {
+      const DataType dtype = call->args[argument_offset + 2].dtype();
+      ICHECK(dtype.is_scalar() &&
+             (dtype.is_int() || dtype.is_uint() || dtype.is_float() ||
+              dtype.is_bfloat16()))
+          << "Malformed scalar value in " << name;
+    }
+    require_integer(arity - 1);
+    if (scalar_compare) {
+      const auto *mode =
+          call->args[argument_offset + arity - 2].as<tvm::tir::StringImmNode>();
+      ICHECK(mode != nullptr &&
+             (mode->value == "EQ" || mode->value == "NE" ||
+              mode->value == "GT" || mode->value == "GE" ||
+              mode->value == "LT" || mode->value == "LE"))
+          << "Malformed scalar comparison mode in " << name;
+    }
+    return config;
+  }
+  const auto *op_node = call->op.as<tvm::OpNode>();
+  if (argument_offset != 0 || op_node == nullptr ||
+      !GetWorkspaceOpConfigs().count(op_node)) {
     return config;
   }
 
@@ -495,6 +561,12 @@ inline OperationConfig ResolveOperationConfig(const tvm::tir::CallNode *call) {
     }
   }
   return config;
+}
+
+inline OperationConfig ResolveOperationConfig(const tvm::tir::CallNode *call) {
+  const auto *op_node = call->op.as<tvm::OpNode>();
+  ICHECK(op_node);
+  return ResolveOperationConfig(call, op_node->name, 0);
 }
 
 } // namespace tl

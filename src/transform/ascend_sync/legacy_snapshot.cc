@@ -161,8 +161,7 @@ private:
     auto configured = GetOperationConfig().find(name);
     if (configured == GetOperationConfig().end())
       return GetRef<Stmt>(op); // The importer diagnoses unknown operations.
-    const OperationConfig config =
-        offset == 0 ? ResolveOperationConfig(call) : configured->second;
+    const OperationConfig config = ResolveOperationConfig(call, name, offset);
     std::unordered_set<size_t> buffer_arguments;
     for (const auto &[index, access] : config.buffer_accesses)
       buffer_arguments.insert(offset + index);

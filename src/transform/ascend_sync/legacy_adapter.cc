@@ -511,8 +511,7 @@ private:
           << name;
       return false;
     }
-    OperationConfig config =
-        offset == 0 ? ResolveOperationConfig(call) : configured->second;
+    OperationConfig config = ResolveOperationConfig(call, name, offset);
     std::optional<LegacyTailCopyEffect> tail_copy;
     if (helper == "copy_gm_to_ub") {
       tail_copy =
