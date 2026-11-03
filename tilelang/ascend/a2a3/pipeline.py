@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import tilelang
 from tilelang import tvm
 from tvm import s_tir, tirx
@@ -14,6 +16,8 @@ from . import transform as ascend_transform
 from .platform import resolve_a2a3_platform
 from .transform.constant import normalize_constants
 from .target import target_is_ascend_a2a3, target_is_pto_a2a3
+
+logger = logging.getLogger(__name__)
 
 
 def get_device_kernel(mod):
@@ -133,6 +137,66 @@ def _record_pto_cthread_modes(mod):
     return result
 
 
+# Main-line A5 auto-schedule pass chain, reused verbatim through the shared
+# `tl.transform.*` FFI registry (all of these .cc files are already compiled
+# into the same libtilelang.so via the parent src/ascend file(GLOB)). Names are
+# the main-line pass names, deliberately not A2A3-prefixed, because this path
+# intentionally reuses the A5 implementation rather than forking it.
+_A5_AUTOSCHEDULE_CHAIN = (
+    ("NormalizeControlFlowForSchedule", "NormalizeControlFlowForSchedule"),
+    ("NormalizeConflictHints", "NormalizeConflictHints"),
+    ("MaterializeScheduleUnits", "MaterializeScheduleUnits"),
+    ("AssignCore", "AssignCore"),
+    ("AnnotateMultiBufferEligible", "AnnotateMultiBufferEligible"),
+    ("EstimateLatency", "EstimateLatency"),
+    ("AutoSchedule", "AutoSchedule"),
+    ("PrepareMultiBuffer", "PrepareMultiBuffer"),
+    ("ResolveCore", "ResolveCore"),
+    ("InsertSync", "InsertSync"),
+    ("MaterializeMultiBuffer", "MaterializeMultiBuffer"),
+    ("LowerScheduledTIR", "LowerScheduledTIR"),
+    ("RestoreWhileLoops", "RestoreWhileLoops"),
+)
+
+
+def _a2a3_autoschedule_enabled() -> bool:
+    """Return whether the A2/A3 backend should reuse the main-line auto-scheduler.
+
+    Reuses the shared ``TL_ENABLE_AUTO_SCHEDULE`` key but defaults to ``False``
+    here, because the A2/A3 backend ships its own ``AscendSyncInsert`` path by
+    default. A5 (in tilelang/ascend/pipeline.py) independently defaults the
+    same key to ``True``; the two backends are mutually exclusive per target.
+    """
+    pass_ctx = tilelang.transform.get_pass_context()
+    return pass_ctx.config.get(tilelang.PassConfigKey.TL_ENABLE_AUTO_SCHEDULE, False)
+
+
+def _lower_a2a3_autoschedule(mod, target, platform):
+    """POC probe: reuse the main-line A5 auto-schedule + InsertSync chain.
+
+    This is a technology-verification path, not yet a production path. It runs
+    the A5 chain verbatim on the A2/A3 IR (after kernel-launch materialization,
+    before LowerAndLegalize/LowerTileOp) and reports each pass. The chain is
+    expected to fail early because the TA dialect does not emit the A5
+    ``T.Stage``/``tl.vf_latency``/schedule-unit annotations; the first failure
+    point is exactly what this probe is meant to surface.
+    """
+    from tilelang.transform import _ffi_api
+
+    logger.info("A2/A3 auto-schedule path enabled (reusing main-line A5 chain).")
+    for name, ffi_name in _A5_AUTOSCHEDULE_CHAIN:
+        factory = getattr(_ffi_api, ffi_name, None)
+        if factory is None:
+            raise RuntimeError(f"A2/A3 auto-schedule missing main-line pass tl.transform.{ffi_name}.")
+        try:
+            mod = factory()(mod)
+            logger.info("A2/A3 auto-schedule %s passed.", name)
+        except Exception as exc:
+            logger.error("A2/A3 auto-schedule failed at %s: %s", name, exc)
+            raise RuntimeError(f"A2/A3 auto-schedule failed at {name}: {exc}") from exc
+    return mod
+
+
 def LowerAndLegalize(mod, target):
     """Preserve TA 0deb8b93 phase.py LowerAndLegalize order."""
     mod = ascend_transform.AscendInferBufferScope()(mod)
@@ -220,6 +284,8 @@ def _lower_a2a3(mod, target):
     )(mod)
     if target_is_pto_a2a3(target):
         mod = _record_pto_cthread_modes(mod)
+    if _a2a3_autoschedule_enabled():
+        return _lower_a2a3_autoschedule(mod, target, platform)
     mod = LowerAndLegalize(mod, target)
     return OptimizeForTarget(mod, target, platform)
 
