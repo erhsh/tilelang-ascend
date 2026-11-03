@@ -1,23 +1,21 @@
-# A2/A3 Reuse of Main-line A5 Auto-Schedule: POC Findings
+# A2/A3 复用主线 A5 自动调度：POC 技术验证结论
 
-Branch: `feat/a2a3-reuse-a5-autosync`
-Probe script: `/tmp/opencode/probe_autoschedule.py`
+分支：`feat/a2a3-reuse-a5-autosync`
+探针脚本：`/tmp/opencode/probe_autoschedule.py`
 
-## Goal
+## 背景与目标
 
-Verify whether the A2/A3 backend (`tilelang/ascend/a2a3`, `src/ascend/a2a3`)
-can reuse the main-line A5 auto-scheduler and its `InsertSync` pass
-(`src/ascend/transform/auto_schedule/*`, `insert_sync.cc`) for automatic
-synchronization insertion.
+验证 A2/A3 后端（`tilelang/ascend/a2a3`、`src/ascend/a2a3`）能否复用主线
+A5 的自动调度器及其 `InsertSync` 同步插入 pass（
+`src/ascend/transform/auto_schedule/*`、`insert_sync.cc`）来完成自动插同步。
 
-## Approach
+## 方法
 
-The A5 auto-schedule passes are already compiled into the shared
-`libtilelang.so` (the parent `src/ascend/CMakeLists.txt` globs
-`src/ascend/transform/*.cc` and `.../auto_schedule/*.cc`) and registered as
-`tl.transform.*`. The A2/A3 pipeline was given an opt-in branch gated by
-`PassConfigKey.TL_ENABLE_AUTO_SCHEDULE` (default `False`) that calls the A5
-chain verbatim:
+A5 的自动调度 pass 已经被编译进共享的 `libtilelang.so`（父级
+`src/ascend/CMakeLists.txt` 通过 `file(GLOB)` 把 `src/ascend/transform/*.cc`
+和 `.../auto_schedule/*.cc` 全部纳入），并以 `tl.transform.*` 注册。于是给
+A2/A3 的流水线加了一个由 `PassConfigKey.TL_ENABLE_AUTO_SCHEDULE`（默认
+`False`）控制的可选分支，逐字调用 A5 链：
 
 ```
 NormalizeControlFlowForSchedule -> NormalizeConflictHints
@@ -27,76 +25,67 @@ NormalizeControlFlowForSchedule -> NormalizeConflictHints
 -> RestoreWhileLoops
 ```
 
-This is a technology-verification probe only (see
-`_lower_a2a3_autoschedule` in `tilelang/ascend/a2a3/pipeline.py`).
+这只是技术验证探针（见 `tilelang/ascend/a2a3/pipeline.py` 中的
+`_lower_a2a3_autoschedule`），并非生产路径。
 
-## Finding 1: Whole-pipeline reuse is blocked by the dialect boundary
+## 结论一：整套搬迁被方言边界硬阻塞
 
-Probing an A2/A3 `gemm_v0` kernel (`T.Scope("C")`, `T.Pipelined`) with
-`TL_ENABLE_AUTO_SCHEDULE=True` fails at the first substantive pass:
+对 A2/A3 的 `gemm_v0` kernel（`T.Scope("C")`、`T.Pipelined`）开启
+`TL_ENABLE_AUTO_SCHEDULE=True` 编译，在第一个实质性 pass 即失败：
 
 ```
 MaterializeScheduleUnits: Check failed: (IsScheduleGuardAttribute(op->attr_key))
   is false: ... Unsupported attr_key: resource_scope
 ```
 
-- `T.Scope("C"/"V")` emits a `resource_scope` `AttrStmt` during eager tracing
-  (`src/ascend/a2a3/ir.cc:240`): `Scope("C") -> 0`, `Scope("V") -> 1`. This is
-  the TA dialect's cube/vector separation, consumed throughout lowering
-  (`lower_tile_op`, `ascend_sync_insert`, `combinecv`).
-- The A5 scheduled-TIR codec only accepts `tilelang_assume` /
-  `kAssumeRequiresRuntimeCheck` as scheduling guards
-  (`src/ascend/transform/auto_schedule/scheduled_tir.h:62`); it has no notion
-  of `resource_scope`.
+- `T.Scope("C"/"V")` 在 eager trace 阶段就产生 `resource_scope` 的
+  `AttrStmt`（`src/ascend/a2a3/ir.cc:240`）：`Scope("C") -> 0`、`Scope("V")
+  -> 1`。这是 TA 方言的 cube/vector 分离语义，贯穿整个 lowering（
+  `lower_tile_op`、`ascend_sync_insert`、`combinecv` 都消费它）。
+- A5 的 scheduled-TIR 编解码器只认可 `tilelang_assume` /
+  `kAssumeRequiresRuntimeCheck` 两种调度 guard（
+  `src/ascend/transform/auto_schedule/scheduled_tir.h:62`），完全没有
+  `resource_scope` 概念。
 
-Porting the whole chain therefore requires translating the TA `T.Scope` CV
-model into the A5 `T.Stage` + `tl.schedule_unit` + `tl.vf_latency` model, which
-is equivalent to rewriting the A2/A3 scheduling frontend — out of scope and
-against the "no main-line changes" constraint.
+因此，整套搬迁需要先把 TA 的 `T.Scope` CV 模型翻译成 A5 的 `T.Stage` +
+`tl.schedule_unit` + `tl.vf_latency` 模型，这等价于重写 A2/A3 的调度前端，
+超出范围，也违背"不改主线"的约束。
 
-## Finding 2: Capability alignment has limited value (sync vs async model)
+## 结论二：能力对齐收益有限（同步 vs 异步模型）
 
-The A5 `FlagAllocator` (lifetime reuse via `lifetime_begin/end` + `CanReuse`),
-cross-iter classification (`edge.distance`), and cross-core 16x2 flag banks are
-all designed for A5's **asynchronous** model, where `set_flag`/`wait_flag` are
-separated by many statements and flags live across statements.
+A5 的 `FlagAllocator`（基于 `lifetime_begin/end` + `CanReuse` 的生命周期复用）、
+跨迭代分类（`edge.distance`）、以及跨核 16×2 flag bank，**全部**是为 A5 的
+**异步**模型服务的——在异步模型里 `set_flag`/`wait_flag` 相隔很多语句，flag
+需要跨语句存活。
 
-The A2/A3 passes emit each `EventPair` as an **adjacent set+wait pair**
-(`InsertSynchronization` in both `ascend_sync_insert.cc` and
-`ascend_sync_insert_vs.cc`), so every flag has an instantaneous lifetime.
-Because the TA dialect manages pipelining explicitly via `T.Pipelined` +
-`InjectSoftwarePipeline`, this synchronous model is sufficient.
+而 A2/A3 的两个 pass 都把每个 `EventPair` 发射成**紧邻的 set+wait 对**（两个
+`ascend_sync_insert.cc` / `ascend_sync_insert_vs.cc` 里的
+`InsertSynchronization`），因此每个 flag 的生命周期是瞬时的。由于 TA 方言通过
+`T.Pipelined` + `InjectSoftwarePipeline` **显式**管理流水，这种同步式模型已足够。
 
-## Finding 3: Cross-iteration flag reuse is correct (no bug)
+## 结论三：跨迭代 flag 复用是安全的（无 bug）
 
-Audit of the `% 8` round-robin `AllocateEventId` under loop-carried
-(back-edge) dependencies:
+对循环携带（back-edge）依赖下的 `% 8` 轮转 `AllocateEventId` 的审计：
 
-- `AscendSyncInsert` unrolls each loop into two synthetic iterations
-  (`ForLoopUnroller`, iter1/iter2) and discovers back-edges via
-  `first_iteration_history`; `LoopRebuilder::MergeSyncSequences` re-merges them
-  (LCS) back into the loop.
-- `AscendSyncInsertVS` uses a two-pass `is_revisit_pass_` traversal, marking
-  the loop-exit history `is_back_edge`.
-- In both, `set_flag` and `wait_flag` are always inserted back-to-back, so a
-  flag's lifetime is instantaneous. Even if a single site needs more than 8
-  distinct event pairs (the `% 8` wrap-around), the previous pair's `wait` has
-  already completed, so reuse is safe. Back-edge pairs rely on AscendC's
-  in-order issue within a pipe and remain "set then immediately wait" per
-  iteration.
+- `AscendSyncInsert` 把每个循环展开成两次合成迭代（`ForLoopUnroller`，iter1
+  /iter2），通过 `first_iteration_history` 发现 back-edge；
+  `LoopRebuilder::MergeSyncSequences` 再用 LCS 把它们合并回循环。
+- `AscendSyncInsertVS` 用两遍遍历的 `is_revisit_pass_`，把循环出口历史标记为
+  `is_back_edge`。
+- 两者中 `set_flag` 与 `wait_flag` 始终紧邻插入，flag 生命周期瞬时。即便某处
+  需要超过 8 种不同 event pair（触发 `% 8` 回绕），前一对的 `wait` 已完成，
+  复用也安全。back-edge 的 set/wait 依赖 AscendC 同 pipe 顺序发射语义，每个
+  迭代仍是"先 set 后立即 wait"。
 
-Consequently, porting A5's lifetime-aware flag allocation into A2/A3 would not
-fix any correctness issue; it would only matter for A5's asynchronous model.
+因此，把 A5 的生命周期感知 flag 分配移植进 A2/A3 不会修复任何正确性问题——
+它只对 A5 的异步模型有意义。
 
-## Conclusion
+## 总结
 
-1. Whole-pipeline reuse of the A5 auto-scheduler is **not feasible** without
-   rewriting the A2/A3 dialect scheduling model (blocked by `resource_scope`
-   vs scheduled-TIR guards).
-2. Most A5 sync capabilities are specific to its asynchronous model and have
-   **no direct benefit** for the A2/A3 synchronous model.
-3. The A2/A3 `% 8` flag allocation is **correct** for its model, so no
-   correctness-motivated port is needed.
+1. **整套复用 A5 自动调度不可行**：被 `resource_scope` 与 scheduled-TIR guard
+   之间的方言鸿沟阻塞，除非重写 A2/A3 方言调度模型。
+2. A5 的大部分同步能力是其异步模型专属，对 A2/A3 同步模型**没有直接收益**。
+3. A2/A3 的 `% 8` flag 分配在其模型下**是正确的**，无需以正确性为由移植。
 
-The `TL_ENABLE_AUTO_SCHEDULE` probe branch and its pass-chain list are retained
-on `feat/a2a3-reuse-a5-autosync` as evidence; they are not a production path.
+`TL_ENABLE_AUTO_SCHEDULE` 探针分支及其 pass 链清单保留在
+`feat/a2a3-reuse-a5-autosync` 分支上作为证据，它们不是生产路径。
